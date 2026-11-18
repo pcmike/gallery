@@ -959,6 +959,12 @@ function health_checks($dir, $files) {
         $add('Folders and files', 'ok', $dotN === 1 ? 'A file starting with a dot is left out' : number_format($dotN) . ' files starting with a dot are left out',
             'A name that starts with a dot is a hidden file, so the gallery leaves it out the way it leaves out a folder that starts with one. Nothing on disk is touched. A Mac that copies photos to a disk or share it can\'t keep its extra data on leaves one ._ copy beside each photo (a few kilobytes, not a picture): ' . implode(', ', array_slice($dotAll, 0, 6)) . ($dotN > 6 ? ' and ' . number_format($dotN - 6) . ' more' : '') . '. To show one, rename it without the dot.');
     }
+    if (!empty($GLOBALS['__not_pictures'])) {   // (files with a picture's name whose first bytes say they are no picture: left out, so no visitor meets a broken tile)
+        $npAll = array_keys($GLOBALS['__not_pictures']); $npN = count($npAll);
+        $add('Folders and files', 'warn', $npN === 1 ? 'A file with a picture\'s name is not a picture' : number_format($npN) . ' files with a picture\'s name are not pictures',
+            'The gallery leaves ' . ($npN === 1 ? 'it' : 'them') . ' out, so no visitor sees a broken tile (nothing on disk is touched): ' . implode(', ', array_slice($npAll, 0, 8)) . ($npN > 8 ? ' and ' . number_format($npN - 8) . ' more' : '')
+            . '. ' . ($npN === 1 ? 'Its first bytes are' : 'The first bytes of each are') . ' none of a picture\'s (an empty file, text, a web page or a program\'s output saved under a picture\'s name, often a download or copy that went wrong). Replace ' . ($npN === 1 ? 'it' : 'each one') . ' with the real picture, or delete ' . ($npN === 1 ? 'it' : 'it') . ', and the next page load looks again. A picture that is only too big, or in a kind this server can\'t make thumbnails of (a HEIC without Imagick), is not in this list: it is shown.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -1003,7 +1009,7 @@ function health_checks($dir, $files) {
         $go = ['site', 'media-panel', '→ Prepare media'];
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
-            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files have a picture\'s name but are not pictures any program here can open (an empty file, a text file, a damaged one), so their tiles stay blank. Replace or delete them.'],
+            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files start like a picture but no program here can open them (a damaged or cut-off one), so their tiles stay blank. Replace or delete them. (A file that is no picture at all, an empty or text file, is left out and named in its own row above.)'],
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
             'legacy' => ['info', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
             'videoFailed' => ['warn', function ($c) use ($n) { return $n($c, 'video') . ' ffmpeg couldn\'t make pictures for'; }, 'Not tried again for six hours.'],

@@ -4634,7 +4634,7 @@ $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos and the subfolder as a cover card (subfolders are on by default)', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && str_contains($plain, 'Subfolder') && str_contains($plain, '?folder=Subfolder'));
 $newEntries = array_values(array_filter(array_diff($after, $before), fn ($f) => !preg_match('/^\.gallery-visits-[0-9a-f]{24}\.sqlite(-wal|-shm)?$/', $f)));   // (the log of disk activity is made by the first page, with the visitor log's name)
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
-check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken4.json', 'meta1.php'], true)));
+check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', (array_diff($newEntries, ['.gallery-cache', '.gallery-ffmpeg.php']) === []) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken4.json', 'nopic1.php', 'meta1.php'], true)));
 http_get("$basePlain/?admin");
 check('[plain] ...asking for ?admin before any password exists is the one request that writes more: the set-up code file beside index.php (gallery-setup-code.php, a guard line and the code), and nothing else', array_values(array_diff(array_diff(scandir($fxPlain), ['.', '..']), $after)) === ['gallery-setup-code.php']);
 @unlink("$fxPlain/gallery-setup-code.php");
@@ -5019,7 +5019,7 @@ file_put_contents($arZip, $fBody);
 if ($haveUnzip) { $fn = $zipNames($arZip); sort($fn); check('[archive] a folder\'s archive (the owner this time) holds that folder and what is below it, named from the folder', $fSt === 200 && str_contains($zipTest($arZip), 'No errors detected') && $fn === ['Paris/Louvre/c.jpg', 'Paris/Nice dé.jpg', 'Paris/b.jpg']); }
 check('[archive] a folder that doesn\'t exist, a path out of the gallery and a file are all 404', http_get("$baseAr2/?archive&folder=Nope", $arAdmin)[0] === 404 && http_get("$baseAr2/?archive&folder=../", $arAdmin)[0] === 404 && http_get("$baseAr2/?archive&folder=top.jpg", $arAdmin)[0] === 404);
 // Only two at a time: with both places taken the answer is "try again", and it works as soon as one is free.
-$arLockBase = sys_get_temp_dir() . '/gallery-archive-' . substr(hash('sha256', realpath($fxAr2)), 0, 10) . '-';
+$arLockBase = realpath($fxAr2) . '/.gallery-archive-';   // (the locks are beside index.php, not in the server's shared temp folder)
 $arHeld = []; foreach ([1, 2] as $i) { $h = fopen($arLockBase . $i . '.lock', 'c'); flock($h, LOCK_EX | LOCK_NB); $arHeld[] = $h; }
 [$busySt, $busyBody, $busyHd] = http_get("$baseAr2/?archive", $arViewer);
 check('[archive] with two archives already being made, a third is told to try again (503, with Retry-After) instead of tying up the server', $busySt === 503 && (bool) array_filter($busyHd, fn ($h) => stripos($h, 'Retry-After:') === 0) && str_contains($busyBody, 'Try again'));
@@ -5079,7 +5079,7 @@ $pvListing = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']); http_get
 check('[video previews] loading the gallery doesn\'t clear the clips away, and the clip is the only .mp4 in the cache', array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']) === $pvListing && count(glob("$vtDir/.gallery-cache/*.mp4")) === 1);
 // While another clip or picture is being made, a request waits its turn instead of being refused.
 make_minimal_mp4("$vtDir/late.mp4", 3);
-$vtLockPath = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', realpath($vtDir)), 0, 10) . '.lock';
+$vtLockPath = realpath($vtDir) . '/.gallery-ffmpeg.lock';
 $vtHolder = proc_open([PHP_BINARY, '-r', '$h = fopen($argv[1], "c"); flock($h, LOCK_EX); echo "held\n"; sleep(2);', $vtLockPath], [1 => ['pipe', 'w']], $vtHoldPipes);
 fgets($vtHoldPipes[1]);   // it has the turn now
 $vtT0 = microtime(true); [$lateSt, $lateBody] = http_get("$vtBase/?preview=late.mp4"); $vtWaited = microtime(true) - $vtT0;
@@ -5529,13 +5529,14 @@ $fMade = $fAct(['action' => 'link_create', 'label' => 'Files test', 'title_mode'
 http_post("$baseF/?admin", ['access_code' => 'not-the-password'], [], false);
 // (what the gallery rewrites by itself while it is used: a sign-in or a link being made is not "something changing by accident")
 $fVolatile = '~/\.gallery-(login-attempts|stay|browsers-log|browsers|signin-[0-9a-f]{12}|health|links|secret|linklog-[0-9a-f]{10}(-items|-q)?)\.php$~';
+$fNoLocks = fn (array $t) => array_filter($t, fn ($v, $k) => !preg_match('~/\.gallery-(archive-[12]\.lock|ffmpeg\.(php|lock))$~', $k), ARRAY_FILTER_USE_BOTH);   // (the locks, and the note of where ffmpeg is, which a request makes when it first needs one)
 $fPlain = fn (array $t) => array_filter($t, fn ($v, $k) => !preg_match($fVolatile, $k), ARRAY_FILTER_USE_BOTH);
 $fTree = function (string $root) { $out = []; $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST); foreach ($it as $f) { $out[substr($f->getPathname(), strlen($root))] = $f->isLink() ? 'link:' . readlink($f->getPathname()) : ($f->isDir() ? 'dir' : md5_file($f->getPathname())); } ksort($out); return $out; };
 
 // the list
 $fList = $fAct(['action' => 'files_list']);
 $fKinds = array_column($fList['rows'] ?? [], 'files', 'kind');
-check('[files made] the list finds what the gallery made: its settings, share links and logs, secret, sign-in records, the folders\' captions, view counts, tidy-up backup, thumbnails (and the one in the mapped folder), and says how many and how big', ($fList['ok'] ?? false) && ($fKinds['settings'] ?? 0) === 1 && ($fKinds['links'] ?? 0) >= 1 && ($fKinds['secret'] ?? 0) === 1 && ($fKinds['signin'] ?? 0) >= 1 && ($fKinds['items'] ?? 0) === 2 && ($fKinds['stats'] ?? 0) === 1 && ($fKinds['backups'] ?? 0) === 1 && ($fKinds['meta'] ?? 0) === 1 && ($fList['thumbs'] ?? 0) === 2 && ($fList['folders'] ?? 0) >= 3, json_encode($fKinds));
+check('[files made] the list finds what the gallery made: its settings, share links and logs, secret, sign-in records, the folders\' captions, view counts, tidy-up backup, thumbnails (and the one in the mapped folder), and says how many and how big', ($fList['ok'] ?? false) && ($fKinds['settings'] ?? 0) === 1 && ($fKinds['links'] ?? 0) >= 1 && ($fKinds['secret'] ?? 0) === 1 && ($fKinds['signin'] ?? 0) >= 1 && ($fKinds['items'] ?? 0) === 2 && ($fKinds['stats'] ?? 0) === 1 && ($fKinds['backups'] ?? 0) === 1 && ($fKinds['meta'] ?? 0) >= 1 && ($fList['thumbs'] ?? 0) === 2 && ($fList['folders'] ?? 0) >= 3, json_encode($fKinds));
 $fAllPaths = array_merge($fList['paths'] ?? [], $fList['shared']['paths'] ?? []);   // (this gallery's own, then the shared ones in a place from elsewhere, which Delete leaves alone unless the box is ticked)
 check('[files made] the list names every file in the paths it gives (the mapped folder under its name in the gallery, as shared data), and never a photo, a note or a decoy', in_array('Mapped/.gallery-items.php', $fList['shared']['paths'] ?? [], true) && !in_array('Mapped/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('Pics/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('.gallery-config.php', $fList['paths'] ?? [], true) && !array_filter($fAllPaths, fn ($x) => preg_match('/\.(jpg|md|bak|old|txt)$|index\.php$|NoGuard|Linked|deep/', $x)));
 check('[files made] names that only look like the gallery\'s own (a hand-made copy, a lookalike, a file with the right name but no guard line, a link) are listed as "left alone", not as the gallery\'s', ($fList['ok'] ?? false) && count(array_intersect($fList['unknown'] ?? [], ['.gallery-items.php.bak', '.gallery-config.php.old', '.gallery-linklog-zz.php', 'NoGuard/.gallery-items.php', 'Linked/.gallery-items.php'])) === 5 && !in_array('.gallery-setup', $fList['unknown'] ?? [], true));
@@ -5549,7 +5550,7 @@ check('[prepare media] the Settings page keeps a slot under the Thumbnails switc
 $fBefore = $fTree($fxF); $fMapBefore = $fTree($fxFMap); $fPlainBefore = $fPlain($fBefore);
 $fFp = $fList['fingerprint'] ?? '';
 $fNo = fn (array $f) => ($fAct(['action' => 'files_delete', 'nocopy' => '1'] + $f)['ok'] ?? true) === false;
-check('[files made] the delete is refused without the password, with a wrong one, without DELETE typed, with a list that is not the current one, and without a copy taken or declined: nothing changes', $fNo(['typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'wrong-pw-here', 'typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'delete', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => 'abc']) && !($fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp])['ok'] ?? true) && $fPlain($fTree($fxF)) === $fPlainBefore && array_keys($fTree($fxF)) === array_keys($fBefore) && $fTree($fxFMap) === $fMapBefore);
+check('[files made] the delete is refused without the password, with a wrong one, without DELETE typed, with a list that is not the current one, and without a copy taken or declined: nothing changes', $fNo(['typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'wrong-pw-here', 'typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'delete', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => 'abc']) && !($fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp])['ok'] ?? true) && $fNoLocks($fPlain($fTree($fxF))) === $fNoLocks($fPlainBefore) && array_keys($fNoLocks($fTree($fxF))) === array_keys($fNoLocks($fBefore)) && $fTree($fxFMap) === $fMapBefore);
 check('[files made] the ZIP also needs the password again', !($fAct(['action' => 'files_zip_prepare', 'password' => 'nope'])['ok'] ?? true) && !($fAct(['action' => 'files_zip_prepare'])['ok'] ?? true) && http_get("$baseF/?admin&filesdownload=" . str_repeat('a', 32), ["Cookie: $fCookie"])[0] === 404);
 
 // the ZIP: exactly the gallery's files, laid out as on disk, with a README, no thumbnails unless asked
@@ -5564,7 +5565,7 @@ if ($haveUnzip) {
     $fListZ = $fAct(['action' => 'files_list']);
     [$fSt, $fZ, $fR] = $fZipFetch(false);
     $fNames = $fSt === 200 ? $zipNames($fZ) : [];
-    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter(array_merge($fListZ['paths'], $fListZ['shared']['paths'] ?? []), fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php|\.lock)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
+    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter(array_merge($fListZ['paths'], $fListZ['shared']['paths'] ?? []), fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php|\.lock)$|\.sqlite-(?:wal|shm)$|\.gallery-(?:archive-[12]\.lock|ffmpeg\.(?:php|lock))$~', $pp))) + 1, json_encode($fNames));   // (a lock and the ffmpeg note are in the list but not in the ZIP)
     $fReadme = (string) $zipEntry($fZ, 'README.txt');
     check('[files made] the README says what the files are, how to put them back and where the mapped folder is from, and warns that it is private', str_contains($fReadme, 'unzip this file over the same folder') && str_contains($fReadme, 'Mapped/') && str_contains($fReadme, $fxFMap) && str_contains($fReadme, 'private'));
     $fToken = basename((string) ($fR['url'] ?? ''));
@@ -5587,7 +5588,7 @@ if ($haveUnzip) {
     if (is_string($fZB)) @unlink($fZB);
     @unlink($fBigPath);
 }
-check('[files made] making the ZIP changed nothing on disk (every file that is not rewritten by use is byte for byte the same, and none was added or lost)', $fPlain($fTree($fxF)) === $fPlainBefore && array_keys($fTree($fxF)) === array_keys($fBefore) && $fTree($fxFMap) === $fMapBefore);
+check('[files made] making the ZIP changed nothing on disk (every file that is not rewritten by use is byte for byte the same, and none was added or lost)', $fNoLocks($fPlain($fTree($fxF))) === $fNoLocks($fPlainBefore) && array_keys($fNoLocks($fTree($fxF))) === array_keys($fNoLocks($fBefore)) && $fTree($fxFMap) === $fMapBefore);
 
 // the delete itself, after a copy was taken (above) with everything right
 touch("$fxF/index.php", time() - 3600);
@@ -5601,7 +5602,7 @@ check('[files made] the delete reports what it did and removes only the gallery\
 $fNotOurs = ['/one.jpg', '/Pics/a.jpg', '/Pics/b.jpg', '/Notes/n.jpg', '/Notes/gallery.md', '/Linked/l.jpg', '/NoGuard/g.jpg', '/index.php', '/.gallery-items.php.bak', '/.gallery-config.php.old', '/.gallery-linklog-zz.php', '/.gallery-signin-0123456789ab.php.bak', '/.gallery-signin-notahexid1234.php', '/.gallery-signin-0123456789cd.php', '/Pics/my.gallery-items.php', '/NoGuard/.gallery-items.php', '/deep/.gallery-items.php', '/.gallery-setup', '/Pics/.gallery-cache/notes.txt'];
 $fSame = true; foreach ($fNotOurs as $k) if (($fBefore[$k] ?? null) !== ($fAfter[$k] ?? 'gone')) { $fSame = false; echo "    changed or gone: $k\n"; }
 check('[files made] every photo, note, decoy, lookalike and index.php is exactly as it was (checksums before and after), the symlink still points where it did, and the file outside is untouched', $fSame && ($fAfter['/Linked/.gallery-items.php'] ?? '') === 'link:' . "$fxFOut/important.txt" && file_get_contents("$fxFOut/important.txt") === 'a file outside the gallery that a link points at' && ($fMapAfter['/m.jpg'] ?? '') === ($fMapBefore['/m.jpg'] ?? 'x'));
-check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.(?:php|lock)|health-cache\.php)$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
+check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.(?:php|lock)|health-cache\.php|archive-[12]\.lock|ffmpeg\.(?:php|lock))$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php', '/Pics/.gallery-cache/nopic1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
 @unlink("$fxF/.gallery-setup");   // (the owner's own marker file is left by the delete; here it is removed by hand to see the plain state)
 check('[files made] afterwards the gallery has no admin (only the set-up page, which asks for a code), the old sign-in cookie opens nothing, and the gallery itself is plain and public', !str_contains(http_get("$baseF/?admin", [])[1], 'Gallery Admin') && str_contains(http_get("$baseF/?admin", [])[1], 'Set up your gallery') && !str_contains(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1], 'Gallery Admin') && http_get("$baseF/")[0] === 200);
 @unlink("$fxF/gallery-setup-code.php");
@@ -11969,10 +11970,11 @@ if ($vHasSqlite) {
     [, , $pkH] = http_post("$baseP/?admin", ['login_password' => 'pk-admin-pw-1'], [], false); $pkCk = extract_cookie_header($pkH);
     $pkRun = prepare_media_run($baseP, ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch']);
     $pkHealth = json_decode(http_post("$baseP/?admin", ['csrf_token' => extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pkCk"])[1]), 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true)['html'] ?? '';
-    $pkRow = function ($h) { $i = strpos($h, 'couldn&#039;t be made'); if ($i === false) return ''; $j = strpos($h, 'with no capture date', $i); return substr($h, $i, ($j === false ? 2500 : $j - $i)); };
+    // (since the files that are no picture are left out of the gallery, Health names them in a row of their own: "files with a picture's name are not pictures", up to where it says what their first bytes are)
+    $pkRow = function ($h) { $i = strpos($h, 'with a picture&#039;s name'); if ($i === false) return ''; $j = strpos($h, 'first bytes', $i); return substr($h, $i, ($j === false ? 2500 : $j - $i)); };
     $pkNames = $pkRow($pkHealth);
-    check('[not pictures] Health names the files that are no picture (empty, text, PostScript, SVG with a picture\'s name) under "could not be made", and not the good ones', $pkNames !== '' && str_contains($pkNames, 'empty.jpg') && str_contains($pkNames, 'fake.jpg') && str_contains($pkNames, 'ps.jpg') && str_contains($pkNames, 'svg.jpg') && !str_contains($pkNames, 'good.jpg') && !str_contains($pkNames, 'really-a-png.jpg'), substr(strip_tags($pkNames), 0, 300));
-    check('[not pictures] ...and replacing one of them with a real picture takes it off the list', (function () use ($fxP, $baseP, $pkCk) { make_jpeg("$fxP/fake.jpg", 80, 60, 10, 200, 10); touch("$fxP/fake.jpg", time() + 5); prepare_media_run($baseP, ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch']); $h = json_decode(http_post("$baseP/?admin", ['csrf_token' => extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pkCk"])[1]), 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true)['html'] ?? ''; $i = strpos($h, 'couldn&#039;t be made'); $j = $i === false ? false : strpos($h, 'with no capture date', $i); $row = $i === false ? '' : substr($h, $i, ($j === false ? 2500 : $j - $i)); return !str_contains($row, 'fake.jpg') && str_contains($row, 'empty.jpg'); })());
+    check('[not pictures] Health names the files that are no picture (empty, text, PostScript, SVG with a picture\'s name) in its own row, and not the good ones', $pkNames !== '' && str_contains($pkNames, 'empty.jpg') && str_contains($pkNames, 'fake.jpg') && str_contains($pkNames, 'ps.jpg') && str_contains($pkNames, 'svg.jpg') && !str_contains($pkNames, 'good.jpg') && !str_contains($pkNames, 'really-a-png.jpg'), substr(strip_tags($pkNames), 0, 300));
+    check('[not pictures] ...and replacing one of them with a real picture takes it off the list', (function () use ($fxP, $baseP, $pkCk) { make_jpeg("$fxP/fake.jpg", 80, 60, 10, 200, 10); touch("$fxP/fake.jpg", time() + 5); prepare_media_run($baseP, ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch']); $h = json_decode(http_post("$baseP/?admin", ['csrf_token' => extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pkCk"])[1]), 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true)['html'] ?? ''; $i = strpos($h, 'with a picture&#039;s name'); $j = $i === false ? false : strpos($h, 'first bytes', $i); $row = $i === false ? '' : substr($h, $i, ($j === false ? 2500 : $j - $i)); return !str_contains($row, 'fake.jpg') && str_contains($row, 'empty.jpg'); })());
 
     // ---- D6: ffmpeg is told what the file is (mov/mp4 only, the only video kinds here) and may read local files only
     [$d6Dir, $d6Base] = $vtSite('pinned', ['FFMPEG_PATH' => $vtOk], ['pin.mp4' => 3]);
@@ -11985,11 +11987,16 @@ if ($vHasSqlite) {
     file_put_contents("$d2Dir/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true]));
     $d2Ran = "$d2Dir/_evil-ran.txt"; $d2Evil = "$d2Dir/_evil.sh";
     file_put_contents($d2Evil, "#!/bin/sh\necho RAN >> " . escapeshellarg($d2Ran) . "\nexit 1\n"); chmod($d2Evil, 0755);
-    copy($indexSrc, "$d2Dir/index.php"); $d2Note = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', realpath($d2Dir) . '|'), 0, 10) . '.txt';
-    file_put_contents($d2Note, $d2Evil);
+    copy($indexSrc, "$d2Dir/index.php"); $d2Note = "$d2Dir/.gallery-ffmpeg.php";
+    file_put_contents($d2Note, data_file_guard_line_for_tests() . json_encode(['for' => '', 'found' => $d2Evil]));
     $d2Port = find_free_port(); start_server($d2Dir, $d2Port);
     $d2St = http_get("http://127.0.0.1:$d2Port/?img=clip.mp4&size=thumb")[0];
-    check('[ffmpeg] a note in the shared temp folder that names some other program is ignored: the program is not run (the page still answers, with the placeholder)', !is_file($d2Ran) && $d2St === 200, 'status ' . $d2St . (is_file($d2Ran) ? ', it RAN' : ''));
+    check('[ffmpeg] a note that names some other program is ignored: the program is not run (the page still answers, with the placeholder)', !is_file($d2Ran) && $d2St === 200, 'status ' . $d2St . (is_file($d2Ran) ? ', it RAN' : ''));
+    file_put_contents($d2Note, $d2Evil); @touch($d2Note); $d2St = http_get("http://127.0.0.1:$d2Port/?img=clip.mp4&size=thumb")[0];
+    check('[ffmpeg] ...and so is a note that is just the program\'s path, with no guard line and no JSON', !is_file($d2Ran) && $d2St === 200);
+    file_put_contents($d2Note, data_file_guard_line_for_tests() . json_encode(['for' => '/some/other/ffmpeg', 'found' => '']));
+    $d2St = http_get("http://127.0.0.1:$d2Port/?img=clip.mp4&size=thumb")[0]; $d2Now = json_decode(data_file_strip_guard_for_tests((string) @file_get_contents($d2Note)), true);
+    check('[ffmpeg] ...and a note made for another FFMPEG_PATH is not believed either: it is looked up again and the note is made again for this setting', $d2St === 200 && is_array($d2Now) && ($d2Now['for'] ?? null) === '' && !is_file($d2Ran), json_encode($d2Now));
     @unlink($d2Note);
 
     // ---- G18: without GD (the function switched off for this server) the three drawn pictures are small plain ones, not a 500
@@ -13120,6 +13127,119 @@ echo "== chunk 9 follow-up N8: dots in a new note's name ==\n";
     file_put_contents("$n8Fx/Alpha/taken_name.md", "{gallery}\nmine\n");
     $r9 = $n8Save(['new_name' => 'taken.name', 'content' => $n8Txt]);
     check('[N8] a name that becomes one something already has is refused, and that file is untouched', ($r9['ok'] ?? true) === false && file_get_contents("$n8Fx/Alpha/taken_name.md") === "{gallery}\nmine\n", json_encode($r9));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N3: the note of where ffmpeg is and the locks for video and ZIP work are beside index.php, not in the server's shared temp folder
+echo "== chunk 9 follow-up N3: the ffmpeg note and the locks beside index.php ==\n";
+{
+    $n3Fx = new_fixture_dir('n3'); mkdir("$n3Fx/Alpha", 0777, true); make_jpeg("$n3Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160); make_minimal_mp4("$n3Fx/Alpha/clip.mp4", 3);
+    file_put_contents("$n3Fx/_ffmpeg", "#!/bin/sh
+exit 0
+"); chmod("$n3Fx/_ffmpeg", 0755);   // (a pretend ffmpeg: it answers -version, and makes no picture)
+    file_put_contents("$n3Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n3-admin-pw-1', 'ENABLE_VIDEO' => true, 'FFMPEG_PATH' => realpath("$n3Fx") . '/_ffmpeg', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n3Fx/index.php");
+    $n3Port = find_free_port(); start_server($n3Fx, $n3Port); $n3Base = "http://127.0.0.1:$n3Port";
+    [, , $n3H] = http_post("$n3Base/?admin", ['access_code' => 'n3-admin-pw-1'], [], false); $n3Own = ['Cookie: ' . extract_cookie_header($n3H)];
+    $n3Real = realpath($n3Fx); $n3Hash = substr(hash('sha256', $n3Real), 0, 10);
+    http_get("$n3Base/?img=" . rawurlencode('Alpha/clip.mp4') . '&size=thumb'); $n3Zip = http_get("$n3Base/?archive", $n3Own);
+    check('[N3] the note of where ffmpeg is (a guarded data file saying "for" which FFMPEG_PATH and what was "found") is .gallery-ffmpeg.php beside index.php', is_file("$n3Fx/.gallery-ffmpeg.php") && str_starts_with((string) file_get_contents("$n3Fx/.gallery-ffmpeg.php"), data_file_guard_line_for_tests()) && is_array($n3Note = json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$n3Fx/.gallery-ffmpeg.php")), true)) && array_key_exists('for', $n3Note) && array_key_exists('found', $n3Note) && $n3Note['found'] === realpath("$n3Fx") . '/_ffmpeg', (string) @file_get_contents("$n3Fx/.gallery-ffmpeg.php"));
+    check('[N3] the lock that keeps ffmpeg to one run at a time and the first ZIP place are .gallery-ffmpeg.lock and .gallery-archive-1.lock beside index.php, readable by the web server user alone', is_file("$n3Fx/.gallery-ffmpeg.lock") && is_file("$n3Fx/.gallery-archive-1.lock") && (fileperms("$n3Fx/.gallery-ffmpeg.lock") & 0077) === 0 && (fileperms("$n3Fx/.gallery-archive-1.lock") & 0077) === 0 && $n3Zip[0] === 200, json_encode([$n3Zip[0], array_values(array_filter(scandir($n3Fx), fn ($n) => $n[0] === '.' && $n !== '.' && $n !== '..'))]));
+    $n3Tmp = array_merge(glob(sys_get_temp_dir() . "/gallery-ffmpeg-$n3Hash*") ?: [], glob(sys_get_temp_dir() . "/gallery-archive-$n3Hash*") ?: [], glob(sys_get_temp_dir() . "/gallery-$n3Hash-*") ?: []);
+    check('[N3] nothing is left in the server\'s shared temp folder for this gallery (no note, no lock)', $n3Tmp === [], json_encode($n3Tmp));
+    // they are in the list of what the gallery has made, and are not "unknown"
+    $n3Csrf = admin_token($n3Base, $n3Own);
+    $n3List = json_decode(http_post("$n3Base/?admin", ['csrf_token' => $n3Csrf, 'action' => 'files_list'], array_merge($n3Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $n3Paths = (array) ($n3List['paths'] ?? []); $n3Unknown = (array) ($n3List['unknown'] ?? []);
+    $n3Names = ['.gallery-ffmpeg.php', '.gallery-ffmpeg.lock', '.gallery-archive-1.lock'];
+    $n3Miss = array_values(array_filter($n3Names, fn ($n) => !in_array($n, $n3Paths, true) || in_array($n, $n3Unknown, true)));
+    check('[N3] Files-made lists the note and the locks, and none of them is "unknown"', $n3Miss === [], json_encode([$n3Miss, $n3Paths, $n3Unknown]));
+    // a folder that can't hold a lock (not writable): the work is still held to its turns, with a lock in the old place, and the ZIP still comes
+    if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+        echo "  skip  [N3] running as root, a folder can't be made unwritable here\n";
+    } else {
+        @unlink("$n3Fx/.gallery-archive-1.lock"); @unlink("$n3Fx/.gallery-archive-2.lock"); @unlink("$n3Fx/.gallery-ffmpeg.lock");
+        chmod($n3Fx, 0555);
+        $n3Ro = http_get("$n3Base/?archive", $n3Own);
+        $n3Own1 = file_exists("$n3Fx/.gallery-archive-1.lock");
+        chmod($n3Fx, 0755);
+        $n3Old = glob(sys_get_temp_dir() . "/gallery-$n3Hash-*.lock") ?: [];
+        check('[N3] in a folder the web server can\'t add files to, a ZIP is still made (the lock falls back to the temp folder, and nothing is made beside index.php)', $n3Ro[0] === 200 && !$n3Own1 && count($n3Old) >= 1, json_encode([$n3Ro[0], $n3Own1, $n3Old]));
+        foreach ($n3Old as $o) @unlink($o);
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N4: a country file that starts at an https address is not sent on to plain http on this machine
+echo "== chunk 9 follow-up N4: the country file's download and plain http to this machine ==\n";
+{
+    $n4Src = (string) file_get_contents($indexSrc); $n4Code = '';
+    foreach (['geo_url_ok', 'geo_resolve_url', 'geo_host_in', 'geo_http'] as $n4Fn) { $at = strpos($n4Src, "function $n4Fn("); $n4Code .= substr($n4Src, $at, strpos($n4Src, "\n}\n", $at) + 3 - $at) . "\n"; }
+    // the one function that really asks the network is replaced by a stand-in that says what it was asked for and answers from a table of redirects
+    $n4Code .= 'function geo_http_once($url, $method, array $headers, $maxBytes, $timeout) { $GLOBALS["n4Asked"][] = $url; $to = $GLOBALS["n4Table"][$url] ?? null; return $to === null ? ["status" => 200, "headers" => [], "body" => "ok", "error" => ""] : ["status" => 302, "headers" => ["location" => $to], "body" => "", "error" => ""]; }';
+    eval($n4Code);
+    $n4Run = function (string $start, array $table, $hosts = null) { $GLOBALS['n4Asked'] = []; $GLOBALS['n4Table'] = $table; $r = geo_http($start, 'GET', [], 1000, 5, $hosts); return [$r['status'], $GLOBALS['n4Asked'], $r['error']]; };
+    [$s1, $a1, $e1] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'http://127.0.0.1:9/internal']);
+    check('[N4] a country file at an https address that sends the download on to http://127.0.0.1 is refused at that hop, and the address is never asked', $s1 === 0 && $a1 === ['https://mirror.example/x.gz'] && str_contains($e1, 'not allowed'), json_encode([$s1, $a1, $e1]));
+    [$s2, $a2] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'https://other.example/y.gz']);
+    check('[N4] ...a hop to another https address is still followed', $s2 === 200 && $a2 === ['https://mirror.example/x.gz', 'https://other.example/y.gz'], json_encode([$s2, $a2]));
+    [$s3, $a3] = $n4Run('http://127.0.0.1:8080/x.gz', ['http://127.0.0.1:8080/x.gz' => 'http://127.0.0.1:8080/real.gz']);
+    check('[N4] a mirror the owner runs on this machine (a first address of http://127.0.0.1) still works, and its own redirect on the same machine too', $s3 === 200 && count($a3) === 2, json_encode([$s3, $a3]));
+    [$s4, $a4, $e4] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'http://localhost/internal'], ['.github.com']);
+    check('[N4] a download that has a list of hosts it may come from keeps its own rule for the hops (an https start sent to http://localhost is refused there too)', $s4 === 0 && count($a4) === 1, json_encode([$s4, $a4, $e4]));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N2: a file with a picture's name whose first bytes say it is no picture is left out of the gallery (and named in Health); a picture is never left out for any other reason
+echo "== chunk 9 follow-up N2: files that are no pictures ==\n";
+{
+    $n2Fx = new_fixture_dir('n2'); mkdir("$n2Fx/Alpha", 0777, true);
+    make_jpeg("$n2Fx/Alpha/good.jpg", 60, 40, 20, 90, 160); make_jpeg("$n2Fx/Alpha/also.jpg", 60, 40, 120, 90, 60);
+    file_put_contents("$n2Fx/Alpha/empty.jpg", '');
+    file_put_contents("$n2Fx/Alpha/fake.jpg", "this is just text, saved as a picture\n");
+    file_put_contents("$n2Fx/Alpha/page.png", "<!DOCTYPE html><html><body>an error page</body></html>");
+    file_put_contents("$n2Fx/Alpha/ps.jpeg", "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n");
+    file_put_contents("$n2Fx/Alpha/image.svg.jpg", '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    // what must stay: a heic (no Imagick may be here to make a thumbnail of it), a tiff and a damaged jpeg (right first bytes, nothing after), a png named .jpg
+    file_put_contents("$n2Fx/Alpha/phone.heic", "\x00\x00\x00\x18ftypheic\x00\x00\x00\x00heicmif1");
+    file_put_contents("$n2Fx/Alpha/scan.jpg", "II*\x00\x08\x00\x00\x00\x00\x00\x00\x00");
+    file_put_contents("$n2Fx/Alpha/cut.jpg", "\xFF\xD8\xFF\xE0\x00\x10JFIF");
+    $n2Png = imagecreatetruecolor(8, 8); ob_start(); imagepng($n2Png); $n2PngData = (string) ob_get_clean(); file_put_contents("$n2Fx/Alpha/really-a-png.jpg", $n2PngData);
+    file_put_contents("$n2Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n2-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n2Fx/index.php");
+    $n2Port = find_free_port(); start_server($n2Fx, $n2Port); $n2Base = "http://127.0.0.1:$n2Port";
+    $n2Names = fn (string $html) => (function () use ($html) { preg_match_all('#alt="([^"]+\.(?:jpe?g|png|gif|webp|bmp|heic|heif))"#i', $html, $m); $x = array_values(array_unique($m[1])); sort($x); return $x; })();
+    $n2Page = http_get("$n2Base/?folder=Alpha")[1];
+    $n2Shown = $n2Names($n2Page);
+    check('[N2] a folder\'s page shows the pictures, and not the empty file, the text file, the web page, the PostScript file or the SVG that have a picture\'s name', in_array('good.jpg', $n2Shown, true) && in_array('also.jpg', $n2Shown, true) && !array_intersect($n2Shown, ['empty.jpg', 'fake.jpg', 'page.png', 'ps.jpeg', 'image.svg.jpg']), json_encode($n2Shown));
+    check('[N2] ...and keeps what is no mistake of a broken upload: a HEIC, a TIFF named .jpg, a JPEG whose body is damaged, and a PNG named .jpg', !array_diff(['phone.heic', 'scan.jpg', 'cut.jpg', 'really-a-png.jpg'], $n2Shown), json_encode($n2Shown));
+    $n2Home = http_get("$n2Base/")[1];
+    check('[N2] the front page counts only the pictures (Alpha says ' . count($n2Shown) . ' photos)', str_contains(preg_replace('/\s+/', ' ', strip_tags($n2Home)), count($n2Shown) . ' photos') && !str_contains(strip_tags($n2Home), '11 photos'), substr(preg_replace('/\s+/', ' ', strip_tags($n2Home)), -300));
+    [, , $n2H] = http_post("$n2Base/?admin", ['access_code' => 'n2-admin-pw-1'], [], false); $n2Own = ['Cookie: ' . extract_cookie_header($n2H)];
+    $n2Health = http_get("$n2Base/?admin&classic=1", $n2Own)[1];
+    check('[N2] the Health check names the files that were left out, and says that nothing on disk was touched', str_contains($n2Health, 'are not pictures') && str_contains($n2Health, 'Alpha/empty.jpg') && str_contains($n2Health, 'Alpha/fake.jpg') && str_contains($n2Health, 'nothing on disk is touched'), substr(strip_tags($n2Health), 0, 200));
+    check('[N2] a file left out is still on disk, untouched', is_file("$n2Fx/Alpha/fake.jpg") && file_get_contents("$n2Fx/Alpha/fake.jpg") === "this is just text, saved as a picture\n" && filesize("$n2Fx/Alpha/empty.jpg") === 0);
+    // remembered once the folder has a cache (the thumbnails made it), and looked at again when the file changes
+    $n2Cache = "$n2Fx/Alpha/.gallery-cache/nopic1.php";
+    http_get("$n2Base/?img=" . rawurlencode('Alpha/good.jpg') . '&size=thumb'); http_get("$n2Base/?folder=Alpha");
+    $n2Rec = is_file($n2Cache) ? json_decode(data_file_strip_guard_for_tests((string) file_get_contents($n2Cache)), true) : null;
+    check('[N2] once the folder has a thumbnail cache the verdict for each file is remembered (nopic1.php, a guarded file like meta1.php) by size and modified time: 1 for what is no picture', is_file($n2Cache) && str_starts_with((string) file_get_contents($n2Cache), data_file_guard_line_for_tests()) && is_array($n2Rec) && ($n2Rec['fake.jpg'][2] ?? null) === 1 && !isset($n2Rec['good.jpg'][2]) && isset($n2Rec['good.jpg'][0]), json_encode($n2Rec));
+    file_put_contents("$n2Fx/Alpha/fake.jpg", file_get_contents("$n2Fx/Alpha/good.jpg")); touch("$n2Fx/Alpha/fake.jpg", time() + 5);
+    check('[N2] a file that is replaced by a real picture is looked at again and shown', in_array('fake.jpg', $n2Names(http_get("$n2Base/?folder=Alpha")[1]), true));
+    // with the thumbnail cache off nothing is written and every page looks again
+    $n2Fx2 = new_fixture_dir('n2-nocache'); mkdir("$n2Fx2/Alpha", 0777, true); make_jpeg("$n2Fx2/Alpha/good.jpg", 60, 40, 20, 90, 160); file_put_contents("$n2Fx2/Alpha/fake.jpg", "text");
+    file_put_contents("$n2Fx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n2-admin-pw-1', 'ENABLE_THUMBNAIL_CACHE' => false, 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n2Fx2/index.php"); $n2Port2 = find_free_port(); start_server($n2Fx2, $n2Port2); $n2Base2 = "http://127.0.0.1:$n2Port2";
+    $n2Shown2 = $n2Names(http_get("$n2Base2/?folder=Alpha")[1]);
+    file_put_contents("$n2Fx2/Alpha/fake.jpg", file_get_contents("$n2Fx2/Alpha/good.jpg"));
+    $n2Shown3 = $n2Names(http_get("$n2Base2/?folder=Alpha")[1]);
+    check('[N2] with the thumbnail cache off the file is left out all the same, no verdict file is written, and it is looked at on every page (a replaced file shows at once)', $n2Shown2 === ['good.jpg'] && $n2Shown3 === ['fake.jpg', 'good.jpg'] && !is_file("$n2Fx2/Alpha/.gallery-cache/nopic1.php"));
+    // a file that can't be read is not "no picture"
+    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+        file_put_contents("$n2Fx2/Alpha/locked.jpg", "text"); chmod("$n2Fx2/Alpha/locked.jpg", 0000);
+        $n2Shown4 = $n2Names(http_get("$n2Base2/?folder=Alpha")[1]); chmod("$n2Fx2/Alpha/locked.jpg", 0644);
+        check('[N2] a file the web server can\'t read is not judged: it stays on the page as before', in_array('locked.jpg', $n2Shown4, true), json_encode($n2Shown4));
+    }
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

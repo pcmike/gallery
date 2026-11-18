@@ -146,9 +146,8 @@ function archive_stream($entries, $zip64, $sink = null) {   // ($sink: a functio
 
 /** One of a couple of places to make an archive at once, or null if they are all taken. The lock goes when the request ends. */
 function archive_take_slot() {
-    $base = sys_get_temp_dir() . '/gallery-archive-' . substr(hash('sha256', __DIR__), 0, 10) . '-';
     for ($i = 1; $i <= 2; $i++) {
-        $fh = @fopen($base . $i . '.lock', 'c');
+        $fh = work_lock_open('archive-' . $i);
         if ($fh && flock($fh, LOCK_EX | LOCK_NB)) return $fh;
         if ($fh) fclose($fh);
     }

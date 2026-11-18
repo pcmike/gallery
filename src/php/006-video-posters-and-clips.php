@@ -10,26 +10,39 @@
  * ----------------------------------------------------------------------- */
 
 /** Where ffmpeg is on this server, or '' if it can't be used: the setting is off, the functions to start a program are
- *  not available, or no ffmpeg answers. Looked up once a day and remembered outside the web folder. */
+ *  not available, or no ffmpeg answers. Looked up once a day and remembered in .gallery-ffmpeg.php, beside index.php (not in the server's
+ *  shared temp folder, where another account on the server may be able to write). */
 function ffmpeg_binary() {
     static $found = null;
     if ($found !== null) return $found;
     $found = '';
     if (!function_exists('proc_open')) return $found;
-    $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
+    $remember = __DIR__ . '/.gallery-ffmpeg.php';
     $candidates = FFMPEG_PATH !== '' ? [FFMPEG_PATH] : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/snap/bin/ffmpeg'];
-    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
-        // The note sits in the system's shared temp folder, where another account or program may be able to write: what it says is only believed when it is
-        // "none" or one of the places this function would look itself. Anything else is ignored, and the places are looked at again.
-        $note = trim((string) @file_get_contents($remember));
-        if ($note === '' || in_array($note, $candidates, true)) return $found = $note;
+    if (!is_link($remember) && is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
+        // What the note says is only believed when it is for the same FFMPEG_PATH and says "none" or one of the places this function would look itself.
+        // Anything else is ignored, and the places are looked at again.
+        $d = json_decode(data_file_strip_guard((string) @file_get_contents($remember)), true);
+        if (is_array($d) && ($d['for'] ?? null) === FFMPEG_PATH && is_string($d['found'] ?? null) && ($d['found'] === '' || in_array($d['found'], $candidates, true))) return $found = $d['found'];
     }
     foreach ($candidates as $c) {
         if ($c !== 'ffmpeg' && !is_executable($c)) continue;
         if (run_quietly([$c, '-version'], 5) === 0) { $found = $c; break; }
     }
-    @file_put_contents($remember, $found, LOCK_EX);
+    $note = data_file_encode(['for' => FFMPEG_PATH, 'found' => $found]);
+    if ($note !== false && !is_link($remember) && is_writable(__DIR__)) file_write_whole($remember, $note, '.php');
     return $found;
+}
+
+/** A lock file for keeping some work to one (or a few) at a time: .gallery-<name>.lock beside index.php, opened for locking, or null. Only if that folder
+ *  can't hold it (not writable, or a link is there) is the old place used, a file of the same kind in the server's temp folder: a lock holds nothing, so
+ *  that is all it can be used for, and the work is still held to its turns. */
+function work_lock_open($name) {
+    $path = __DIR__ . '/.gallery-' . $name . '.lock';
+    $fh = is_link($path) ? false : @fopen($path, 'c');
+    if ($fh) { @chmod($path, 0600); return $fh; }
+    $fh = @fopen(sys_get_temp_dir() . '/gallery-' . substr(hash('sha256', __DIR__), 0, 10) . '-' . $name . '.lock', 'c');
+    return $fh ?: null;
 }
 
 /** Runs a program (the arguments as a list, no shell), with a time limit; its exit code, or null if it couldn't be run
@@ -49,7 +62,7 @@ function run_quietly($args, $seconds) {
 /** Takes the one ffmpeg place (only one runs at a time), waiting up to $seconds for whoever has it to finish, so a request
  *  that arrives during another's work is served in its turn rather than refused. Null if it never came free. */
 function ffmpeg_take_turn($seconds) {
-    $lock = @fopen(sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__), 0, 10) . '.lock', 'c');
+    $lock = work_lock_open('ffmpeg');
     if (!$lock) return null;
     $deadline = microtime(true) + $seconds;
     while (!flock($lock, LOCK_EX | LOCK_NB)) {

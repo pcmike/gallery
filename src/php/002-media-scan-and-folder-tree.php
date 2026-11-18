@@ -154,6 +154,68 @@ function scan_dot_file_note($path) {
     $GLOBALS['__dot_files'][$rel] = true;
 }
 
+/** Remembers a file with a picture's name that the scan left out because its first bytes say it is no picture (empty, text, a page, a program's output), for
+ *  the Health check (each once, by its path from the gallery's folder). Nothing on disk is touched. */
+function scan_not_picture_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__not_pictures'][$rel] = true;
+}
+
+/** Do the first bytes of a file say it is a picture of some kind (or something a browser may show as one)? True for every kind the gallery reads, and for
+ *  TIFF, AVIF/HEIC-style (an "ftyp" box), JPEG XL and icon files, which it does not read but which are no mistake of a broken upload. */
+function picture_bytes_plausible($h) {
+    $h = (string) $h;
+    if (strlen($h) < 4) return false;
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0 || strncmp($h, "\x89PNG\r\n\x1a\n", 8) === 0 || strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0 || strncmp($h, 'BM', 2) === 0) return true;
+    if (strlen($h) >= 12 && substr($h, 0, 4) === 'RIFF' && substr($h, 8, 4) === 'WEBP') return true;
+    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp') return true;
+    return strncmp($h, "II*\x00", 4) === 0 || strncmp($h, "MM\x00*", 4) === 0 || strncmp($h, "\xFF\x0A", 2) === 0 || strncmp($h, "\x00\x00\x00\x0CJXL ", 8) === 0 || strncmp($h, "\x00\x00\x01\x00", 4) === 0;
+}
+
+/** True when a file with a picture's name (.jpg .jpeg .png .gif .webp .bmp) is no picture at all: its first bytes are none of the kinds above. Only that: a file
+ *  that can't be read, a HEIC/HEIF, a video, or a picture that is merely too big or that no decoder here opens today is never "no picture". The answer is
+ *  remembered for the file as it is now (its size and modified time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
+ *  thumbnail cache off, or no cache folder yet, the first 16 bytes are read each time. A page build looks at no more than 20000 files this way, so a very
+ *  large first look is spread over several, and a file not looked at is shown. $folderReal is the folder the file is in; scan_not_picture_save() writes what was learned. */
+function scan_not_a_picture($folderReal, $entry, $path) {
+    static $mem = [], $budget = 20000;
+    if ($entry !== null && !in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true)) return false;
+    $cachePath = $folderReal . '/.gallery-cache/nopic1.php';
+    if (!isset($mem[$folderReal])) {
+        $known = [];
+        if (ENABLE_THUMBNAIL_CACHE && is_file($cachePath) && !is_link($cachePath) && !is_link($folderReal . '/.gallery-cache')) {
+            $raw = json_decode(data_file_strip_guard((string) @file_get_contents($cachePath)), true);
+            if (is_array($raw)) $known = $raw;
+        }
+        $mem[$folderReal] = ['known' => $known, 'seen' => [], 'changed' => false];
+    }
+    if ($entry === null) {   // (asked to write what was learned for this folder)
+        $m = &$mem[$folderReal];
+        if ($m['changed'] && ENABLE_THUMBNAIL_CACHE && is_dir($folderReal . '/.gallery-cache') && !is_link($folderReal . '/.gallery-cache') && !is_link($cachePath)) {
+            $encoded = data_file_encode(array_intersect_key($m['known'], $m['seen']));   // (a guarded file, like meta1.php: a request for it by its address is answered 404, because it holds the names of files, private ones too)
+            if ($encoded !== false) file_write_whole($cachePath, $encoded, '.php');   // (a half-written copy is a .php file with the guard line first, answered 404 like the real one)
+        }
+        $m['changed'] = false;
+        return false;
+    }
+    $m = &$mem[$folderReal];
+    $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
+    $m['seen'][$entry] = true;
+    $hit = $m['known'][$entry] ?? null;
+    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size) return ($hit[2] ?? 0) === 1;
+    if ($budget <= 0) return false;
+    $budget--;
+    $h = @file_get_contents($path, false, null, 0, 16);
+    if (!is_string($h)) return false;   // (can't tell: shown, and not remembered)
+    $no = !picture_bytes_plausible($h);
+    $m['known'][$entry] = $no ? [$mtime, $size, 1] : [$mtime, $size];
+    $m['changed'] = true;
+    return $no;
+}
+/** Writes what scan_not_a_picture() learned about a folder's files (only when it learned something new, and only into a .gallery-cache that is there). */
+function scan_not_picture_save($folderReal) { scan_not_a_picture($folderReal, null, ''); }
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -178,7 +240,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; $GLOBALS['__not_pictures'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -192,7 +254,10 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
                 if ($entry[0] === '.') scan_dot_file_note($path);   // (a dot file is hidden, the way a dot folder is: never a photo)
-                elseif (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                elseif (name_is_text($entry)) {
+                    if (scan_not_a_picture($realDir, $entry, $path)) scan_not_picture_note($path);   // (no picture at all: left out, and said in the Health check)
+                    else { $node['files'][] = $entry; $files++; }
+                }
                 else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
@@ -208,6 +273,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         }
         $node['subdirs'][$entry] = scan_folder_tree($path, $mediaExtensions, $self, false);
     }
+    scan_not_picture_save($realDir);
     if (PHOTO_SORT_ORDER === 'mtime') {
         $times = [];   // (each file's date is read once, not at every comparison)
         foreach ($node['files'] as $f) $times[$f] = @filemtime("$realDir/$f") ?: 0;
@@ -645,7 +711,7 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
-    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = [];
+    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; $GLOBALS['__not_pictures'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
@@ -653,8 +719,10 @@ if (AUTO_GROUP_BY_FOLDER) {
         if (!in_array($ext, $mediaExtensions)) return false;
         if ($file[0] === '.') { scan_dot_file_note("$dir/$file"); return false; }   // (a dot file is hidden, the way a dot folder is: never a photo)
         if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
+        if (scan_not_a_picture($dir, $file, "$dir/$file")) { scan_not_picture_note("$dir/$file"); return false; }   // (no picture at all: left out, and said in the Health check)
         return true;
     });
+    scan_not_picture_save($dir);
 
     // Base ordering, before any .md-driven repositioning — see
     // PHOTO_SORT_ORDER above.

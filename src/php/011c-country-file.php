@@ -21,12 +21,12 @@ function geo_state() {
     return json_file_read(geo_state_path(), ['ym' => '', 'modified' => '', 'length' => 0, 'at' => 0, 'error' => '', 'triedAt' => 0, 'raw' => 0]);
 }
 
-/** An address a download may come from: https anywhere, or plain http only to this very machine (for tests). */
-function geo_url_ok($url) {
+/** An address a download may come from: https anywhere, or plain http only to this very machine (for tests), and only when $loopback is true. */
+function geo_url_ok($url, $loopback = true) {
     $p = parse_url((string) $url);
     if (!is_array($p) || empty($p['host']) || isset($p['user']) || isset($p['pass'])) return false;
     if (($p['scheme'] ?? '') === 'https') return true;
-    return ($p['scheme'] ?? '') === 'http' && in_array(strtolower($p['host']), ['127.0.0.1', 'localhost', '[::1]'], true);
+    return $loopback && ($p['scheme'] ?? '') === 'http' && in_array(strtolower($p['host']), ['127.0.0.1', 'localhost', '[::1]'], true);
 }
 
 /** The address of a month's file: the setting COUNTRY_DB_URL with {ym} replaced by the month ("2026-11"), or DB-IP's own. */
@@ -103,8 +103,11 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
     $cur = $url;
     $allowed = $hosts === null ? null : array_merge($hosts, [(string) (parse_url((string) $url, PHP_URL_HOST) ?? '')]);
+    // Plain http to this machine is for the first address (a mirror the owner runs here) and for what that same kind of address sends on; a download that starts at an https
+    // address is never sent on to a port of this server, whoever serves it. (A download with a list of hosts it may come from has that list for its hops.)
+    $loopOk = $hosts !== null || strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'http';
     for ($hop = 0; $hop <= 3; $hop++) {
-        if (!geo_url_ok($cur)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
+        if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
         $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout);
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {

@@ -13,7 +13,8 @@
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-collections.php' => 'collections', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup',
+            '.gallery-ffmpeg.php' => 'work', '.gallery-ffmpeg.lock' => 'work', '.gallery-archive-1.lock' => 'work', '.gallery-archive-2.lock' => 'work'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -55,13 +56,14 @@ function owned_kind_info() {
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
         'lockouts' => ['Lockout counts', 'beside index.php', 'How many times a connection was paused for too many wrong codes or addresses, per day and kind (no addresses), for the Health check.', 'The count starts again from nothing.'],
         'geo' => ['Country file', 'beside index.php', 'The list of address ranges per country (from DB-IP) that says which country an address is in, and when it was fetched.', 'Countries are no longer looked up; turning the option on again fetches it again.'],
+        'work' => ['Notes and locks for video and ZIP work', 'beside index.php', 'Where ffmpeg was found (looked up once a day) and the locks that keep video work and ZIP downloads to a few at a time.', 'Made again when needed; nothing else changes.'],
         'health' => ['Version record', 'beside index.php', 'Which version last ran here.', 'Made again by the next visit.'],
         'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
         'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
         'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at, and the small key file (.gallery-stats-key.php) the counts are kept under. A folder copied with both keeps its counts wherever it is shown.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
-        'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once.', 'Read again as photos are shown (Prepare media).'],
+        'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once, and which files with a picture\'s name are no picture.', 'Read again as photos are shown (Prepare media).'],
         'thumbs' => ['Thumbnails and video clips', 'in each .gallery-cache', 'Small copies that make pages fast and let iPhone photos show.', 'Made again as photos are shown (Prepare media).'],
     ];
 }
@@ -73,7 +75,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if (dirname($path) !== $folderReal) return false;
     if (is_link($path) || !is_file($path)) return false;
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
-    if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
+    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
@@ -128,7 +130,7 @@ function owned_plan($dir, $files) {
                     if ($cn === '.' || $cn === '..') continue;
                     $cp = $path . '/' . $cn;
                     if (owned_is_thumb_name($cn)) { if (owned_verify($cp, $path, 'thumbs', $top)) { $c['thumbs']++; $c['bytes'] += (int) @filesize($cp); } continue; }
-                    if ($cn === MEDIA_META_FILE && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
+                    if (($cn === MEDIA_META_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
                 }
                 $caches[] = $c;
                 continue;
@@ -143,7 +145,7 @@ function owned_plan($dir, $files) {
     // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
     $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);
+    foreach ($entries as $e) if ($e['kind'] !== 'work') $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
     $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
     foreach ($entries as $k => $e) {
@@ -231,6 +233,7 @@ function owned_zip_entries($plan, $withThumbs) {
     $out = [['name' => 'README.txt', 'data' => $readme, 'size' => strlen($readme), 'mtime' => time()]];
     foreach ($plan['entries'] as $e) {
         if ($e['kind'] === 'backup') continue;   // (the backup is a ZIP of these same files: it is not packed into another)
+        if ($e['kind'] === 'work') continue;   // (a lock holds nothing and the note of where ffmpeg is is looked up again: nothing in them to keep)
         if ($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (the log goes in as one consistent copy, below; its side files are inside that copy)
         $tmp = null;
         if ($e['kind'] === 'visits' && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a log being written to can't be copied whole by copying its file)
@@ -259,7 +262,7 @@ function owned_delete($plan, $alsoShared = false) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'work', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;

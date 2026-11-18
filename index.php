@@ -773,6 +773,68 @@ function scan_dot_file_note($path) {
     $GLOBALS['__dot_files'][$rel] = true;
 }
 
+/** Remembers a file with a picture's name that the scan left out because its first bytes say it is no picture (empty, text, a page, a program's output), for
+ *  the Health check (each once, by its path from the gallery's folder). Nothing on disk is touched. */
+function scan_not_picture_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__not_pictures'][$rel] = true;
+}
+
+/** Do the first bytes of a file say it is a picture of some kind (or something a browser may show as one)? True for every kind the gallery reads, and for
+ *  TIFF, AVIF/HEIC-style (an "ftyp" box), JPEG XL and icon files, which it does not read but which are no mistake of a broken upload. */
+function picture_bytes_plausible($h) {
+    $h = (string) $h;
+    if (strlen($h) < 4) return false;
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0 || strncmp($h, "\x89PNG\r\n\x1a\n", 8) === 0 || strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0 || strncmp($h, 'BM', 2) === 0) return true;
+    if (strlen($h) >= 12 && substr($h, 0, 4) === 'RIFF' && substr($h, 8, 4) === 'WEBP') return true;
+    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp') return true;
+    return strncmp($h, "II*\x00", 4) === 0 || strncmp($h, "MM\x00*", 4) === 0 || strncmp($h, "\xFF\x0A", 2) === 0 || strncmp($h, "\x00\x00\x00\x0CJXL ", 8) === 0 || strncmp($h, "\x00\x00\x01\x00", 4) === 0;
+}
+
+/** True when a file with a picture's name (.jpg .jpeg .png .gif .webp .bmp) is no picture at all: its first bytes are none of the kinds above. Only that: a file
+ *  that can't be read, a HEIC/HEIF, a video, or a picture that is merely too big or that no decoder here opens today is never "no picture". The answer is
+ *  remembered for the file as it is now (its size and modified time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
+ *  thumbnail cache off, or no cache folder yet, the first 16 bytes are read each time. A page build looks at no more than 20000 files this way, so a very
+ *  large first look is spread over several, and a file not looked at is shown. $folderReal is the folder the file is in; scan_not_picture_save() writes what was learned. */
+function scan_not_a_picture($folderReal, $entry, $path) {
+    static $mem = [], $budget = 20000;
+    if ($entry !== null && !in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true)) return false;
+    $cachePath = $folderReal . '/.gallery-cache/nopic1.php';
+    if (!isset($mem[$folderReal])) {
+        $known = [];
+        if (ENABLE_THUMBNAIL_CACHE && is_file($cachePath) && !is_link($cachePath) && !is_link($folderReal . '/.gallery-cache')) {
+            $raw = json_decode(data_file_strip_guard((string) @file_get_contents($cachePath)), true);
+            if (is_array($raw)) $known = $raw;
+        }
+        $mem[$folderReal] = ['known' => $known, 'seen' => [], 'changed' => false];
+    }
+    if ($entry === null) {   // (asked to write what was learned for this folder)
+        $m = &$mem[$folderReal];
+        if ($m['changed'] && ENABLE_THUMBNAIL_CACHE && is_dir($folderReal . '/.gallery-cache') && !is_link($folderReal . '/.gallery-cache') && !is_link($cachePath)) {
+            $encoded = data_file_encode(array_intersect_key($m['known'], $m['seen']));   // (a guarded file, like meta1.php: a request for it by its address is answered 404, because it holds the names of files, private ones too)
+            if ($encoded !== false) file_write_whole($cachePath, $encoded, '.php');   // (a half-written copy is a .php file with the guard line first, answered 404 like the real one)
+        }
+        $m['changed'] = false;
+        return false;
+    }
+    $m = &$mem[$folderReal];
+    $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
+    $m['seen'][$entry] = true;
+    $hit = $m['known'][$entry] ?? null;
+    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size) return ($hit[2] ?? 0) === 1;
+    if ($budget <= 0) return false;
+    $budget--;
+    $h = @file_get_contents($path, false, null, 0, 16);
+    if (!is_string($h)) return false;   // (can't tell: shown, and not remembered)
+    $no = !picture_bytes_plausible($h);
+    $m['known'][$entry] = $no ? [$mtime, $size, 1] : [$mtime, $size];
+    $m['changed'] = true;
+    return $no;
+}
+/** Writes what scan_not_a_picture() learned about a folder's files (only when it learned something new, and only into a .gallery-cache that is there). */
+function scan_not_picture_save($folderReal) { scan_not_a_picture($folderReal, null, ''); }
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -797,7 +859,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; $GLOBALS['__not_pictures'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -811,7 +873,10 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
                 if ($entry[0] === '.') scan_dot_file_note($path);   // (a dot file is hidden, the way a dot folder is: never a photo)
-                elseif (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                elseif (name_is_text($entry)) {
+                    if (scan_not_a_picture($realDir, $entry, $path)) scan_not_picture_note($path);   // (no picture at all: left out, and said in the Health check)
+                    else { $node['files'][] = $entry; $files++; }
+                }
                 else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
@@ -827,6 +892,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         }
         $node['subdirs'][$entry] = scan_folder_tree($path, $mediaExtensions, $self, false);
     }
+    scan_not_picture_save($realDir);
     if (PHOTO_SORT_ORDER === 'mtime') {
         $times = [];   // (each file's date is read once, not at every comparison)
         foreach ($node['files'] as $f) $times[$f] = @filemtime("$realDir/$f") ?: 0;
@@ -1264,7 +1330,7 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
-    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = [];
+    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; $GLOBALS['__not_pictures'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
@@ -1272,8 +1338,10 @@ if (AUTO_GROUP_BY_FOLDER) {
         if (!in_array($ext, $mediaExtensions)) return false;
         if ($file[0] === '.') { scan_dot_file_note("$dir/$file"); return false; }   // (a dot file is hidden, the way a dot folder is: never a photo)
         if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
+        if (scan_not_a_picture($dir, $file, "$dir/$file")) { scan_not_picture_note("$dir/$file"); return false; }   // (no picture at all: left out, and said in the Health check)
         return true;
     });
+    scan_not_picture_save($dir);
 
     // Base ordering, before any .md-driven repositioning — see
     // PHOTO_SORT_ORDER above.
@@ -2079,9 +2147,8 @@ function archive_stream($entries, $zip64, $sink = null) {   // ($sink: a functio
 
 /** One of a couple of places to make an archive at once, or null if they are all taken. The lock goes when the request ends. */
 function archive_take_slot() {
-    $base = sys_get_temp_dir() . '/gallery-archive-' . substr(hash('sha256', __DIR__), 0, 10) . '-';
     for ($i = 1; $i <= 2; $i++) {
-        $fh = @fopen($base . $i . '.lock', 'c');
+        $fh = work_lock_open('archive-' . $i);
         if ($fh && flock($fh, LOCK_EX | LOCK_NB)) return $fh;
         if ($fh) fclose($fh);
     }
@@ -2208,26 +2275,39 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
  * ----------------------------------------------------------------------- */
 
 /** Where ffmpeg is on this server, or '' if it can't be used: the setting is off, the functions to start a program are
- *  not available, or no ffmpeg answers. Looked up once a day and remembered outside the web folder. */
+ *  not available, or no ffmpeg answers. Looked up once a day and remembered in .gallery-ffmpeg.php, beside index.php (not in the server's
+ *  shared temp folder, where another account on the server may be able to write). */
 function ffmpeg_binary() {
     static $found = null;
     if ($found !== null) return $found;
     $found = '';
     if (!function_exists('proc_open')) return $found;
-    $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
+    $remember = __DIR__ . '/.gallery-ffmpeg.php';
     $candidates = FFMPEG_PATH !== '' ? [FFMPEG_PATH] : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/snap/bin/ffmpeg'];
-    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
-        // The note sits in the system's shared temp folder, where another account or program may be able to write: what it says is only believed when it is
-        // "none" or one of the places this function would look itself. Anything else is ignored, and the places are looked at again.
-        $note = trim((string) @file_get_contents($remember));
-        if ($note === '' || in_array($note, $candidates, true)) return $found = $note;
+    if (!is_link($remember) && is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
+        // What the note says is only believed when it is for the same FFMPEG_PATH and says "none" or one of the places this function would look itself.
+        // Anything else is ignored, and the places are looked at again.
+        $d = json_decode(data_file_strip_guard((string) @file_get_contents($remember)), true);
+        if (is_array($d) && ($d['for'] ?? null) === FFMPEG_PATH && is_string($d['found'] ?? null) && ($d['found'] === '' || in_array($d['found'], $candidates, true))) return $found = $d['found'];
     }
     foreach ($candidates as $c) {
         if ($c !== 'ffmpeg' && !is_executable($c)) continue;
         if (run_quietly([$c, '-version'], 5) === 0) { $found = $c; break; }
     }
-    @file_put_contents($remember, $found, LOCK_EX);
+    $note = data_file_encode(['for' => FFMPEG_PATH, 'found' => $found]);
+    if ($note !== false && !is_link($remember) && is_writable(__DIR__)) file_write_whole($remember, $note, '.php');
     return $found;
+}
+
+/** A lock file for keeping some work to one (or a few) at a time: .gallery-<name>.lock beside index.php, opened for locking, or null. Only if that folder
+ *  can't hold it (not writable, or a link is there) is the old place used, a file of the same kind in the server's temp folder: a lock holds nothing, so
+ *  that is all it can be used for, and the work is still held to its turns. */
+function work_lock_open($name) {
+    $path = __DIR__ . '/.gallery-' . $name . '.lock';
+    $fh = is_link($path) ? false : @fopen($path, 'c');
+    if ($fh) { @chmod($path, 0600); return $fh; }
+    $fh = @fopen(sys_get_temp_dir() . '/gallery-' . substr(hash('sha256', __DIR__), 0, 10) . '-' . $name . '.lock', 'c');
+    return $fh ?: null;
 }
 
 /** Runs a program (the arguments as a list, no shell), with a time limit; its exit code, or null if it couldn't be run
@@ -2247,7 +2327,7 @@ function run_quietly($args, $seconds) {
 /** Takes the one ffmpeg place (only one runs at a time), waiting up to $seconds for whoever has it to finish, so a request
  *  that arrives during another's work is served in its turn rather than refused. Null if it never came free. */
 function ffmpeg_take_turn($seconds) {
-    $lock = @fopen(sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__), 0, 10) . '.lock', 'c');
+    $lock = work_lock_open('ffmpeg');
     if (!$lock) return null;
     $deadline = microtime(true) + $seconds;
     while (!flock($lock, LOCK_EX | LOCK_NB)) {
@@ -2693,10 +2773,10 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
 }
 
 /** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
- *  dates (taken.json, taken2.json, taken3.json, taken4.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  dates (taken.json, taken2.json, taken3.json, taken4.json), which files are no picture (nopic1.php), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
  *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
 function cache_entry_is_gallery_made($name) {
-    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
+    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|nopic[0-9]*\.php|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
 }
 
 /** The folders (as the gallery names them) whose .gallery-cache is a link: not used, not swept (see image_cache_path). */
@@ -2718,6 +2798,7 @@ function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
         if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
         $mtime = @filemtime(resolve_real_path($dir, $file));
         $valid['taken4.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+        $valid['nopic1.php'] = true;   // which files with a picture's name are no picture (see scan_not_a_picture)
         $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
         if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
         foreach ($variants as $variant) {
@@ -4931,12 +5012,12 @@ function geo_state() {
     return json_file_read(geo_state_path(), ['ym' => '', 'modified' => '', 'length' => 0, 'at' => 0, 'error' => '', 'triedAt' => 0, 'raw' => 0]);
 }
 
-/** An address a download may come from: https anywhere, or plain http only to this very machine (for tests). */
-function geo_url_ok($url) {
+/** An address a download may come from: https anywhere, or plain http only to this very machine (for tests), and only when $loopback is true. */
+function geo_url_ok($url, $loopback = true) {
     $p = parse_url((string) $url);
     if (!is_array($p) || empty($p['host']) || isset($p['user']) || isset($p['pass'])) return false;
     if (($p['scheme'] ?? '') === 'https') return true;
-    return ($p['scheme'] ?? '') === 'http' && in_array(strtolower($p['host']), ['127.0.0.1', 'localhost', '[::1]'], true);
+    return $loopback && ($p['scheme'] ?? '') === 'http' && in_array(strtolower($p['host']), ['127.0.0.1', 'localhost', '[::1]'], true);
 }
 
 /** The address of a month's file: the setting COUNTRY_DB_URL with {ym} replaced by the month ("2026-11"), or DB-IP's own. */
@@ -5013,8 +5094,11 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
     $cur = $url;
     $allowed = $hosts === null ? null : array_merge($hosts, [(string) (parse_url((string) $url, PHP_URL_HOST) ?? '')]);
+    // Plain http to this machine is for the first address (a mirror the owner runs here) and for what that same kind of address sends on; a download that starts at an https
+    // address is never sent on to a port of this server, whoever serves it. (A download with a list of hosts it may come from has that list for its hops.)
+    $loopOk = $hosts !== null || strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'http';
     for ($hop = 0; $hop <= 3; $hop++) {
-        if (!geo_url_ok($cur)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
+        if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
         $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout);
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
@@ -13071,7 +13155,8 @@ function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootF
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-collections.php' => 'collections', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup',
+            '.gallery-ffmpeg.php' => 'work', '.gallery-ffmpeg.lock' => 'work', '.gallery-archive-1.lock' => 'work', '.gallery-archive-2.lock' => 'work'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -13113,13 +13198,14 @@ function owned_kind_info() {
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
         'lockouts' => ['Lockout counts', 'beside index.php', 'How many times a connection was paused for too many wrong codes or addresses, per day and kind (no addresses), for the Health check.', 'The count starts again from nothing.'],
         'geo' => ['Country file', 'beside index.php', 'The list of address ranges per country (from DB-IP) that says which country an address is in, and when it was fetched.', 'Countries are no longer looked up; turning the option on again fetches it again.'],
+        'work' => ['Notes and locks for video and ZIP work', 'beside index.php', 'Where ffmpeg was found (looked up once a day) and the locks that keep video work and ZIP downloads to a few at a time.', 'Made again when needed; nothing else changes.'],
         'health' => ['Version record', 'beside index.php', 'Which version last ran here.', 'Made again by the next visit.'],
         'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
         'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
         'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at, and the small key file (.gallery-stats-key.php) the counts are kept under. A folder copied with both keeps its counts wherever it is shown.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
-        'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once.', 'Read again as photos are shown (Prepare media).'],
+        'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once, and which files with a picture\'s name are no picture.', 'Read again as photos are shown (Prepare media).'],
         'thumbs' => ['Thumbnails and video clips', 'in each .gallery-cache', 'Small copies that make pages fast and let iPhone photos show.', 'Made again as photos are shown (Prepare media).'],
     ];
 }
@@ -13131,7 +13217,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if (dirname($path) !== $folderReal) return false;
     if (is_link($path) || !is_file($path)) return false;
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
-    if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
+    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
@@ -13186,7 +13272,7 @@ function owned_plan($dir, $files) {
                     if ($cn === '.' || $cn === '..') continue;
                     $cp = $path . '/' . $cn;
                     if (owned_is_thumb_name($cn)) { if (owned_verify($cp, $path, 'thumbs', $top)) { $c['thumbs']++; $c['bytes'] += (int) @filesize($cp); } continue; }
-                    if ($cn === MEDIA_META_FILE && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
+                    if (($cn === MEDIA_META_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
                 }
                 $caches[] = $c;
                 continue;
@@ -13201,7 +13287,7 @@ function owned_plan($dir, $files) {
     // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
     $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);
+    foreach ($entries as $e) if ($e['kind'] !== 'work') $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
     $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
     foreach ($entries as $k => $e) {
@@ -13289,6 +13375,7 @@ function owned_zip_entries($plan, $withThumbs) {
     $out = [['name' => 'README.txt', 'data' => $readme, 'size' => strlen($readme), 'mtime' => time()]];
     foreach ($plan['entries'] as $e) {
         if ($e['kind'] === 'backup') continue;   // (the backup is a ZIP of these same files: it is not packed into another)
+        if ($e['kind'] === 'work') continue;   // (a lock holds nothing and the note of where ffmpeg is is looked up again: nothing in them to keep)
         if ($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (the log goes in as one consistent copy, below; its side files are inside that copy)
         $tmp = null;
         if ($e['kind'] === 'visits' && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a log being written to can't be copied whole by copying its file)
@@ -13317,7 +13404,7 @@ function owned_delete($plan, $alsoShared = false) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'work', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;
@@ -16395,6 +16482,12 @@ function health_checks($dir, $files) {
         $add('Folders and files', 'ok', $dotN === 1 ? 'A file starting with a dot is left out' : number_format($dotN) . ' files starting with a dot are left out',
             'A name that starts with a dot is a hidden file, so the gallery leaves it out the way it leaves out a folder that starts with one. Nothing on disk is touched. A Mac that copies photos to a disk or share it can\'t keep its extra data on leaves one ._ copy beside each photo (a few kilobytes, not a picture): ' . implode(', ', array_slice($dotAll, 0, 6)) . ($dotN > 6 ? ' and ' . number_format($dotN - 6) . ' more' : '') . '. To show one, rename it without the dot.');
     }
+    if (!empty($GLOBALS['__not_pictures'])) {   // (files with a picture's name whose first bytes say they are no picture: left out, so no visitor meets a broken tile)
+        $npAll = array_keys($GLOBALS['__not_pictures']); $npN = count($npAll);
+        $add('Folders and files', 'warn', $npN === 1 ? 'A file with a picture\'s name is not a picture' : number_format($npN) . ' files with a picture\'s name are not pictures',
+            'The gallery leaves ' . ($npN === 1 ? 'it' : 'them') . ' out, so no visitor sees a broken tile (nothing on disk is touched): ' . implode(', ', array_slice($npAll, 0, 8)) . ($npN > 8 ? ' and ' . number_format($npN - 8) . ' more' : '')
+            . '. ' . ($npN === 1 ? 'Its first bytes are' : 'The first bytes of each are') . ' none of a picture\'s (an empty file, text, a web page or a program\'s output saved under a picture\'s name, often a download or copy that went wrong). Replace ' . ($npN === 1 ? 'it' : 'each one') . ' with the real picture, or delete ' . ($npN === 1 ? 'it' : 'it') . ', and the next page load looks again. A picture that is only too big, or in a kind this server can\'t make thumbnails of (a HEIC without Imagick), is not in this list: it is shown.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -16439,7 +16532,7 @@ function health_checks($dir, $files) {
         $go = ['site', 'media-panel', '→ Prepare media'];
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
-            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files have a picture\'s name but are not pictures any program here can open (an empty file, a text file, a damaged one), so their tiles stay blank. Replace or delete them.'],
+            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files start like a picture but no program here can open them (a damaged or cut-off one), so their tiles stay blank. Replace or delete them. (A file that is no picture at all, an empty or text file, is left out and named in its own row above.)'],
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
             'legacy' => ['info', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
             'videoFailed' => ['warn', function ($c) use ($n) { return $n($c, 'video') . ' ffmpeg couldn\'t make pictures for'; }, 'Not tried again for six hours.'],
