@@ -72,3 +72,11 @@ Let the owner see how many galleries run which version.
 - **Today:** the server suite starts about 200 small web servers (one per test setup) and stops 16 of them as it goes; the rest run until the suite ends. On the static PHP 8.5 build that is about 300 processes and 12.6 GB of a 16 GB machine, so a suite has to run alone.
 - **Sketch:** stop each server when its section is done. Later sections reuse earlier servers, so each reuse has to be found first; a section would start its own server when it needs one.
 - **Note:** held back because it touches the whole suite (about 3,100 checks) for no change in what the gallery does. Worth doing only if the suite keeps growing or the machine gets smaller.
+
+
+## A held-up change log should not slow every page view
+*A maybe, not a plan: it needs another program to hold the log's file.*
+
+- **Today:** when what was typed for a deleted or renamed photo is written in the Changes tab and another program has the log's file locked (a backup tool copying it, say), each page view waits for the file, up to several seconds for each folder that has such data, and then leaves the data where it is. Nothing is lost; the page is slow while the lock lasts.
+- **Sketch:** give that one write a short wait (a second or less) and try again at a later view, so a held file costs a page almost nothing.
+- **Note:** held back because it only happens while something else keeps the file locked, and the data is never lost.
