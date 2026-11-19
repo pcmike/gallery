@@ -81,7 +81,7 @@ function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json',
 
 /** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
 function old_dates_walk($realDir, $rel, array &$out, &$budget) {
-    if ($budget <= 0) return;
+    if ($budget <= 0) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
     $budget--;
     $out[] = ['real' => $realDir, 'rel' => $rel];
     foreach (@scandir($realDir) ?: [] as $e) {
@@ -96,6 +96,7 @@ function old_dates_walk($realDir, $rel, array &$out, &$budget) {
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $GLOBALS['__old_dates_cut'] = false;
     $found = [];
     // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
     // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.

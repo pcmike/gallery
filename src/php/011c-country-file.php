@@ -69,6 +69,8 @@ function geo_ip_is_public($ip) {
     if (($w[1] & 0xFFC0) === 0xFEC0 || ($w[1] & 0xFFC0) === 0xFE80) return false;   // fec0::/10 (old site-local), fe80::/10
     if ($w[1] === 0x2002) return false;                                 // 2002::/16 6to4
     if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // 64:ff9b::/96 NAT64
+    if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 1) return false;                                       // 64:ff9b:1::/48 local-use NAT64 (a translating gateway on this network)
+    if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0xFFFF && $w[6] === 0) return false;   // ::ffff:0:a.b.c.d IPv4-translated
     if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // ::/96, ::1 and the IPv4-compatible forms
     return true;
 }

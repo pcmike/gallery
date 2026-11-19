@@ -1042,15 +1042,16 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
-    $odd = old_dates_leftovers($dir, $files);
+    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format(SCAN_MAX_FOLDERS) . ' folders (the most the gallery looks at on one visit) were looked through for these, so there may be more further on.';
     if ($odd) {   // (the plain capture-dates files an earlier version made: they hold file names, and no look of the gallery's own reaches them with the cache off and the order by name, or in a place from elsewhere)
         $odN = count($odd); $odElse = count(array_filter($odd, function ($e) { return $e['elsewhere']; }));
         $odWhere = array_values(array_unique(array_map(function ($e) { return $e['folder'] === '' ? 'the main page' : $e['folder']; }, $odd)));
         $add('Left behind', 'info', number_format($odN) . ' old capture-date file' . ($odN === 1 ? '' : 's') . ' from an earlier version',
             'Earlier versions kept the dates used for the date order in plain files (taken3.json and its older names) inside each folder\'s .gallery-cache. They hold the names of the folder\'s files and, where the web server has no rule for .gallery- names, can be read by their address. Nothing reads them now: the dates are in a guarded file (taken4.php). In: '
-            . implode(', ', array_slice($odWhere, 0, 6)) . (count($odWhere) > 6 ? ' and ' . number_format(count($odWhere) - 6) . ' more' : '') . '.', null,
+            . implode(', ', array_slice($odWhere, 0, 6)) . (count($odWhere) > 6 ? ' and ' . number_format(count($odWhere) - 6) . ' more' : '') . '.' . ($odCut ? $odCutText : ''), null,
             '<div class="health-act">' . ($odElse ? '<label class="check"><input type="checkbox" class="olddates-others"> Also the ' . number_format($odElse) . ' in places from elsewhere on the server (no other gallery that shows those places still needs them)</label> ' : '') . '<button type="button" class="secondary" data-olddates-remove>Remove them</button></div>');
     }
+    elseif ($odCut) $add('Left behind', 'info', 'Old capture-date files: the look was cut short', trim($odCutText) . ' None were found in those.');
     health_server_rows($add);   // (disk room, HTTPS, the visitor address, what PHP allows: 035b)
 
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes

@@ -3855,7 +3855,7 @@ function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json',
 
 /** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
 function old_dates_walk($realDir, $rel, array &$out, &$budget) {
-    if ($budget <= 0) return;
+    if ($budget <= 0) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
     $budget--;
     $out[] = ['real' => $realDir, 'rel' => $rel];
     foreach (@scandir($realDir) ?: [] as $e) {
@@ -3870,6 +3870,7 @@ function old_dates_walk($realDir, $rel, array &$out, &$budget) {
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $GLOBALS['__old_dates_cut'] = false;
     $found = [];
     // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
     // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.
@@ -5149,6 +5150,8 @@ function geo_ip_is_public($ip) {
     if (($w[1] & 0xFFC0) === 0xFEC0 || ($w[1] & 0xFFC0) === 0xFE80) return false;   // fec0::/10 (old site-local), fe80::/10
     if ($w[1] === 0x2002) return false;                                 // 2002::/16 6to4
     if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // 64:ff9b::/96 NAT64
+    if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 1) return false;                                       // 64:ff9b:1::/48 local-use NAT64 (a translating gateway on this network)
+    if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0xFFFF && $w[6] === 0) return false;   // ::ffff:0:a.b.c.d IPv4-translated
     if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // ::/96, ::1 and the IPv4-compatible forms
     return true;
 }
@@ -15143,17 +15146,23 @@ function changes_check($dir, $files, $throttle) {
 }
 
 /** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
-function changes_data_line($bare, array $entry) {
+function changes_data_line($bare, $entry) {
     $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
+    $empty = function ($x) { return $x === '' || $x === null || $x === false || $x === []; };
+    $json = function ($x) { return json_encode($x, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); };
+    if (!is_array($entry)) return (string) $bare . ($empty($entry) ? ' — (a setting only, nothing typed)' : ' — Entry: ' . (is_scalar($entry) ? (string) $entry : $json($entry)));   // (a shape the gallery never writes, from a file edited by hand: written as it is)
     $bits = [];
     foreach ($entry as $k => $v) {
         if ($k === 'location' && is_array($v)) {
-            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng'];
-            if (isset($v['label']) && is_scalar($v['label']) && (string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label'];
+            $rest = $v;
+            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) { $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng']; unset($rest['lat'], $rest['lng']); }
+            if (isset($v['label']) && is_scalar($v['label'])) { if ((string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label']; unset($rest['label']); }
+            $rest = array_filter($rest, function ($x) use ($empty) { return !$empty($x); });
+            if ($rest) $bits[] = 'Location (as saved): ' . $json($rest);   // (a latitude without a longitude, or anything else a hand-edited file holds: nothing is dropped)
             continue;
         }
-        if ($v === '' || $v === null || $v === false || $v === []) continue;
-        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if ($empty($v)) continue;
+        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : $json($v));
     }
     return $bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)');   // (never cut: what was typed is what is written)
 }
@@ -15171,7 +15180,7 @@ function changes_record_removed_data($folderRel, array $gone) {
     if (!changes_tab_wanted()) return visitlog_driver_ok() && is_file(visitlog_path()) ? false : 'nolog';
     $entries = []; $cur = []; $curBytes = 0;
     foreach ($gone as $bare => $entry) {
-        $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+        $line = changes_data_line((string) $bare, $entry);
         if ($cur && (count($cur) >= changes_names_per_entry() || $curBytes + strlen($line) > 200000)) { $entries[] = $cur; $cur = []; $curBytes = 0; }
         $cur[] = $line; $curBytes += strlen($line);
     }
@@ -16897,15 +16906,16 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
-    $odd = old_dates_leftovers($dir, $files);
+    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format(SCAN_MAX_FOLDERS) . ' folders (the most the gallery looks at on one visit) were looked through for these, so there may be more further on.';
     if ($odd) {   // (the plain capture-dates files an earlier version made: they hold file names, and no look of the gallery's own reaches them with the cache off and the order by name, or in a place from elsewhere)
         $odN = count($odd); $odElse = count(array_filter($odd, function ($e) { return $e['elsewhere']; }));
         $odWhere = array_values(array_unique(array_map(function ($e) { return $e['folder'] === '' ? 'the main page' : $e['folder']; }, $odd)));
         $add('Left behind', 'info', number_format($odN) . ' old capture-date file' . ($odN === 1 ? '' : 's') . ' from an earlier version',
             'Earlier versions kept the dates used for the date order in plain files (taken3.json and its older names) inside each folder\'s .gallery-cache. They hold the names of the folder\'s files and, where the web server has no rule for .gallery- names, can be read by their address. Nothing reads them now: the dates are in a guarded file (taken4.php). In: '
-            . implode(', ', array_slice($odWhere, 0, 6)) . (count($odWhere) > 6 ? ' and ' . number_format(count($odWhere) - 6) . ' more' : '') . '.', null,
+            . implode(', ', array_slice($odWhere, 0, 6)) . (count($odWhere) > 6 ? ' and ' . number_format(count($odWhere) - 6) . ' more' : '') . '.' . ($odCut ? $odCutText : ''), null,
             '<div class="health-act">' . ($odElse ? '<label class="check"><input type="checkbox" class="olddates-others"> Also the ' . number_format($odElse) . ' in places from elsewhere on the server (no other gallery that shows those places still needs them)</label> ' : '') . '<button type="button" class="secondary" data-olddates-remove>Remove them</button></div>');
     }
+    elseif ($odCut) $add('Left behind', 'info', 'Old capture-date files: the look was cut short', trim($odCutText) . ' None were found in those.');
     health_server_rows($add);   // (disk room, HTTPS, the visitor address, what PHP allows: 035b)
 
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes

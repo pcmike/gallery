@@ -147,17 +147,23 @@ function changes_check($dir, $files, $throttle) {
 }
 
 /** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
-function changes_data_line($bare, array $entry) {
+function changes_data_line($bare, $entry) {
     $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
+    $empty = function ($x) { return $x === '' || $x === null || $x === false || $x === []; };
+    $json = function ($x) { return json_encode($x, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); };
+    if (!is_array($entry)) return (string) $bare . ($empty($entry) ? ' — (a setting only, nothing typed)' : ' — Entry: ' . (is_scalar($entry) ? (string) $entry : $json($entry)));   // (a shape the gallery never writes, from a file edited by hand: written as it is)
     $bits = [];
     foreach ($entry as $k => $v) {
         if ($k === 'location' && is_array($v)) {
-            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng'];
-            if (isset($v['label']) && is_scalar($v['label']) && (string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label'];
+            $rest = $v;
+            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) { $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng']; unset($rest['lat'], $rest['lng']); }
+            if (isset($v['label']) && is_scalar($v['label'])) { if ((string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label']; unset($rest['label']); }
+            $rest = array_filter($rest, function ($x) use ($empty) { return !$empty($x); });
+            if ($rest) $bits[] = 'Location (as saved): ' . $json($rest);   // (a latitude without a longitude, or anything else a hand-edited file holds: nothing is dropped)
             continue;
         }
-        if ($v === '' || $v === null || $v === false || $v === []) continue;
-        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if ($empty($v)) continue;
+        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : $json($v));
     }
     return $bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)');   // (never cut: what was typed is what is written)
 }
@@ -175,7 +181,7 @@ function changes_record_removed_data($folderRel, array $gone) {
     if (!changes_tab_wanted()) return visitlog_driver_ok() && is_file(visitlog_path()) ? false : 'nolog';
     $entries = []; $cur = []; $curBytes = 0;
     foreach ($gone as $bare => $entry) {
-        $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+        $line = changes_data_line((string) $bare, $entry);
         if ($cur && (count($cur) >= changes_names_per_entry() || $curBytes + strlen($line) > 200000)) { $entries[] = $cur; $cur = []; $curBytes = 0; }
         $cur[] = $line; $curBytes += strlen($line);
     }

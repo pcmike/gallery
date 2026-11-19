@@ -13834,6 +13834,43 @@ echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log o
 }
 
 /* --------------------------------------------------------------------- */
+// chunk-9 follow-up (pass 5), N22 c, d, e: odd saved data is written as it is, two more address forms are refused, Health says when its look was cut short
+echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short look ==\n";
+{
+    $o5Src = file_get_contents($indexSrc);
+    $o5No = ['64:ff9b:1::1', '64:ff9b:1:ffff:ffff:ffff:ffff:ffff', '::ffff:0:7f00:1', '::ffff:0:a00:1', '::ffff:0:808:808'];
+    $o5Yes = ['64:ff9b:2::1', '2606:4700:4700::1111'];
+    $o5Res = json_decode($g2Run($g2Fn('geo_ip_is_public') . "\n" . 'echo json_encode(array_map(function ($ip) { return geo_ip_is_public($ip); }, ' . var_export(array_merge($o5No, $o5Yes), true) . '));'), true) ?: [];
+    $o5Wrong = []; foreach (array_merge($o5No, $o5Yes) as $i => $ip) { if (($o5Res[$i] ?? null) !== ($i >= count($o5No))) $o5Wrong[] = $ip; }
+    check('[N22 d] the public-address rule also refuses the local-use NAT64 range (64:ff9b:1::/48) and the IPv4-translated form (::ffff:0:a.b.c.d), and still accepts the address next to them', $o5Wrong === [], json_encode($o5Wrong));
+    // (c) a photo's data in a shape the gallery never writes (a hand-edited file) is written down as it is, not as "nothing typed"
+    $o5Fx = new_fixture_dir('oddlog'); mkdir("$o5Fx/Alpha", 0777, true); make_jpeg("$o5Fx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$o5Fx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a2.jpg' => ['caption' => 'stays'], 'g1.jpg' => ['location' => ['lat' => 12.5]], 'g2.jpg' => ['location' => ['lat' => 1, 'lng' => 2, 'label' => 'Paris', 'zoom' => 9]], 'g3.jpg' => 'an odd entry', 'g4.jpg' => ['caption' => 'typed']]]) . "\n");
+    file_put_contents("$o5Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'o5-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$o5Fx/index.php"); @touch("$o5Fx/index.php", time() - 3600);
+    $o5Port = find_free_port(); $o5Proc = start_server($o5Fx, $o5Port); $o5Base = "http://127.0.0.1:$o5Port";
+    [, , $o5H] = http_post("$o5Base/?admin", ['access_code' => 'o5-admin-pw-1'], [], false); $o5Own = ['Cookie: ' . extract_cookie_header($o5H)];
+    http_get("$o5Base/?admin&classic=1", $o5Own); http_get("$o5Base/");
+    $o5List = json_decode((string) http_get("$o5Base/?admin&changes_list=1", $o5Own)[1], true); $o5Txt = html_entity_decode(strip_tags((string) ($o5List['html'] ?? '')));
+    check('[N22 c] a location with a latitude and no longitude, a location with something besides lat, lng and place, and an entry that is not a list are all written in the Changes tab as they are', str_contains($o5Txt, 'g1.jpg') && str_contains($o5Txt, '12.5') && str_contains($o5Txt, 'Location: 1, 2') && str_contains($o5Txt, 'Place: Paris') && str_contains($o5Txt, '"zoom":9') && str_contains($o5Txt, 'Entry: an odd entry') && !str_contains($o5Txt, 'g1.jpg — (a setting only'), substr($o5Txt, 0, 600));
+    proc_terminate($o5Proc);
+    // (e) more folders than the gallery looks at on one visit: the Health row says the look was cut short
+    $o5Cut = new_fixture_dir('oddcut'); mkdir("$o5Cut/Alpha", 0777, true); make_jpeg("$o5Cut/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    for ($i = 0; $i < 2100; $i++) mkdir(sprintf('%s/F%04d', $o5Cut, $i), 0755);
+    mkdir("$o5Cut/F0001/.gallery-cache", 0755); file_put_contents("$o5Cut/F0001/.gallery-cache/taken3.json", '{}');
+    file_put_contents("$o5Cut/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'o5-admin-pw-2', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'PHOTO_SORT_ORDER' => 'filename', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$o5Cut/index.php"); @touch("$o5Cut/index.php", time() - 3600);
+    $o5Port2 = find_free_port(); $o5Proc2 = start_server($o5Cut, $o5Port2); $o5Base2 = "http://127.0.0.1:$o5Port2";
+    [, , $o5H2] = http_post("$o5Base2/?admin", ['access_code' => 'o5-admin-pw-2'], [], false); $o5Own2 = ['Cookie: ' . extract_cookie_header($o5H2)];
+    $o5T1 = html_entity_decode(strip_tags((string) http_get("$o5Base2/?admin&classic=1", $o5Own2)[1]));
+    check('[N22 e] with more folders than the gallery looks at, the old-capture-date row says only the first 2,000 were looked through', str_contains($o5T1, '1 old capture-date file from an earlier version') && str_contains($o5T1, 'Only the first 2,000 folders'), '');
+    $o5R = json_decode(http_post("$o5Base2/?admin", ['csrf_token' => admin_token($o5Base2, $o5Own2), 'action' => 'health_remove_old_dates'], array_merge($o5Own2, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $o5T2 = html_entity_decode(strip_tags((string) http_get("$o5Base2/?admin&classic=1", $o5Own2)[1]));
+    check('[N22 e] ...and after they are removed, with none found, there is still a row that says the look was cut short (a quiet look is not mistaken for a clean one)', ($o5R['ok'] ?? false) === true && str_contains($o5T2, 'Old capture-date files: the look was cut short') && !str_contains($o5T2, '1 old capture-date file from'), json_encode($o5R));
+    proc_terminate($o5Proc2);
+}
+
+/* --------------------------------------------------------------------- */
 // The grid and the viewer must number the photos the same way: a collection's card is not in the viewer's list (its photos are, where they really are)
 echo "== a collection's card does not shift the viewer's numbering ==\n";
 {
