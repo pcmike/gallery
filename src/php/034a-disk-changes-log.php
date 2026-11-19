@@ -146,6 +146,39 @@ function changes_check($dir, $files, $throttle) {
     }
 }
 
+/** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
+function changes_data_line($bare, array $entry) {
+    $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
+    $bits = [];
+    foreach ($entry as $k => $v) {
+        if ($k === 'location' && is_array($v)) {
+            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng'];
+            if (isset($v['label']) && is_scalar($v['label']) && (string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label'];
+            continue;
+        }
+        if ($v === '' || $v === null || $v === false || $v === []) continue;
+        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+    return substr($bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)'), 0, 4000);
+}
+
+/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log, one entry for the folder, before the gallery takes it out of the folder's data.
+ *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
+ *  false when a log is kept but could not take it (the caller then leaves the data where it is). */
+function changes_record_removed_data($folderRel, array $gone) {
+    if (!$gone) return true;
+    if (!changes_tab_wanted()) return 'nolog';
+    $lines = [];
+    foreach ($gone as $bare => $entry) $lines[] = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+    [$j, $more] = changes_pack($lines);
+    $now = time();
+    $ok = visitlog_tx(function ($db) use ($folderRel, $lines, $j, $more, $now) {
+        $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([$now, $now, $now, 'data', (string) $folderRel, count($lines), $j, $more, '[]']);
+        return true;
+    });
+    return $ok === true ? true : false;
+}
+
 /** Does this server keep the log of disk activity (and so show the Changes tab)? It lives in the visitor log's SQLite file. */
 function changes_tab_wanted() {
     return visitlog_driver_ok() && visitlog_ready();
@@ -223,9 +256,9 @@ function changes_last_id() { return (int) changes_read(function ($db) { return $
 /** Entries newer than $after, in or under $folder (null: anywhere), oldest first, no more than 200. */
 function changes_after($after, $folder) {
     return changes_read(function ($db) use ($after, $folder) {
-        if ($folder === null || $folder === '') { $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? ORDER BY id LIMIT 200'); $st->execute([(int) $after]); }
+        if ($folder === null || $folder === '') { $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND kind <> \'data\' ORDER BY id LIMIT 200'); $st->execute([(int) $after]); }
         else {
-            $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND (folder = ? OR folder LIKE ? ESCAPE \'\\\') ORDER BY id LIMIT 200');
+            $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND kind <> \'data\' AND (folder = ? OR folder LIKE ? ESCAPE \'\\\') ORDER BY id LIMIT 200');
             $st->execute([(int) $after, $folder, addcslashes($folder, '%_\\') . '/%']);
         }
         return $st->fetchAll();
@@ -240,6 +273,7 @@ function changes_unseen_map() {
     $map = [];
     $rows = changes_read(function ($db) { $st = $db->prepare('SELECT kind, folder, n, t0 FROM changes WHERE id > ?'); $st->execute([(int) visitlog_meta_get($db, 'chg_seen')]); return $st->fetchAll(); }, []);
     foreach ($rows as $r) {
+        if ($r['kind'] === 'data') continue;   // (the data of photos that are gone: listed in the tab, no count on a folder's card)
         $path = (string) $r['folder'];
         while ($path !== '') {
             $m = &$map[$path];

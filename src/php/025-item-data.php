@@ -417,7 +417,7 @@ function media_taken_times($folderReal, $names) {
     $cacheOk = !is_link($cacheDir);
     $ownRoot = rtrim((string) (realpath(__DIR__) ?: __DIR__), '/') . '/';
     if ($cacheOk && strpos(rtrim((string) (realpath($folderReal) ?: $folderReal), '/') . '/', $ownRoot) === 0) {   // (a place from elsewhere on the server may be shown by another gallery that still uses its files: left alone, as the thumbnail clean-up does)
-        foreach (['taken.json', 'taken2.json', 'taken3.json', 'taken4.json'] as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
+        foreach (old_dates_names() as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
     }
     $cachePath = $cacheDir . '/' . MEDIA_TAKEN_FILE;
     $useCache = ENABLE_THUMBNAIL_CACHE && $cacheOk;

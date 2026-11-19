@@ -68,3 +68,41 @@ function moved_in_remove_leftovers($dir, $files) {
     }
     return ['count' => $n, 'bytes' => $bytes];
 }
+
+/* -----------------------------------------------------------------------
+ * The plain capture-dates files. Every release up to 2.6.4 kept the dates used for the date order in .gallery-cache/taken3.json (and taken.json and taken2.json before it):
+ * plain JSON that holds the name of every file in the folder. 2.6.5 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
+ * date, and the thumbnail clean-up when the cache is on, in the gallery's own folders; what those never reach (the cache off with the order by name, and a place from
+ * elsewhere on the server, which is never swept) is named in Health, and removed by its button.
+ * ----------------------------------------------------------------------- */
+
+/** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
+function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
+
+/** The old plain capture-dates files in the folders of $files: [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
+ *  Regular files only: a link by that name is never counted or followed. */
+function old_dates_leftovers($dir, $files) {
+    $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $found = [];
+    foreach (moved_in_folders($dir, $files) as $f) {
+        $cacheDir = $f['real'] . '/.gallery-cache';
+        if (!is_dir($cacheDir) || is_link($cacheDir)) continue;
+        $elsewhere = strpos(rtrim((string) (realpath($f['real']) ?: $f['real']), '/') . '/', $ownRoot) !== 0;
+        foreach (old_dates_names() as $name) {
+            $path = $cacheDir . '/' . $name;
+            if (is_file($path) && !is_link($path)) $found[] = ['path' => $path, 'folder' => $f['rel'], 'elsewhere' => $elsewhere, 'bytes' => (int) @filesize($path)];
+        }
+    }
+    return $found;
+}
+
+/** Takes them away: the ones in the gallery's own folders, and those in places from elsewhere only when $alsoElsewhere (the owner said no other gallery needs them).
+ *  The list is worked out here, now, never taken from the request. [removed, left]. */
+function old_dates_remove($dir, $files, $alsoElsewhere) {
+    $n = 0; $left = 0;
+    foreach (old_dates_leftovers($dir, $files) as $e) {
+        if ($e['elsewhere'] && !$alsoElsewhere) { $left++; continue; }
+        if (@unlink($e['path'])) $n++; else $left++;
+    }
+    return [$n, $left];
+}

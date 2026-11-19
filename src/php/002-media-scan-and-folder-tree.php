@@ -137,11 +137,9 @@ function odd_name_display($name) {
         function ($m) { return ($m[1] ?? '') !== '' ? $m[1] : sprintf('\\x%02X', ord($m[2])); }, (string) $name);
 }
 
-/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its path from the gallery's folder). */
+/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its name from the gallery: scan_path_as_named). */
 function scan_odd_name_note($path) {
-    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__odd_names'][$rel] = true;
+    $GLOBALS['__odd_names'][scan_path_as_named($path)] = true;   // (by the place's name in a place from elsewhere: never where it is on the server)
 }
 
 /** Remembers a picture or video the scan left out because its name starts with a dot, for the Health check (each once, by its path from the
@@ -149,17 +147,25 @@ function scan_odd_name_note($path) {
  *  one that matters in practice is macOS's own: copied to a disk or share it can't keep its extra data on, a Mac leaves a "._IMG_0412.jpg"
  *  beside every photo, a few kilobytes that are no picture. */
 function scan_dot_file_note($path) {
+    $GLOBALS['__dot_files'][scan_path_as_named($path)] = true;
+}
+
+/** A file's path as the gallery names it: from the gallery's own folder ("Asia/x.jpg"), or from a place from elsewhere by that place's name ("Archive/2019/x.jpg"),
+ *  never by where it is on the server. A path in neither (can't happen from a scan) is returned as it was. */
+function scan_path_as_named($path) {
     $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__dot_files'][$rel] = true;
+    if ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) return substr($path, strlen($root));
+    foreach (gallery_mounts() as $name => $real) {
+        $real = rtrim((string) $real, '/') . '/';
+        if ($real !== '/' && strncmp($path, $real, strlen($real)) === 0) return $name . '/' . substr($path, strlen($real));
+    }
+    return $path;
 }
 
 /** Remembers a file with a picture's name that the scan left out because its first bytes say it is no picture (empty, text, a page, a program's output), for
- *  the Health check (each once, by its path from the gallery's folder). Nothing on disk is touched. */
+ *  the Health check (each once, by its name from the gallery: scan_path_as_named). Nothing on disk is touched. */
 function scan_not_picture_note($path) {
-    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__not_pictures'][$rel] = true;
+    $GLOBALS['__not_pictures'][scan_path_as_named($path)] = true;
 }
 
 /** Do the first bytes of a file say it is a picture of some kind (or something a browser may show as one)? True for every kind the gallery reads, and for
@@ -175,7 +181,7 @@ function picture_bytes_plausible($h) {
 
 /** True when a file with a picture's name (.jpg .jpeg .png .gif .webp .bmp) is no picture at all: its first bytes are none of the kinds above. Only that: a file
  *  that can't be read, a HEIC/HEIF, a video, or a picture that is merely too big or that no decoder here opens today is never "no picture". The answer is
- *  remembered for the file as it is now (its size and modified time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
+ *  remembered for the file as it is now (its size, modified time and, for "no picture", change time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
  *  thumbnail cache off, or no cache folder yet, the first 16 bytes are read each time. A page build looks at no more than 20000 files this way, so a very
  *  large first look is spread over several, and a file not looked at is shown. $folderReal is the folder the file is in; scan_not_picture_save() writes what was learned. */
 function scan_not_a_picture($folderReal, $entry, $path) {
@@ -200,16 +206,19 @@ function scan_not_a_picture($folderReal, $entry, $path) {
         return false;
     }
     $m = &$mem[$folderReal];
-    $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
+    $mtime = (int) @filemtime($path); $size = (int) @filesize($path); $ctime = (int) @filectime($path);
     $m['seen'][$entry] = true;
     $hit = $m['known'][$entry] ?? null;
-    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size) return ($hit[2] ?? 0) === 1;
+    // (A "no picture" verdict is also tied to the file's change time, which the system sets itself and no tool can put back: a placeholder made at its final size with
+    // the photo's own time, then filled in hours later with that time restored, has the same size and modified time but a new change time, so it is judged again.)
+    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size && (($hit[2] ?? 0) !== 1 || ($hit[3] ?? null) === $ctime)) return ($hit[2] ?? 0) === 1;
     if ($budget <= 0) return false;
     $budget--;
     $h = @file_get_contents($path, false, null, 0, 16);
     if (!is_string($h)) return false;   // (can't tell: shown, and not remembered)
     $no = !picture_bytes_plausible($h);
-    $m['known'][$entry] = $no ? [$mtime, $size, 1] : [$mtime, $size];
+    if ($no && time() - $ctime < 2) return true;   // (changed a moment ago, so it may still be being written: left out, and judged again at the next look)
+    $m['known'][$entry] = $no ? [$mtime, $size, 1, $ctime] : [$mtime, $size];
     $m['changed'] = true;
     return $no;
 }

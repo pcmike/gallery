@@ -106,9 +106,7 @@ function check($description, $condition, $detail = null) {
 
 /** A check that can't be made on this PHP or machine: said out loud, counted separately, never as a pass. */
 function skip($description, $why) {
-    global $skipCount;
-    $skipCount++;
-    skip_note("$description  ($why)");
+    skip_note("$description  ($why)");   // (skip_note counts it: counting here as well made every skip count twice)
 }
 
 /** A skip said as one line (counted like skip()): for the places that print their own words. */
@@ -1744,7 +1742,7 @@ $sdOrder = function ($q) use ($portSd) { [, $body] = http_get("http://127.0.0.1:
 if (class_exists('Imagick')) {
     check('[sort] date order reads the capture date out of a HEIC photo, a JPEG and two videos, one of them a phone video whose metadata says when it was shot rather than the date its header was last saved (all four files have the same modified date, so only the dates inside them can order these)', $sdOrder('?sort=name') === ['a-late.heic', 'b-early.jpg', 'c.mp4', 'd.mp4'] && $sdOrder('?sort=taken') === ['b-early.jpg', 'd.mp4', 'c.mp4', 'a-late.heic'] && $sdOrder('?sort=taken.desc') === ['a-late.heic', 'c.mp4', 'd.mp4', 'b-early.jpg'], json_encode([$sdOrder('?sort=name'), $sdOrder('?sort=taken')]));
 } else {
-    echo "  (no Imagick here: the HEIC date check was skipped)\n";
+    skip_note("[sort] the HEIC date check (no Imagick here)");
 }
 
 // The order also holds on a folder's own page (the first version only reordered the photos at the top of the gallery).
@@ -9452,7 +9450,7 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     shell_exec('chmod -R u+w ' . escapeshellarg($fxMpSrc3));
     proc_terminate($mpProc3);
 } else {
-    echo "  (skipped: the read-only checks need a user who is not root)\n";
+    skip_note("the read-only checks need a user who is not root");
 }
 
 // 10. a place added without a name (EXTRA_ROOTS): its folders sit at the top of the gallery
@@ -11042,7 +11040,7 @@ check('[names] a Latin-1 name given to the ZIP naming function comes out as UTF-
 
 // the "taken times" cache: a failed encode must never leave an empty file
 mkdir("$g2Dir/taken", 0777, true); make_jpeg("$g2Dir/taken/a.jpg", 20, 20, 1, 2, 3);
-$g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . "const ENABLE_THUMBNAIL_CACHE = true; const MEDIA_TAKEN_FILE = 'taken4.php'; function file_write_whole(\$p, \$c, \$e = '') { return file_put_contents(\$p, \$c) !== false; }\n" . $g2Fn('data_file_guard_line') . "\n" . $g2Fn('data_file_encode') . "\n" . $g2Fn('data_file_strip_guard') . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
+$g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . "const ENABLE_THUMBNAIL_CACHE = true; const MEDIA_TAKEN_FILE = 'taken4.php'; function file_write_whole(\$p, \$c, \$e = '') { return file_put_contents(\$p, \$c) !== false; }\n" . $g2Fn('data_file_guard_line') . "\n" . $g2Fn('data_file_encode') . "\n" . $g2Fn('data_file_strip_guard') . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('old_dates_names') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
 $g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken4.php"); $g2Dec = $g2Cache === false ? null : json_decode(data_file_strip_guard_for_tests($g2Cache), true);
 check('[names] the folder\'s "taken times" cache is still written (with the usable names) when the folder holds a name that isn\'t valid text; it used to be an empty file, so every page view read every file again', str_ends_with($g2Out, 'done') && is_array($g2Dec) && array_keys($g2Dec) === ['a.jpg'], $g2Out . ' ' . var_export($g2Cache, true));
 $g2Taken = data_file_strip_guard_for_tests((string) @file_get_contents("$fxN/.gallery-cache/taken4.php"));
@@ -13233,9 +13231,10 @@ echo "== chunk 9 follow-up N2: files that are no pictures ==\n";
     check('[N2] a file left out is still on disk, untouched', is_file("$n2Fx/Alpha/fake.jpg") && file_get_contents("$n2Fx/Alpha/fake.jpg") === "this is just text, saved as a picture\n" && filesize("$n2Fx/Alpha/empty.jpg") === 0);
     // remembered once the folder has a cache (the thumbnails made it), and looked at again when the file changes
     $n2Cache = "$n2Fx/Alpha/.gallery-cache/nopic1.php";
+    sleep(2);   // (a verdict for a file changed within the last second or two is not remembered: it may still be being written)
     http_get("$n2Base/?img=" . rawurlencode('Alpha/good.jpg') . '&size=thumb'); http_get("$n2Base/?folder=Alpha");
     $n2Rec = is_file($n2Cache) ? json_decode(data_file_strip_guard_for_tests((string) file_get_contents($n2Cache)), true) : null;
-    check('[N2] once the folder has a thumbnail cache the verdict for each file is remembered (nopic1.php, a guarded file like meta1.php) by size and modified time: 1 for what is no picture', is_file($n2Cache) && str_starts_with((string) file_get_contents($n2Cache), data_file_guard_line_for_tests()) && is_array($n2Rec) && ($n2Rec['fake.jpg'][2] ?? null) === 1 && !isset($n2Rec['good.jpg'][2]) && isset($n2Rec['good.jpg'][0]), json_encode($n2Rec));
+    check('[N2] once the folder has a thumbnail cache the verdict for each file is remembered (nopic1.php, a guarded file like meta1.php) by size and modified time (and change time for what is no picture): 1 for what is no picture', is_file($n2Cache) && str_starts_with((string) file_get_contents($n2Cache), data_file_guard_line_for_tests()) && is_array($n2Rec) && ($n2Rec['fake.jpg'][2] ?? null) === 1 && !isset($n2Rec['good.jpg'][2]) && isset($n2Rec['good.jpg'][0]), json_encode($n2Rec));
     file_put_contents("$n2Fx/Alpha/fake.jpg", file_get_contents("$n2Fx/Alpha/good.jpg")); touch("$n2Fx/Alpha/fake.jpg", time() + 5);
     check('[N2] a file that is replaced by a real picture is looked at again and shown', in_array('fake.jpg', $n2Names(http_get("$n2Base/?folder=Alpha")[1]), true));
     // with the thumbnail cache off nothing is written and every page looks again
@@ -13352,6 +13351,177 @@ echo "== chunk 9 follow-up X10 and X11: the capture-dates file ==\n";
     $x10Port2 = find_free_port(); start_server($x10Fx2, $x10Port2);
     $x10Page = http_get("http://127.0.0.1:$x10Port2/?folder=Elsewhere")[1];
     check('[X10] in a place from elsewhere on the server the plain taken3.json is left alone (another gallery may use it), and this gallery keeps its own dates in taken4.php there', str_contains($x10Page, 'p1.jpg') && is_file("$x10Place/.gallery-cache/taken3.json") && is_file("$x10Place/.gallery-cache/taken4.php"), json_encode(@scandir("$x10Place/.gallery-cache")));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N14 (a) and (b): Health names a place from elsewhere's files by the place's name, not the server path; a note can't be named just ".md"
+echo "== chunk 9 follow-up N14: Health names, and a note named .md ==\n";
+{
+    $n14Place = new_fixture_dir('n14-place'); mkdir("$n14Place/Sub", 0777, true);
+    make_jpeg("$n14Place/p1.jpg", 40, 30, 20, 90, 160); file_put_contents("$n14Place/e-empty.jpg", ''); file_put_contents("$n14Place/._p1.jpg", 'x'); file_put_contents("$n14Place/Sub/s-empty.png", '');
+    $n14Fx = new_fixture_dir('n14'); mkdir("$n14Fx/Alpha", 0777, true); make_jpeg("$n14Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160); file_put_contents("$n14Fx/Alpha/empty.jpg", ''); file_put_contents("$n14Fx/Alpha/forsale.md", "{gallery}\nText.\n");
+    file_put_contents("$n14Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n14-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Elsewhere' => $n14Place], 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n14Fx/index.php"); @touch("$n14Fx/index.php", time() - 3600);
+    $n14Port = find_free_port(); start_server($n14Fx, $n14Port); $n14Base = "http://127.0.0.1:$n14Port";
+    [, , $n14H] = http_post("$n14Base/?admin", ['access_code' => 'n14-admin-pw-1'], [], false); $n14Own = ['Cookie: ' . extract_cookie_header($n14H)];
+    $n14Health = (string) http_get("$n14Base/?admin&classic=1", $n14Own)[1];
+    $n14Txt = html_entity_decode(strip_tags($n14Health));
+    check('[N14 a] Health names the files left out in a place from elsewhere by the place\'s name (Elsewhere/e-empty.jpg, Elsewhere/Sub/s-empty.png, Elsewhere/._p1.jpg), the way it names the gallery\'s own (Alpha/empty.jpg)', str_contains($n14Txt, 'Elsewhere/e-empty.jpg') && str_contains($n14Txt, 'Elsewhere/Sub/s-empty.png') && str_contains($n14Txt, 'Elsewhere/._p1.jpg') && str_contains($n14Txt, 'Alpha/empty.jpg'), substr($n14Txt, 0, 300));
+    check('[N14 a] ...and no file is named by where it is on the server (the Settings box that edits the place may show its path; a file never)', !str_contains($n14Health, "$n14Place/e-empty.jpg") && !str_contains($n14Health, "$n14Place/._p1.jpg") && !str_contains($n14Health, "$n14Place/Sub/s-empty.png"), $n14Place);
+    [, , $n14H2] = http_post("$n14Base/?admin", ['access_code' => 'n14-admin-pw-1'], [], false);
+    $n14Csrf = admin_token($n14Base, $n14Own);
+    $n14Save = fn (array $f) => json_decode(http_post("$n14Base/?admin&folder=Alpha", $f + ['csrf_token' => $n14Csrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => ''], array_merge($n14Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $b1 = $n14Save(['new_name' => '.md', 'content' => "{gallery}\nbody\n"]); $b2 = $n14Save(['new_name' => '..md', 'content' => "{gallery}\nbody\n"]); $b3 = $n14Save(['new_name' => ' .MD ', 'content' => "{gallery}\nbody\n"]);
+    check('[N14 b] a new note can\'t be named just ".md" (any case, with spaces): refused, with the reason, and no hidden file is made', ($b1['ok'] ?? true) === false && ($b3['ok'] ?? true) === false && str_contains((string) ($b1['text'] ?? ''), 'name') && !file_exists("$n14Fx/Alpha/.md") && !file_exists("$n14Fx/Alpha/.MD"), json_encode([$b1, $b3]));
+    check('[N14 b] ...and "..md" is still the N8 rule (the dot becomes _): saved as _.md', ($b2['ok'] ?? false) === true && is_file("$n14Fx/Alpha/_.md"), json_encode($b2));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N11: the old plain capture-dates files the gallery's own looks never reach (the thumbnail cache off and the order by name; a place from elsewhere) are named in Health, and removed by its button
+echo "== chunk 9 follow-up N11: Health's row for old capture-date files ==\n";
+{
+    $n11Place = new_fixture_dir('n11-place'); make_jpeg("$n11Place/p1.jpg", 40, 30, 20, 90, 160);
+    mkdir("$n11Place/.gallery-cache", 0755, true); file_put_contents("$n11Place/.gallery-cache/taken3.json", json_encode(['p1.jpg' => [1, 2, 3]]));
+    $n11Fx = new_fixture_dir('n11'); mkdir("$n11Fx/Alpha", 0777, true); mkdir("$n11Fx/Beta", 0777, true); mkdir("$n11Fx/Gamma", 0777, true);
+    foreach (['Alpha', 'Beta', 'Gamma'] as $n11F) make_jpeg("$n11Fx/$n11F/a.jpg", 40, 30, 20, 90, 160);
+    mkdir("$n11Fx/Alpha/.gallery-cache", 0755, true); file_put_contents("$n11Fx/Alpha/.gallery-cache/taken3.json", json_encode(['a.jpg' => [1, 2, 3]]));
+    mkdir("$n11Fx/Beta/.gallery-cache", 0755, true); file_put_contents("$n11Fx/Beta/.gallery-cache/taken.json", json_encode(['a.jpg' => [1, 2, 3]]));
+    mkdir("$n11Fx/Gamma/.gallery-cache", 0755, true); file_put_contents("$n11Fx/Gamma/.gallery-cache/taken4.php", data_file_guard_line_for_tests() . json_encode(['a.jpg' => [1, 2, 3]]) . "\n");   // (the guarded file of today: never an old file)
+    $n11Victim = "$n11Fx/victim.txt"; file_put_contents($n11Victim, 'mine'); mkdir("$n11Fx/Delta", 0777, true); make_jpeg("$n11Fx/Delta/a.jpg", 40, 30, 20, 90, 160); mkdir("$n11Fx/Delta/.gallery-cache", 0755, true); symlink($n11Victim, "$n11Fx/Delta/.gallery-cache/taken3.json");
+    file_put_contents("$n11Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n11-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'PHOTO_SORT_ORDER' => 'filename', 'EXTRA_FOLDERS' => ['Elsewhere' => $n11Place], 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n11Fx/index.php"); @touch("$n11Fx/index.php", time() - 3600);
+    $n11Port = find_free_port(); start_server($n11Fx, $n11Port); $n11Base = "http://127.0.0.1:$n11Port";
+    foreach (['', '?folder=Alpha', '?folder=Beta', '?folder=Elsewhere'] as $q) http_get("$n11Base/$q");   // (a stranger's looks)
+    check('[N11] with the cache off and the order by name a stranger\'s looks leave the old plain files where they are (the starting point)', is_file("$n11Fx/Alpha/.gallery-cache/taken3.json") && is_file("$n11Fx/Beta/.gallery-cache/taken.json") && is_file("$n11Place/.gallery-cache/taken3.json"));
+    [, , $n11H] = http_post("$n11Base/?admin", ['access_code' => 'n11-admin-pw-1'], [], false); $n11Own = ['Cookie: ' . extract_cookie_header($n11H)];
+    $n11Health = fn () => html_entity_decode(strip_tags((string) http_get("$n11Base/?admin&classic=1", $n11Own)[1]));
+    $n11Page = (string) http_get("$n11Base/?admin&classic=1", $n11Own)[1];
+    $n11Txt = $n11Health();
+    check('[N11] Health has a quiet row naming 3 old capture-date files (Alpha, Beta and Elsewhere; not Gamma\'s guarded file, not the link in Delta), says why, and has a button', str_contains($n11Txt, '3 old capture-date files') && str_contains($n11Txt, 'Alpha') && str_contains($n11Txt, 'Elsewhere') && !str_contains($n11Txt, 'Gamma/.gallery-cache') && str_contains($n11Page, 'class="secondary" data-olddates-remove>Remove them</button>'), substr($n11Txt, 0, 200));
+    $n11Csrf = admin_token($n11Base, $n11Own);
+    $n11Post = fn (array $f) => json_decode(http_post("$n11Base/?admin", $f + ['csrf_token' => $n11Csrf, 'action' => 'health_remove_old_dates'], array_merge($n11Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $r1 = $n11Post([]);
+    check('[N11] the button removes the old files in the gallery\'s own folders and leaves the one in the place from elsewhere (no word that no other gallery needs it)', ($r1['ok'] ?? false) === true && !file_exists("$n11Fx/Alpha/.gallery-cache/taken3.json") && !file_exists("$n11Fx/Beta/.gallery-cache/taken.json") && is_file("$n11Place/.gallery-cache/taken3.json"), json_encode($r1));
+    check('[N11] ...Gamma\'s guarded taken4.php is untouched, and a link named taken3.json is not followed (the file it leads to is as it was)', is_file("$n11Fx/Gamma/.gallery-cache/taken4.php") && file_get_contents($n11Victim) === 'mine' && is_link("$n11Fx/Delta/.gallery-cache/taken3.json"));
+    check('[N11] ...and Health still names the one left, in the place from elsewhere', str_contains($n11Health(), '1 old capture-date file'), substr($n11Health(), 0, 200));
+    $r2 = $n11Post(['others_gone' => '1']);
+    check('[N11] with the "no other gallery needs them" tick that one goes too, and the row is gone', ($r2['ok'] ?? false) === true && !file_exists("$n11Place/.gallery-cache/taken3.json") && !preg_match('/\\d+ old capture-date files? from an earlier version/', $n11Health()), json_encode($r2));
+    check('[N11] a stranger can\'t press it (nothing is removed, answer is not ok)', (function () use ($n11Base, $n11Place) { @mkdir("$n11Place/.gallery-cache", 0755, true); file_put_contents("$n11Place/.gallery-cache/taken3.json", "{}"); $a = json_decode(http_post("$n11Base/?admin", ['action' => 'health_remove_old_dates', 'others_gone' => '1'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true); return is_file("$n11Place/.gallery-cache/taken3.json") && !(is_array($a) && ($a['ok'] ?? false) === true); })());
+    // a gallery with nothing old has no such row
+    $n11Fx2 = new_fixture_dir('n11-none'); mkdir("$n11Fx2/Alpha", 0777, true); make_jpeg("$n11Fx2/Alpha/a.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$n11Fx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n11-admin-pw-2', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false])); copy($indexSrc, "$n11Fx2/index.php");
+    $n11Port2 = find_free_port(); start_server($n11Fx2, $n11Port2); $n11Base2 = "http://127.0.0.1:$n11Port2";
+    [, , $n11H2] = http_post("$n11Base2/?admin", ['access_code' => 'n11-admin-pw-2'], [], false);
+    check('[N11] a gallery with no old files has no such row', !str_contains((string) http_get("$n11Base2/?admin&classic=1", ['Cookie: ' . extract_cookie_header($n11H2)])[1], 'class="secondary" data-olddates-remove>'));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N13: a "no picture" verdict is kept by size, modified time AND the file's change time, so a placeholder filled in later (size and modified time put back) is judged again
+echo "== chunk 9 follow-up N13: a placeholder that is filled in later ==\n";
+{
+    $n13Fx = new_fixture_dir('n13'); mkdir("$n13Fx/Alpha/.gallery-cache", 0777, true); make_jpeg("$n13Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    make_jpeg("$n13Fx/real.jpg", 40, 30, 120, 90, 60); $n13Size = filesize("$n13Fx/real.jpg");
+    file_put_contents("$n13Fx/Alpha/placeholder.jpg", str_repeat("\0", $n13Size)); touch("$n13Fx/Alpha/placeholder.jpg", 1700000000);   // (a phone's upload tool made the file at its final size, with the photo's own time)
+    file_put_contents("$n13Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n13-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n13Fx/index.php"); @touch("$n13Fx/index.php", time() - 3600);
+    $n13Port = find_free_port(); start_server($n13Fx, $n13Port); $n13Base = "http://127.0.0.1:$n13Port";
+    $n13Has = fn () => str_contains((string) http_get("$n13Base/?folder=Alpha")[1], 'alt="placeholder.jpg"');
+    sleep(3);   // (the file's change time is now a few seconds old: its verdict is the kind that is remembered)
+    $n13A = $n13Has(); $n13B = $n13Has();
+    $n13Rec = is_file("$n13Fx/Alpha/.gallery-cache/nopic1.php") ? json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$n13Fx/Alpha/.gallery-cache/nopic1.php")), true) : [];
+    check('[N13] a placeholder of zeros is left out, and the verdict is remembered with the file\'s change time as well as its size and modified time', !$n13A && !$n13B && ($n13Rec['placeholder.jpg'][2] ?? null) === 1 && isset($n13Rec['placeholder.jpg'][3]), json_encode($n13Rec));
+    sleep(2);
+    file_put_contents("$n13Fx/Alpha/placeholder.jpg", file_get_contents("$n13Fx/real.jpg")); touch("$n13Fx/Alpha/placeholder.jpg", 1700000000);   // (filled in later: same size, the modified time put back, as an upload tool that keeps photo times does)
+    clearstatcache();
+    check('[N13] ...then filled in with the same size and the same modified time put back: its change time moved, so it is judged again and shown', $n13Has(), json_encode(['size' => filesize("$n13Fx/Alpha/placeholder.jpg"), 'mtime' => filemtime("$n13Fx/Alpha/placeholder.jpg")]));
+    // a file that is judged within a moment of being made is not remembered (it may still be being written)
+    file_put_contents("$n13Fx/Alpha/fresh.jpg", str_repeat("\0", 50)); http_get("$n13Base/?folder=Alpha");
+    $n13Rec2 = json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$n13Fx/Alpha/.gallery-cache/nopic1.php")), true);
+    check('[N13] a file judged within a second or two of its change is left out but not remembered (it may still be being written)', !isset($n13Rec2['fresh.jpg']), json_encode($n13Rec2));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up: the two settings that were only in the settings file get a row in Settings, each checked as it is saved: where ffmpeg is (FFMPEG_PATH) and the proxy addresses to believe (TRUSTED_PROXY_RANGES)
+echo "== chunk 9 follow-up: Settings rows for the ffmpeg path and the proxy ranges ==\n";
+{
+    $spFx = new_fixture_dir('setrows'); mkdir("$spFx/Alpha", 0777, true); make_jpeg("$spFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    $spCfg = "$spFx/.gallery-config.php"; file_put_contents($spCfg, cfg_text(['ADMIN_PASSWORD' => 'sp-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$spFx/index.php"); @touch("$spFx/index.php", time() - 3600);
+    $spPort = find_free_port(); start_server($spFx, $spPort); $spBase = "http://127.0.0.1:$spPort";
+    [, , $spH] = http_post("$spBase/?admin", ['access_code' => 'sp-admin-pw-1'], [], false); $spOwn = ['Cookie: ' . extract_cookie_header($spH)];
+    $spPage = fn () => (string) http_get("$spBase/?admin", $spOwn)[1];
+    $spSave = function (array $fields) use ($spBase, $spOwn, $spCfg, $spPage) {
+        $form = ''; foreach (html_post_forms($spPage()) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) { $form = $f['html']; break; }
+        $ff = form_default_fields($form);
+        [, $body] = http_post("$spBase/?admin", array_merge(['csrf_token' => $ff['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => md5_file($spCfg)], $fields), array_merge($spOwn, ['X-Requested-With: gallery-fetch']));
+        return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+    };
+    $spP = $spPage();
+    check('[settings rows] Settings has a row for where ffmpeg is and one for the proxy ranges, and the old "edit the settings file" sentences are gone', str_contains($spP, 'name="set_FFMPEG_PATH"') && str_contains($spP, 'name="set_TRUSTED_PROXY_RANGES"') && !str_contains($spP, 'FFMPEG_PATH&quot; in .gallery-config.php') && !str_contains($spP, 'set TRUSTED_PROXY_RANGES in .gallery-config.php'));
+    // ffmpeg: only a file named ffmpeg that runs and says it is ffmpeg
+    $spBin = new_fixture_dir('setrows-bin'); chmod($spBin, 0755);
+    file_put_contents("$spBin/ffmpeg", "#!/bin/sh\necho 'ffmpeg version 9.9-test Copyright (c) the testers'\n"); chmod("$spBin/ffmpeg", 0755);
+    mkdir("$spBin/other", 0755); file_put_contents("$spBin/other/ffmpeg", "#!/bin/sh\necho 'hello'\n"); chmod("$spBin/other/ffmpeg", 0755);
+    mkdir("$spBin/wide", 0777); chmod("$spBin/wide", 0777); copy("$spBin/ffmpeg", "$spBin/wide/ffmpeg"); chmod("$spBin/wide/ffmpeg", 0755);
+    file_put_contents("$spBin/notexec", "x"); mkdir("$spBin/ne", 0755); file_put_contents("$spBin/ne/ffmpeg", "#!/bin/sh\necho 'ffmpeg version 1'\n"); chmod("$spBin/ne/ffmpeg", 0644);
+    $spBefore = (string) file_get_contents($spCfg);
+    foreach (['a path that is not there' => '/no/such/dir/ffmpeg', 'a name with no folder' => 'ffmpeg', 'a program of another name' => '/bin/sh', 'a program that does not say it is ffmpeg' => "$spBin/other/ffmpeg", 'a program in a folder everyone may write to' => "$spBin/wide/ffmpeg", 'a file that can\'t be run' => "$spBin/ne/ffmpeg"] as $why => $val) {
+        $r = $spSave(['set_FFMPEG_PATH' => $val]);
+        check("[settings rows] FFMPEG_PATH: $why is refused with a reason, and nothing is written", ($r['ok'] ?? null) === false && ($r['text'] ?? '') !== '' && (string) file_get_contents($spCfg) === $spBefore, json_encode($r));
+    }
+    $spOk = $spSave(['set_FFMPEG_PATH' => "$spBin/ffmpeg"]);
+    check('[settings rows] FFMPEG_PATH: a file named ffmpeg that runs and says "ffmpeg version" is accepted and stored, and Settings then shows it as found', ($spOk['ok'] ?? null) === true && (cfg_read($spCfg)['FFMPEG_PATH'] ?? null) === "$spBin/ffmpeg" && str_contains($spPage(), "($spBin/ffmpeg)"), json_encode($spOk));
+    check('[settings rows] FFMPEG_PATH: clearing it takes it out of the file again', ($spSave(['set_FFMPEG_PATH' => ''])['ok'] ?? null) === true && !isset(cfg_read($spCfg)['FFMPEG_PATH']));
+    // the proxy ranges
+    $spBefore = (string) file_get_contents($spCfg);
+    foreach (['not an address' => 'nonsense', 'a prefix past 32' => '10.0.0.0/33', 'a prefix that is not a number' => '1.2.3.4/abc', 'everything (0.0.0.0/0)' => '0.0.0.0/0', 'everything (::/0)' => '::/0', 'a range so wide that nearly anyone could choose the visitor address (10.0.0.0/4)' => '10.0.0.0/4', 'one good range and one bad' => "127.0.0.1/32, 999.1.1.1"] as $why => $val) {
+        $r = $spSave(['set_TRUSTED_PROXY_RANGES' => $val]);
+        check("[settings rows] TRUSTED_PROXY_RANGES: $why is refused with a reason, and nothing is written", ($r['ok'] ?? null) === false && ($r['text'] ?? '') !== '' && (string) file_get_contents($spCfg) === $spBefore, json_encode($r));
+    }
+    $spOk2 = $spSave(['set_TRUSTED_PROXY_RANGES' => "127.0.0.1/32, 10.0.0.0/8\n2001:db8::/32  192.0.2.7"]);
+    check('[settings rows] TRUSTED_PROXY_RANGES: addresses and ranges, separated by commas, spaces or new lines, are accepted and stored as a list (a bare address stays a bare address)', ($spOk2['ok'] ?? null) === true && (cfg_read($spCfg)['TRUSTED_PROXY_RANGES'] ?? null) === ['127.0.0.1/32', '10.0.0.0/8', '2001:db8::/32', '192.0.2.7'], json_encode([$spOk2, cfg_read($spCfg)['TRUSTED_PROXY_RANGES'] ?? null]));
+    check('[settings rows] ...and the row shows them again, one per entry', str_contains($spPage(), '127.0.0.1/32, 10.0.0.0/8, 2001:db8::/32, 192.0.2.7'));
+    check('[settings rows] TRUSTED_PROXY_RANGES: clearing it takes it out of the file again', ($spSave(['set_TRUSTED_PROXY_RANGES' => ''])['ok'] ?? null) === true && !isset(cfg_read($spCfg)['TRUSTED_PROXY_RANGES']));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up: what was typed for a photo that is gone (its caption, place, location, web link) is written in the Changes tab, exactly, before it is removed; where no log is kept it is removed as before
+echo "== chunk 9 follow-up: removed captions are logged in the Changes tab ==\n";
+{
+    $cpFx = new_fixture_dir('capgone'); mkdir("$cpFx/Alpha", 0777, true); make_jpeg("$cpFx/Alpha/a1.jpg", 40, 30, 20, 90, 160); make_jpeg("$cpFx/Alpha/a2.jpg", 40, 30, 120, 90, 60); make_jpeg("$cpFx/Alpha/a3.jpg", 40, 30, 60, 90, 60);
+    $cpItems = ['items' => ['a1.jpg' => ['caption' => 'Grandma at the lake', 'web' => 'https://example.com/lake', 'location' => ['lat' => 39.1, 'lng' => -120.05, 'label' => 'Lake Tahoe']], 'a2.jpg' => ['caption' => 'Second photo'], 'a3.jpg' => ['caption' => 'Third <b>photo</b> & "more"']]];
+    file_put_contents("$cpFx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($cpItems) . "\n");
+    file_put_contents("$cpFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cp-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$cpFx/index.php"); @touch("$cpFx/index.php", time() - 3600);
+    $cpPort = find_free_port(); start_server($cpFx, $cpPort); $cpBase = "http://127.0.0.1:$cpPort";
+    [, , $cpH] = http_post("$cpBase/?admin", ['access_code' => 'cp-admin-pw-1'], [], false); $cpOwn = ['Cookie: ' . extract_cookie_header($cpH)];
+    http_get("$cpBase/?admin&classic=1", $cpOwn);   // (the first look takes the picture of the folders: the log starts here)
+    $cpItemsNow = fn () => json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$cpFx/Alpha/.gallery-items.php")), true)['items'] ?? [];
+    unlink("$cpFx/Alpha/a1.jpg"); unlink("$cpFx/Alpha/a3.jpg");   // (deleted, or renamed, by hand on disk)
+    http_get("$cpBase/");   // a stranger's page view does the clean-up
+    $cpAfter = $cpItemsNow();
+    check('[caption log] a stranger\'s view still takes out the data of the photos that are gone, and keeps the data of the photo that is still there', !isset($cpAfter['a1.jpg']) && !isset($cpAfter['a3.jpg']) && ($cpAfter['a2.jpg']['caption'] ?? null) === 'Second photo', json_encode($cpAfter));
+    $cpList = json_decode((string) http_get("$cpBase/?admin&changes_list=1", $cpOwn)[1], true); $cpHtml = (string) ($cpList['html'] ?? '');
+    $cpTxt = html_entity_decode(strip_tags($cpHtml));
+    check('[caption log] ...and the Changes tab says so, with each photo\'s name and exactly what was typed: the caption, the web link, the place and the location', str_contains($cpTxt, 'a1.jpg') && str_contains($cpTxt, 'Caption: Grandma at the lake') && str_contains($cpTxt, 'Web link: https://example.com/lake') && str_contains($cpTxt, 'Lake Tahoe') && str_contains($cpTxt, '39.1') && str_contains($cpTxt, '-120.05') && str_contains($cpTxt, 'a3.jpg'), substr($cpTxt, 0, 600));
+    check('[caption log] ...as escaped text, never as markup (the caption with <b> and &amp; in it)', str_contains($cpHtml, 'Third &lt;b&gt;photo&lt;/b&gt; &amp; &quot;more&quot;') && !str_contains($cpHtml, '<b>photo</b>'), substr($cpHtml, 0, 300));
+    $cpEntries = substr_count($cpHtml, 'data-g="data"');
+    http_get("$cpBase/"); http_get("$cpBase/?folder=Alpha");
+    $cpList2 = json_decode((string) http_get("$cpBase/?admin&changes_list=1", $cpOwn)[1], true);
+    check('[caption log] one entry for the two photos, and a later view writes no second one', $cpEntries === 1 && substr_count((string) ($cpList2['html'] ?? ''), 'data-g="data"') === 1, json_encode([$cpEntries]));
+    check('[caption log] the entry counts as a change the owner has not seen (the number on the Changes tab), and the kinds pill offers it', (int) ($cpList['n'] ?? 0) >= 1 && str_contains(json_encode($cpList['counts'] ?? []), 'data') , json_encode($cpList['counts'] ?? null));
+    // no log kept here (the folder the log would live in can't be written): the data is removed as before, nothing is held back
+    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+        $cpFx2 = new_fixture_dir('capgone-nolog'); mkdir("$cpFx2/Alpha", 0777, true); make_jpeg("$cpFx2/Alpha/a1.jpg", 40, 30, 20, 90, 160); make_jpeg("$cpFx2/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+        file_put_contents("$cpFx2/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => 'gone soon'], 'a2.jpg' => ['caption' => 'stays']]]) . "\n");
+        file_put_contents("$cpFx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cp-admin-pw-2', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false])); copy($indexSrc, "$cpFx2/index.php");
+        chmod($cpFx2, 0555);   // (the log's file can't be made beside index.php)
+        $cpPort2 = find_free_port(); start_server($cpFx2, $cpPort2);
+        unlink("$cpFx2/Alpha/a1.jpg"); http_get("http://127.0.0.1:$cpPort2/");
+        $cpAfter2 = json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$cpFx2/Alpha/.gallery-items.php")), true)['items'] ?? [];
+        chmod($cpFx2, 0755);
+        check('[caption log] where no log can be kept the data of a photo that is gone is removed as before (the admin chose a server without it)', !isset($cpAfter2['a1.jpg']) && ($cpAfter2['a2.jpg']['caption'] ?? null) === 'stays', json_encode($cpAfter2));
+    }
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

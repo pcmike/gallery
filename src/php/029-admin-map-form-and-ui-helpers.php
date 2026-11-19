@@ -293,6 +293,8 @@ function gallery_setting_definitions() {
              'help' => 'Hovering or scrubbing a video plays a short silent clip, made once with ffmpeg.',
              'risk' => 'Runs ffmpeg once per new video; each clip uses a little disk.',
              'offwarn' => 'Hover clips and scrubbing stop.'],
+            ['name' => 'FFMPEG_PATH', 'type' => 'text', 'check' => 'ffmpeg', 'width' => '380px', 'placeholder' => 'found by itself', 'label' => 'Where ffmpeg is', 'requires' => 'ENABLE_VIDEO',
+             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", in a folder only its owner can write to.'],
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
              'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show, plus what each file says about itself (when, where), read once. If it can\'t write, originals are sent.',
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
@@ -372,7 +374,9 @@ function gallery_setting_definitions() {
             ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
-             'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: set TRUSTED_PROXY_RANGES in .gallery-config.php.'],
+             'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: list its addresses in the box below.'],
+            ['name' => 'TRUSTED_PROXY_RANGES', 'type' => 'text', 'check' => 'ranges', 'width' => '380px', 'placeholder' => 'for example 127.0.0.1/32', 'label' => 'Proxy addresses to believe',
+             'help' => 'For a proxy that is not Cloudflare (a tunnel on this server, a load balancer): its addresses or ranges, separated by commas, spaces or new lines. With "Another proxy" only these are believed; with Cloudflare they are added to its own list. A range so wide that nearly anyone could pick the visitor\'s address is refused.'],
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name, the folders inside it appear at the top of the gallery (/space/trip holding Paris and StTropez gives you Paris and StTropez); with a name, the whole place shows as that one folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
@@ -508,6 +512,47 @@ function extra_folder_names_update($history, $before, $after, $edit) {
 }
 
 /** The nginx prefix: empty, or a plain URL path such as /kb. */
+/** Why a typed ffmpeg path can't be used (''= it can, or it is empty): the setting names a program the server will run, so only a file called ffmpeg, in a folder and with
+ *  permissions that only its owner can change, that really answers "ffmpeg version", is taken. */
+function site_settings_check_ffmpeg($path) {
+    if ($path === '') return '';
+    if (strlen($path) > 400 || strpbrk($path, "\0\r\n") !== false || $path[0] !== '/') return 'must be the full path, starting with / (for example /opt/ffmpeg/bin/ffmpeg).';
+    if (basename($path) !== 'ffmpeg') return 'must end in /ffmpeg: that is the program the gallery runs.';
+    if (!is_file($path)) return 'is not there: no file at ' . $path . '. Check the path, or leave this empty to let the gallery look for ffmpeg itself.';
+    if (!is_executable($path)) return 'can\'t be run by the web server: ' . $path . ' is not executable for it.';
+    $real = realpath($path);
+    if ($real === false || (@fileperms($real) & 0002) || (@fileperms(dirname($real)) & 0002)) return 'is writable by everyone on this server (the file or its folder), so someone else could replace it: tighten its permissions first.';
+    if (!function_exists('proc_open')) return 'can\'t be checked: this server does not let PHP start programs.';
+    $line = run_first_line([$path, '-version'], 5);
+    if ($line === null || strncmp($line, 'ffmpeg version', 14) !== 0) return 'did not answer "ffmpeg version" when asked (-version), so it is not taken for ffmpeg.';
+    return '';
+}
+
+/** The proxy addresses typed in Settings (commas, spaces or new lines between them) as a list, each an address or address/prefix: [list] or null with $why. A prefix of 0, and
+ *  a range wide enough that nearly anyone could choose the visitor's address (under /8 for IPv4, /16 for IPv6), is refused. */
+/** The first 60 characters of what was typed, cut at a character (never in the middle of one), for naming it in a refusal. */
+function site_settings_short($text) {
+    return preg_match('/^.{0,60}/su', (string) $text, $m) ? $m[0] : substr((string) $text, 0, 20);
+}
+
+function site_settings_parse_proxy_ranges($raw, &$why) {
+    $items = preg_split('/[\s,;]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY);
+    if (count($items) > 100) { $why = 'holds more than 100 entries.'; return null; }
+    $out = [];
+    foreach ($items as $item) {
+        $parts = explode('/', $item, 2);
+        $bin = filter_var($parts[0], FILTER_VALIDATE_IP) !== false ? ip_binary($parts[0]) : null;
+        if ($bin === null) { $why = 'has "' . site_settings_short($item) . '", which is not an IP address or range (for example 127.0.0.1/32 or 2001:db8::/32).'; return null; }
+        $max = strlen($bin) * 8;
+        if (isset($parts[1])) {
+            if (!preg_match('/^[0-9]{1,3}$/D', $parts[1]) || (int) $parts[1] > $max) { $why = 'has "' . site_settings_short($item) . '", whose number after the / is not from 0 to ' . $max . '.'; return null; }
+            if ((int) $parts[1] < ($max === 32 ? 8 : 16)) { $why = 'has "' . site_settings_short($item) . '", a range so wide that nearly anyone could choose the visitor\'s address. Use the proxy\'s own addresses (not under /' . ($max === 32 ? 8 : 16) . ').'; return null; }
+        }
+        $out[] = $item;
+    }
+    return array_values(array_unique($out));
+}
+
 function site_settings_valid_nginx_prefix($value) {
     if ($value === '') return true;
     if (strlen($value) > 120 || $value[0] !== '/' || str_ends_with($value, '/') || str_contains($value, '//')) return false;
@@ -581,6 +626,13 @@ function site_settings_save_locked($ajax) {
                 $history = extra_folder_names_update($cfg['EXTRA_FOLDER_NAMES'] ?? [], $state['cfg']['EXTRA_FOLDERS'] ?? [], $value['named'], $value['edit']);
                 if ($history) $cfg['EXTRA_FOLDER_NAMES'] = $history; else unset($cfg['EXTRA_FOLDER_NAMES']);
                 $value = $value['named'];
+            } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ffmpeg') {
+                $why = site_settings_check_ffmpeg(trim($raw));
+                if ($why !== '') { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
+                $value = trim($raw);
+            } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ranges') {
+                $value = site_settings_parse_proxy_ranges($raw, $why);
+                if ($value === null) { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
                 $value = $raw;

@@ -758,11 +758,9 @@ function odd_name_display($name) {
         function ($m) { return ($m[1] ?? '') !== '' ? $m[1] : sprintf('\\x%02X', ord($m[2])); }, (string) $name);
 }
 
-/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its path from the gallery's folder). */
+/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its name from the gallery: scan_path_as_named). */
 function scan_odd_name_note($path) {
-    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__odd_names'][$rel] = true;
+    $GLOBALS['__odd_names'][scan_path_as_named($path)] = true;   // (by the place's name in a place from elsewhere: never where it is on the server)
 }
 
 /** Remembers a picture or video the scan left out because its name starts with a dot, for the Health check (each once, by its path from the
@@ -770,17 +768,25 @@ function scan_odd_name_note($path) {
  *  one that matters in practice is macOS's own: copied to a disk or share it can't keep its extra data on, a Mac leaves a "._IMG_0412.jpg"
  *  beside every photo, a few kilobytes that are no picture. */
 function scan_dot_file_note($path) {
+    $GLOBALS['__dot_files'][scan_path_as_named($path)] = true;
+}
+
+/** A file's path as the gallery names it: from the gallery's own folder ("Asia/x.jpg"), or from a place from elsewhere by that place's name ("Archive/2019/x.jpg"),
+ *  never by where it is on the server. A path in neither (can't happen from a scan) is returned as it was. */
+function scan_path_as_named($path) {
     $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__dot_files'][$rel] = true;
+    if ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) return substr($path, strlen($root));
+    foreach (gallery_mounts() as $name => $real) {
+        $real = rtrim((string) $real, '/') . '/';
+        if ($real !== '/' && strncmp($path, $real, strlen($real)) === 0) return $name . '/' . substr($path, strlen($real));
+    }
+    return $path;
 }
 
 /** Remembers a file with a picture's name that the scan left out because its first bytes say it is no picture (empty, text, a page, a program's output), for
- *  the Health check (each once, by its path from the gallery's folder). Nothing on disk is touched. */
+ *  the Health check (each once, by its name from the gallery: scan_path_as_named). Nothing on disk is touched. */
 function scan_not_picture_note($path) {
-    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
-    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
-    $GLOBALS['__not_pictures'][$rel] = true;
+    $GLOBALS['__not_pictures'][scan_path_as_named($path)] = true;
 }
 
 /** Do the first bytes of a file say it is a picture of some kind (or something a browser may show as one)? True for every kind the gallery reads, and for
@@ -796,7 +802,7 @@ function picture_bytes_plausible($h) {
 
 /** True when a file with a picture's name (.jpg .jpeg .png .gif .webp .bmp) is no picture at all: its first bytes are none of the kinds above. Only that: a file
  *  that can't be read, a HEIC/HEIF, a video, or a picture that is merely too big or that no decoder here opens today is never "no picture". The answer is
- *  remembered for the file as it is now (its size and modified time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
+ *  remembered for the file as it is now (its size, modified time and, for "no picture", change time) in the folder's .gallery-cache (nopic1.php), once that folder has one; with the
  *  thumbnail cache off, or no cache folder yet, the first 16 bytes are read each time. A page build looks at no more than 20000 files this way, so a very
  *  large first look is spread over several, and a file not looked at is shown. $folderReal is the folder the file is in; scan_not_picture_save() writes what was learned. */
 function scan_not_a_picture($folderReal, $entry, $path) {
@@ -821,16 +827,19 @@ function scan_not_a_picture($folderReal, $entry, $path) {
         return false;
     }
     $m = &$mem[$folderReal];
-    $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
+    $mtime = (int) @filemtime($path); $size = (int) @filesize($path); $ctime = (int) @filectime($path);
     $m['seen'][$entry] = true;
     $hit = $m['known'][$entry] ?? null;
-    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size) return ($hit[2] ?? 0) === 1;
+    // (A "no picture" verdict is also tied to the file's change time, which the system sets itself and no tool can put back: a placeholder made at its final size with
+    // the photo's own time, then filled in hours later with that time restored, has the same size and modified time but a new change time, so it is judged again.)
+    if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size && (($hit[2] ?? 0) !== 1 || ($hit[3] ?? null) === $ctime)) return ($hit[2] ?? 0) === 1;
     if ($budget <= 0) return false;
     $budget--;
     $h = @file_get_contents($path, false, null, 0, 16);
     if (!is_string($h)) return false;   // (can't tell: shown, and not remembered)
     $no = !picture_bytes_plausible($h);
-    $m['known'][$entry] = $no ? [$mtime, $size, 1] : [$mtime, $size];
+    if ($no && time() - $ctime < 2) return true;   // (changed a moment ago, so it may still be being written: left out, and judged again at the next look)
+    $m['known'][$entry] = $no ? [$mtime, $size, 1, $ctime] : [$mtime, $size];
     $m['changed'] = true;
     return $no;
 }
@@ -2310,6 +2319,23 @@ function work_lock_open($name) {
     if ($fh) { @chmod($path, 0600); return $fh; }
     $fh = @fopen(sys_get_temp_dir() . '/gallery-' . substr(hash('sha256', __DIR__), 0, 10) . '-' . $name . '.lock', 'c');
     return $fh ?: null;
+}
+
+/** Runs a program (the arguments as a list, no shell), with a time limit, and returns the first line it prints (at most 200 bytes), or null if it couldn't be run or said nothing in time. */
+function run_first_line($args, $seconds) {
+    $proc = @proc_open($args, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+    if (!is_resource($proc)) return null;
+    stream_set_blocking($pipes[1], false);
+    $deadline = microtime(true) + $seconds; $out = '';
+    while (microtime(true) < $deadline && strlen($out) < 200 && strpos($out, "\n") === false) {
+        $chunk = fread($pipes[1], 200);
+        if ($chunk !== false && $chunk !== '') { $out .= $chunk; continue; }
+        if (!proc_get_status($proc)['running'] && feof($pipes[1])) break;
+        usleep(20000);
+    }
+    fclose($pipes[1]); proc_terminate($proc, 9); proc_close($proc);
+    $line = trim((string) strtok($out, "\n"));
+    return $line === '' ? null : substr($line, 0, 200);
 }
 
 /** Runs a program (the arguments as a list, no shell), with a time limit; its exit code, or null if it couldn't be run
@@ -3815,6 +3841,44 @@ function moved_in_remove_leftovers($dir, $files) {
         }
     }
     return ['count' => $n, 'bytes' => $bytes];
+}
+
+/* -----------------------------------------------------------------------
+ * The plain capture-dates files. Every release up to 2.6.4 kept the dates used for the date order in .gallery-cache/taken3.json (and taken.json and taken2.json before it):
+ * plain JSON that holds the name of every file in the folder. 2.6.5 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
+ * date, and the thumbnail clean-up when the cache is on, in the gallery's own folders; what those never reach (the cache off with the order by name, and a place from
+ * elsewhere on the server, which is never swept) is named in Health, and removed by its button.
+ * ----------------------------------------------------------------------- */
+
+/** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
+function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
+
+/** The old plain capture-dates files in the folders of $files: [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
+ *  Regular files only: a link by that name is never counted or followed. */
+function old_dates_leftovers($dir, $files) {
+    $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $found = [];
+    foreach (moved_in_folders($dir, $files) as $f) {
+        $cacheDir = $f['real'] . '/.gallery-cache';
+        if (!is_dir($cacheDir) || is_link($cacheDir)) continue;
+        $elsewhere = strpos(rtrim((string) (realpath($f['real']) ?: $f['real']), '/') . '/', $ownRoot) !== 0;
+        foreach (old_dates_names() as $name) {
+            $path = $cacheDir . '/' . $name;
+            if (is_file($path) && !is_link($path)) $found[] = ['path' => $path, 'folder' => $f['rel'], 'elsewhere' => $elsewhere, 'bytes' => (int) @filesize($path)];
+        }
+    }
+    return $found;
+}
+
+/** Takes them away: the ones in the gallery's own folders, and those in places from elsewhere only when $alsoElsewhere (the owner said no other gallery needs them).
+ *  The list is worked out here, now, never taken from the request. [removed, left]. */
+function old_dates_remove($dir, $files, $alsoElsewhere) {
+    $n = 0; $left = 0;
+    foreach (old_dates_leftovers($dir, $files) as $e) {
+        if ($e['elsewhere'] && !$alsoElsewhere) { $left++; continue; }
+        if (@unlink($e['path'])) $n++; else $left++;
+    }
+    return [$n, $left];
 }
 /* -----------------------------------------------------------------------
  * GROUPING: discover qualifying .md files, extract {group:}/{photos:}
@@ -8919,7 +8983,7 @@ function media_taken_times($folderReal, $names) {
     $cacheOk = !is_link($cacheDir);
     $ownRoot = rtrim((string) (realpath(__DIR__) ?: __DIR__), '/') . '/';
     if ($cacheOk && strpos(rtrim((string) (realpath($folderReal) ?: $folderReal), '/') . '/', $ownRoot) === 0) {   // (a place from elsewhere on the server may be shown by another gallery that still uses its files: left alone, as the thumbnail clean-up does)
-        foreach (['taken.json', 'taken2.json', 'taken3.json', 'taken4.json'] as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
+        foreach (old_dates_names() as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
     }
     $cachePath = $cacheDir . '/' . MEDIA_TAKEN_FILE;
     $useCache = ENABLE_THUMBNAIL_CACHE && $cacheOk;
@@ -9513,15 +9577,21 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         foreach (array_keys($stored['items']) as $bare) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath) {
-            foreach (array_keys($data['items']) as $bare) {
-                if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) unset($data['items'][$bare]);
+        $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount) {
+            $gone = [];
+            foreach ($data['items'] as $bare => $entry) {
+                if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
+            // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
+            if (changes_record_removed_data($folderRel, $gone) === false) { $orphanCount = 0; return; }
+            foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
+            $orphanCount = count($gone);
         });
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1
-                ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.'
-                : $orphanCount . ' caption/location/web entries for deleted or renamed photos were cleaned up.';
+                ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.' . (changes_tab_wanted() ? ' What it said is in the Changes tab.' : '')
+                : $orphanCount . ' caption/location/web entries for deleted or renamed photos were cleaned up.' . (changes_tab_wanted() ? ' What they said is in the Changes tab.' : '');
         }
     }
 }
@@ -10107,6 +10177,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $n = visitlog_old_leftovers_remove();
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
+    if ($action === 'health_remove_old_dates') {   // the plain capture-dates files of earlier versions (Health > Left behind): the gallery's own folders, and places from elsewhere only when ticked
+        [$n, $left] = old_dates_remove($dir, $files, !empty($_POST['others_gone']));
+        admin_json_exit(['ok' => true, 'removed' => $n, 'left' => $left, 'text' => $n ? 'Removed ' . $n . '.' . ($left ? ' ' . $left . ' in places from elsewhere left alone.' : '') : ($left ? 'Nothing removed: ' . $left . ' in places from elsewhere left alone.' : 'There was nothing to remove.')]);
+    }
     if ($action === 'media_backups_delete') {
         $r = media_tidy_backups_delete($dir, $files, !empty($_POST['also_others']));
         $n = $r['deleted']; $left = $r['left'];
@@ -10625,6 +10699,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
+        }
+        if (strcasecmp($target, '.md') === 0) {   // (nothing before the "md": that would be a hidden file with no name)
+            return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
         // shell.php.md would run what was typed in it. The dots become _ (and the answer says so). A note that is already there keeps the name it has.
@@ -11682,6 +11759,8 @@ function gallery_setting_definitions() {
              'help' => 'Hovering or scrubbing a video plays a short silent clip, made once with ffmpeg.',
              'risk' => 'Runs ffmpeg once per new video; each clip uses a little disk.',
              'offwarn' => 'Hover clips and scrubbing stop.'],
+            ['name' => 'FFMPEG_PATH', 'type' => 'text', 'check' => 'ffmpeg', 'width' => '380px', 'placeholder' => 'found by itself', 'label' => 'Where ffmpeg is', 'requires' => 'ENABLE_VIDEO',
+             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", in a folder only its owner can write to.'],
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
              'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show, plus what each file says about itself (when, where), read once. If it can\'t write, originals are sent.',
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
@@ -11761,7 +11840,9 @@ function gallery_setting_definitions() {
             ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
-             'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: set TRUSTED_PROXY_RANGES in .gallery-config.php.'],
+             'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: list its addresses in the box below.'],
+            ['name' => 'TRUSTED_PROXY_RANGES', 'type' => 'text', 'check' => 'ranges', 'width' => '380px', 'placeholder' => 'for example 127.0.0.1/32', 'label' => 'Proxy addresses to believe',
+             'help' => 'For a proxy that is not Cloudflare (a tunnel on this server, a load balancer): its addresses or ranges, separated by commas, spaces or new lines. With "Another proxy" only these are believed; with Cloudflare they are added to its own list. A range so wide that nearly anyone could pick the visitor\'s address is refused.'],
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name, the folders inside it appear at the top of the gallery (/space/trip holding Paris and StTropez gives you Paris and StTropez); with a name, the whole place shows as that one folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
@@ -11897,6 +11978,47 @@ function extra_folder_names_update($history, $before, $after, $edit) {
 }
 
 /** The nginx prefix: empty, or a plain URL path such as /kb. */
+/** Why a typed ffmpeg path can't be used (''= it can, or it is empty): the setting names a program the server will run, so only a file called ffmpeg, in a folder and with
+ *  permissions that only its owner can change, that really answers "ffmpeg version", is taken. */
+function site_settings_check_ffmpeg($path) {
+    if ($path === '') return '';
+    if (strlen($path) > 400 || strpbrk($path, "\0\r\n") !== false || $path[0] !== '/') return 'must be the full path, starting with / (for example /opt/ffmpeg/bin/ffmpeg).';
+    if (basename($path) !== 'ffmpeg') return 'must end in /ffmpeg: that is the program the gallery runs.';
+    if (!is_file($path)) return 'is not there: no file at ' . $path . '. Check the path, or leave this empty to let the gallery look for ffmpeg itself.';
+    if (!is_executable($path)) return 'can\'t be run by the web server: ' . $path . ' is not executable for it.';
+    $real = realpath($path);
+    if ($real === false || (@fileperms($real) & 0002) || (@fileperms(dirname($real)) & 0002)) return 'is writable by everyone on this server (the file or its folder), so someone else could replace it: tighten its permissions first.';
+    if (!function_exists('proc_open')) return 'can\'t be checked: this server does not let PHP start programs.';
+    $line = run_first_line([$path, '-version'], 5);
+    if ($line === null || strncmp($line, 'ffmpeg version', 14) !== 0) return 'did not answer "ffmpeg version" when asked (-version), so it is not taken for ffmpeg.';
+    return '';
+}
+
+/** The proxy addresses typed in Settings (commas, spaces or new lines between them) as a list, each an address or address/prefix: [list] or null with $why. A prefix of 0, and
+ *  a range wide enough that nearly anyone could choose the visitor's address (under /8 for IPv4, /16 for IPv6), is refused. */
+/** The first 60 characters of what was typed, cut at a character (never in the middle of one), for naming it in a refusal. */
+function site_settings_short($text) {
+    return preg_match('/^.{0,60}/su', (string) $text, $m) ? $m[0] : substr((string) $text, 0, 20);
+}
+
+function site_settings_parse_proxy_ranges($raw, &$why) {
+    $items = preg_split('/[\s,;]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY);
+    if (count($items) > 100) { $why = 'holds more than 100 entries.'; return null; }
+    $out = [];
+    foreach ($items as $item) {
+        $parts = explode('/', $item, 2);
+        $bin = filter_var($parts[0], FILTER_VALIDATE_IP) !== false ? ip_binary($parts[0]) : null;
+        if ($bin === null) { $why = 'has "' . site_settings_short($item) . '", which is not an IP address or range (for example 127.0.0.1/32 or 2001:db8::/32).'; return null; }
+        $max = strlen($bin) * 8;
+        if (isset($parts[1])) {
+            if (!preg_match('/^[0-9]{1,3}$/D', $parts[1]) || (int) $parts[1] > $max) { $why = 'has "' . site_settings_short($item) . '", whose number after the / is not from 0 to ' . $max . '.'; return null; }
+            if ((int) $parts[1] < ($max === 32 ? 8 : 16)) { $why = 'has "' . site_settings_short($item) . '", a range so wide that nearly anyone could choose the visitor\'s address. Use the proxy\'s own addresses (not under /' . ($max === 32 ? 8 : 16) . ').'; return null; }
+        }
+        $out[] = $item;
+    }
+    return array_values(array_unique($out));
+}
+
 function site_settings_valid_nginx_prefix($value) {
     if ($value === '') return true;
     if (strlen($value) > 120 || $value[0] !== '/' || str_ends_with($value, '/') || str_contains($value, '//')) return false;
@@ -11970,6 +12092,13 @@ function site_settings_save_locked($ajax) {
                 $history = extra_folder_names_update($cfg['EXTRA_FOLDER_NAMES'] ?? [], $state['cfg']['EXTRA_FOLDERS'] ?? [], $value['named'], $value['edit']);
                 if ($history) $cfg['EXTRA_FOLDER_NAMES'] = $history; else unset($cfg['EXTRA_FOLDER_NAMES']);
                 $value = $value['named'];
+            } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ffmpeg') {
+                $why = site_settings_check_ffmpeg(trim($raw));
+                if ($why !== '') { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
+                $value = trim($raw);
+            } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ranges') {
+                $value = site_settings_parse_proxy_ranges($raw, $why);
+                if ($value === null) { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
                 $value = $raw;
@@ -14887,6 +15016,39 @@ function changes_check($dir, $files, $throttle) {
     }
 }
 
+/** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
+function changes_data_line($bare, array $entry) {
+    $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
+    $bits = [];
+    foreach ($entry as $k => $v) {
+        if ($k === 'location' && is_array($v)) {
+            if (isset($v['lat'], $v['lng']) && is_scalar($v['lat']) && is_scalar($v['lng'])) $bits[] = 'Location: ' . $v['lat'] . ', ' . $v['lng'];
+            if (isset($v['label']) && is_scalar($v['label']) && (string) $v['label'] !== '') $bits[] = 'Place: ' . $v['label'];
+            continue;
+        }
+        if ($v === '' || $v === null || $v === false || $v === []) continue;
+        $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+    return substr($bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)'), 0, 4000);
+}
+
+/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log, one entry for the folder, before the gallery takes it out of the folder's data.
+ *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
+ *  false when a log is kept but could not take it (the caller then leaves the data where it is). */
+function changes_record_removed_data($folderRel, array $gone) {
+    if (!$gone) return true;
+    if (!changes_tab_wanted()) return 'nolog';
+    $lines = [];
+    foreach ($gone as $bare => $entry) $lines[] = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+    [$j, $more] = changes_pack($lines);
+    $now = time();
+    $ok = visitlog_tx(function ($db) use ($folderRel, $lines, $j, $more, $now) {
+        $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([$now, $now, $now, 'data', (string) $folderRel, count($lines), $j, $more, '[]']);
+        return true;
+    });
+    return $ok === true ? true : false;
+}
+
 /** Does this server keep the log of disk activity (and so show the Changes tab)? It lives in the visitor log's SQLite file. */
 function changes_tab_wanted() {
     return visitlog_driver_ok() && visitlog_ready();
@@ -14964,9 +15126,9 @@ function changes_last_id() { return (int) changes_read(function ($db) { return $
 /** Entries newer than $after, in or under $folder (null: anywhere), oldest first, no more than 200. */
 function changes_after($after, $folder) {
     return changes_read(function ($db) use ($after, $folder) {
-        if ($folder === null || $folder === '') { $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? ORDER BY id LIMIT 200'); $st->execute([(int) $after]); }
+        if ($folder === null || $folder === '') { $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND kind <> \'data\' ORDER BY id LIMIT 200'); $st->execute([(int) $after]); }
         else {
-            $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND (folder = ? OR folder LIKE ? ESCAPE \'\\\') ORDER BY id LIMIT 200');
+            $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND kind <> \'data\' AND (folder = ? OR folder LIKE ? ESCAPE \'\\\') ORDER BY id LIMIT 200');
             $st->execute([(int) $after, $folder, addcslashes($folder, '%_\\') . '/%']);
         }
         return $st->fetchAll();
@@ -14981,6 +15143,7 @@ function changes_unseen_map() {
     $map = [];
     $rows = changes_read(function ($db) { $st = $db->prepare('SELECT kind, folder, n, t0 FROM changes WHERE id > ?'); $st->execute([(int) visitlog_meta_get($db, 'chg_seen')]); return $st->fetchAll(); }, []);
     foreach ($rows as $r) {
+        if ($r['kind'] === 'data') continue;   // (the data of photos that are gone: listed in the tab, no count on a folder's card)
         $path = (string) $r['folder'];
         while ($path !== '') {
             $m = &$map[$path];
@@ -16569,6 +16732,15 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
+    $odd = old_dates_leftovers($dir, $files);
+    if ($odd) {   // (the plain capture-dates files an earlier version made: they hold file names, and no look of the gallery's own reaches them with the cache off and the order by name, or in a place from elsewhere)
+        $odN = count($odd); $odElse = count(array_filter($odd, function ($e) { return $e['elsewhere']; }));
+        $odWhere = array_values(array_unique(array_map(function ($e) { return $e['folder'] === '' ? 'the main page' : $e['folder']; }, $odd)));
+        $add('Left behind', 'info', number_format($odN) . ' old capture-date file' . ($odN === 1 ? '' : 's') . ' from an earlier version',
+            'Earlier versions kept the dates used for the date order in plain files (taken3.json and its older names) inside each folder\'s .gallery-cache. They hold the names of the folder\'s files and, where the web server has no rule for .gallery- names, can be read by their address. Nothing reads them now: the dates are in a guarded file (taken4.php). In: '
+            . implode(', ', array_slice($odWhere, 0, 6)) . (count($odWhere) > 6 ? ' and ' . number_format(count($odWhere) - 6) . ' more' : '') . '.', null,
+            '<div class="health-act">' . ($odElse ? '<label class="check"><input type="checkbox" class="olddates-others"> Also the ' . number_format($odElse) . ' in places from elsewhere on the server (no other gallery that shows those places still needs them)</label> ' : '') . '<button type="button" class="secondary" data-olddates-remove>Remove them</button></div>');
+    }
     health_server_rows($add);   // (disk room, HTTPS, the visitor address, what PHP allows: 035b)
 
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes
@@ -16653,8 +16825,8 @@ function render_admin_changes_panel($csrfToken) {
 
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
-    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
+    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0], 'data' => ['Typed data removed', 0]];
     foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
     return $groups;
 }
@@ -16662,7 +16834,7 @@ function changes_group_counts($rows) {
 /** The entries themselves, newest first (the tab draws them when the page is made; the script asks for them again when the tab is opened or the window comes back). Entries newer than $seen are marked. */
 function changes_entries_html($rows, $seen) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
     $media = function ($n) { return number_format($n) . ' media'; };
     ob_start();
 ?>
@@ -16671,13 +16843,14 @@ function changes_entries_html($rows, $seen) {
         $names = json_decode((string) $r['names'], true); $names = is_array($names) ? $names : [];
         $gone = json_decode((string) $r['gone'], true); $gone = is_array($gone) ? $gone : [];
         $more = (int) $r['more'];
-        $label = [ 'add' => ['ADDED', 'add'], 'rem' => ['REMOVED', 'rem'], 'ren' => ['RENAMED', 'ren'], 'new' => ['FOLDER', 'fol'], 'gone' => ['FOLDER', 'fol'] ][$kind] ?? ['', ''];
+        $label = [ 'add' => ['ADDED', 'add'], 'rem' => ['REMOVED', 'rem'], 'ren' => ['RENAMED', 'ren'], 'new' => ['FOLDER', 'fol'], 'gone' => ['FOLDER', 'fol'], 'data' => ['TYPED DATA', 'rem'] ][$kind] ?? ['', ''];
         $where = $folder === '' ? 'the front page' : $folder;
         $open = '?' . ($folder !== '' ? 'folder=' . rawurlencode($folder) : '') . (in_array($kind, ['add', 'ren', 'new'], true) ? ($folder !== '' ? '&' : '') . 'since=' . max(0, (int) $r['t0'] - 2) : '');
         $link = $kind === 'gone' ? '<b>' . $esc($where) . '</b>' : '<a href="' . $esc($open) . '">' . $esc($where) . '</a>';
         if ($kind === 'add') $text = $media($n) . ' added to ' . $link;
         elseif ($kind === 'rem') $text = $media($n) . ' removed from ' . $link;
         elseif ($kind === 'ren') $text = $media($n) . ' in ' . $link . ' renamed or replaced';
+        elseif ($kind === 'data') $text = 'What was typed for ' . number_format($n) . ' photo' . ($n === 1 ? '' : 's') . ' in ' . $link . ' was removed (the photo' . ($n === 1 ? ' is' : 's are') . ' gone: deleted, or renamed by hand)';
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
         $hay = strtolower($where . ' ' . implode(' ', $names) . ' ' . implode(' ', $gone));
@@ -17533,7 +17706,7 @@ function render_admin_site_settings($csrfToken) {
           <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
             if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
             // "default: …" is part of the tag beside the name ("your setting · default: off"), shown only while the value differs from the default
-            $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true);
+            $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true) && ($d['check'] ?? '') !== 'ranges';
             $defKey = $nowKey = $defText = ''; $isDef = true;
             if (!$showDefault) { /* (a list: no default line) */ }
             elseif ($name === 'PHOTO_SORT_ORDER') { $defKey = ($def === 'mtime' ? 'taken' : $def) . '_' . (($defaults['PHOTO_SORT_DESC'] ?? false) ? 'desc' : 'asc'); $nowKey = $orderPairKey(); $defText = $orderPairOptions[$defKey] ?? $defKey; }
@@ -17549,7 +17722,7 @@ function render_admin_site_settings($csrfToken) {
                   <?php elseif (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Enter its path in "Where ffmpeg is", just below.' ?></div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'visitlog' && !visitlog_check_quiet()[0]): ?>
                 <div class="help warn-text"><strong>Needs SQLite.</strong> <?= $esc(visitlog_check_quiet()[1]) ?></div>
@@ -17595,7 +17768,7 @@ function render_admin_site_settings($csrfToken) {
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <?= count($d['options']) >= 3 ? ui_menu('set_' . $name, $d['options'], $now, $d['label']) : ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
-                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc(is_array($now) ? implode(', ', array_filter($now, 'is_string')) : $now) ?>" placeholder="<?= $esc($d['placeholder'] ?? 'empty = off') ?>" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:<?= $esc($d['width'] ?? '180px') ?>;width:100%;">
                 <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
                   <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode(['named' => (object) $extraNamed, 'roots' => $extraRoots], JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
                     <ul class="extra-list"><?php foreach ($extraRoots as $rpath): ?><li><span class="extra-what"><code><?= $esc($rpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="root" data-name="<?= $esc($rpath) ?>">Remove</button><span class="muted extra-note">&rarr; its folders are at the top of the gallery</span></li><?php endforeach; ?><?php foreach ($extraNamed as $fname => $fpath): ?><li><span class="extra-what"><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="named" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
@@ -22306,6 +22479,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
         .catch(function () { b.disabled = false; });
     });
+    // "Remove them" on the old capture-date files row: one request (with the tick for places from elsewhere, when there is one), then the page is read again so the row goes or says what is left.
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-olddates-remove]') : null; if (!b) return;
+      var panel = b.closest('#health-panel'); if (!panel) return;
+      var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_remove_old_dates');
+      var tick = b.parentNode.querySelector('.olddates-others'); if (tick && tick.checked) body.set('others_gone', '1');
+      b.disabled = true;
+      fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
+        .catch(function () { b.disabled = false; });
+    });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
@@ -23196,7 +23381,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   (function () {
     var root = document.getElementById('changes'); if (!root) return;
     var list = root.querySelector('.ch-list'), pill = root.querySelector('.ch-pill'), pop = root.querySelector('.ch-pop'), search = root.querySelector('.ch-search'), none = root.querySelector('.ch-none');
-    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders' };
+    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders', data: 'Typed data removed' };
     function post(fields) { return fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); }); }
     var two = function (n) { return (n < 10 ? '0' : '') + n; };
     function clock(t) { var d = new Date(t * 1000), h = d.getHours(); return (h % 12 || 12) + ':' + two(d.getMinutes()) + ' ' + (h < 12 ? 'AM' : 'PM'); }

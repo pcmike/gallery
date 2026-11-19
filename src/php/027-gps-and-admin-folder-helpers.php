@@ -82,15 +82,21 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         foreach (array_keys($stored['items']) as $bare) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath) {
-            foreach (array_keys($data['items']) as $bare) {
-                if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) unset($data['items'][$bare]);
+        $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount) {
+            $gone = [];
+            foreach ($data['items'] as $bare => $entry) {
+                if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
+            // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
+            if (changes_record_removed_data($folderRel, $gone) === false) { $orphanCount = 0; return; }
+            foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
+            $orphanCount = count($gone);
         });
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1
-                ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.'
-                : $orphanCount . ' caption/location/web entries for deleted or renamed photos were cleaned up.';
+                ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.' . (changes_tab_wanted() ? ' What it said is in the Changes tab.' : '')
+                : $orphanCount . ' caption/location/web entries for deleted or renamed photos were cleaned up.' . (changes_tab_wanted() ? ' What they said is in the Changes tab.' : '');
         }
     }
 }
@@ -676,6 +682,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $n = visitlog_old_leftovers_remove();
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
+    if ($action === 'health_remove_old_dates') {   // the plain capture-dates files of earlier versions (Health > Left behind): the gallery's own folders, and places from elsewhere only when ticked
+        [$n, $left] = old_dates_remove($dir, $files, !empty($_POST['others_gone']));
+        admin_json_exit(['ok' => true, 'removed' => $n, 'left' => $left, 'text' => $n ? 'Removed ' . $n . '.' . ($left ? ' ' . $left . ' in places from elsewhere left alone.' : '') : ($left ? 'Nothing removed: ' . $left . ' in places from elsewhere left alone.' : 'There was nothing to remove.')]);
+    }
     if ($action === 'media_backups_delete') {
         $r = media_tidy_backups_delete($dir, $files, !empty($_POST['also_others']));
         $n = $r['deleted']; $left = $r['left'];
@@ -1194,6 +1204,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
+        }
+        if (strcasecmp($target, '.md') === 0) {   // (nothing before the "md": that would be a hidden file with no name)
+            return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
         // shell.php.md would run what was typed in it. The dots become _ (and the answer says so). A note that is already there keeps the name it has.

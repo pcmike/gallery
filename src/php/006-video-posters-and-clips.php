@@ -45,6 +45,23 @@ function work_lock_open($name) {
     return $fh ?: null;
 }
 
+/** Runs a program (the arguments as a list, no shell), with a time limit, and returns the first line it prints (at most 200 bytes), or null if it couldn't be run or said nothing in time. */
+function run_first_line($args, $seconds) {
+    $proc = @proc_open($args, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+    if (!is_resource($proc)) return null;
+    stream_set_blocking($pipes[1], false);
+    $deadline = microtime(true) + $seconds; $out = '';
+    while (microtime(true) < $deadline && strlen($out) < 200 && strpos($out, "\n") === false) {
+        $chunk = fread($pipes[1], 200);
+        if ($chunk !== false && $chunk !== '') { $out .= $chunk; continue; }
+        if (!proc_get_status($proc)['running'] && feof($pipes[1])) break;
+        usleep(20000);
+    }
+    fclose($pipes[1]); proc_terminate($proc, 9); proc_close($proc);
+    $line = trim((string) strtok($out, "\n"));
+    return $line === '' ? null : substr($line, 0, 200);
+}
+
 /** Runs a program (the arguments as a list, no shell), with a time limit; its exit code, or null if it couldn't be run
  *  or was stopped for taking too long. Whatever it prints is thrown away. */
 function run_quietly($args, $seconds) {

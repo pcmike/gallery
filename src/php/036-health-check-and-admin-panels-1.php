@@ -461,7 +461,7 @@ function render_admin_site_settings($csrfToken) {
           <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
             if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
             // "default: …" is part of the tag beside the name ("your setting · default: off"), shown only while the value differs from the default
-            $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true);
+            $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true) && ($d['check'] ?? '') !== 'ranges';
             $defKey = $nowKey = $defText = ''; $isDef = true;
             if (!$showDefault) { /* (a list: no default line) */ }
             elseif ($name === 'PHOTO_SORT_ORDER') { $defKey = ($def === 'mtime' ? 'taken' : $def) . '_' . (($defaults['PHOTO_SORT_DESC'] ?? false) ? 'desc' : 'asc'); $nowKey = $orderPairKey(); $defText = $orderPairOptions[$defKey] ?? $defKey; }
@@ -477,7 +477,7 @@ function render_admin_site_settings($csrfToken) {
                   <?php elseif (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Enter its path in "Where ffmpeg is", just below.' ?></div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'visitlog' && !visitlog_check_quiet()[0]): ?>
                 <div class="help warn-text"><strong>Needs SQLite.</strong> <?= $esc(visitlog_check_quiet()[1]) ?></div>
@@ -523,7 +523,7 @@ function render_admin_site_settings($csrfToken) {
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <?= count($d['options']) >= 3 ? ui_menu('set_' . $name, $d['options'], $now, $d['label']) : ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
-                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc(is_array($now) ? implode(', ', array_filter($now, 'is_string')) : $now) ?>" placeholder="<?= $esc($d['placeholder'] ?? 'empty = off') ?>" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:<?= $esc($d['width'] ?? '180px') ?>;width:100%;">
                 <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
                   <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode(['named' => (object) $extraNamed, 'roots' => $extraRoots], JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
                     <ul class="extra-list"><?php foreach ($extraRoots as $rpath): ?><li><span class="extra-what"><code><?= $esc($rpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="root" data-name="<?= $esc($rpath) ?>">Remove</button><span class="muted extra-note">&rarr; its folders are at the top of the gallery</span></li><?php endforeach; ?><?php foreach ($extraNamed as $fname => $fpath): ?><li><span class="extra-what"><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="named" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>

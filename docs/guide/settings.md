@@ -18,7 +18,7 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 | `ENABLE_VIDEO` | off | Show `.mov` / `.mp4` |
 | `ENABLE_VIDEO_THUMBNAILS` | on | Real video pictures (needs ffmpeg) |
 | `ENABLE_VIDEO_PREVIEWS` | on | Hover clips and scrubbing (needs ffmpeg) |
-| `FFMPEG_PATH` | none | Full path, if ffmpeg is somewhere unusual (file only) |
+| `FFMPEG_PATH` | none | Full path, if ffmpeg is somewhere unusual (Settings → Videos and thumbnails, *Where ffmpeg is*). Checked when saved: a file named `ffmpeg` that answers `-version` with "ffmpeg version", in a folder only its owner can write to |
 | `ENABLE_THUMBNAIL_CACHE` | on | Thumbnails, and what the files say about themselves (capture date, location), in `.gallery-cache`; off = originals, no HEIC, nothing is read ahead of time, and no dates are kept (the date order reads the files on every look) |
 | `PHOTO_SORT_ORDER` | `taken`, or `filename` when `AUTO_GROUP_BY_FILENAME` is on | `taken` (date taken, else the file's date; oldest first) or `filename` (the older `mtime` still works) |
 | `PHOTO_SORT_DESC` | off | Last first (Z to A, newest first) |
@@ -51,7 +51,7 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 | `COUNTRY_LOOKUP` | off | The [country file](admin.md#the-country-file) (DB-IP, downloaded to your server about monthly); `COUNTRY_DB_URL` names another source |
 | `CHECK_FOR_UPDATES` | on | Once a day the [Health check](admin.md#new-versions-and-update-now) asks GitHub for the newest version and offers *View release* and *Update now* when it is newer; `UPDATE_FEED_URL` names another source |
 | `CLOSE_PUBLIC_GALLERY` | off | [Close the public gallery](private-and-sharing.md#closing-the-public-gallery): only you, private-view sign-ins and people using a share link see anything (needs share links on and an admin password) |
-| `TRUSTED_PROXY` / `TRUSTED_PROXY_RANGES` | `direct` / none | Where visitors' addresses come from, for share-link logs and the sign-in throttle: `direct` (the connection), `cloudflare`, or `proxy` (the `X-Forwarded-For` header, believed only from the ranges you list) |
+| `TRUSTED_PROXY` / `TRUSTED_PROXY_RANGES` | `direct` / none | Where visitors' addresses come from, for share-link logs and the sign-in throttle: `direct` (the connection), `cloudflare`, or `proxy` (the `X-Forwarded-For` header, believed only from the ranges you list in *Proxy addresses to believe*, Settings → Server setup; with `cloudflare` they are added to Cloudflare's built-in list). Each entry is checked when saved, and a range so wide that nearly anyone could choose the address (under /8, or `0.0.0.0/0`) is refused |
 | `NGINX_ACCEL_REDIRECT_PREFIX` | none | The gallery's URL path (e.g. `/kb`), once nginx has the matching location (it is in the nginx block under **Web server rules**, [The server](server.md#locking-down-the-files)) |
 
 ### The settings file

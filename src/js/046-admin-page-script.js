@@ -2351,6 +2351,18 @@
         .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
         .catch(function () { b.disabled = false; });
     });
+    // "Remove them" on the old capture-date files row: one request (with the tick for places from elsewhere, when there is one), then the page is read again so the row goes or says what is left.
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-olddates-remove]') : null; if (!b) return;
+      var panel = b.closest('#health-panel'); if (!panel) return;
+      var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_remove_old_dates');
+      var tick = b.parentNode.querySelector('.olddates-others'); if (tick && tick.checked) body.set('others_gone', '1');
+      b.disabled = true;
+      fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
+        .catch(function () { b.disabled = false; });
+    });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
@@ -3241,7 +3253,7 @@
   (function () {
     var root = document.getElementById('changes'); if (!root) return;
     var list = root.querySelector('.ch-list'), pill = root.querySelector('.ch-pill'), pop = root.querySelector('.ch-pop'), search = root.querySelector('.ch-search'), none = root.querySelector('.ch-none');
-    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders' };
+    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders', data: 'Typed data removed' };
     function post(fields) { return fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); }); }
     var two = function (n) { return (n < 10 ? '0' : '') + n; };
     function clock(t) { var d = new Date(t * 1000), h = d.getHours(); return (h % 12 || 12) + ':' + two(d.getMinutes()) + ' ' + (h < 12 ? 'AM' : 'PM'); }

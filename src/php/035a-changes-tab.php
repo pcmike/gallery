@@ -45,8 +45,8 @@ function render_admin_changes_panel($csrfToken) {
 
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
-    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
+    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0], 'data' => ['Typed data removed', 0]];
     foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
     return $groups;
 }
@@ -54,7 +54,7 @@ function changes_group_counts($rows) {
 /** The entries themselves, newest first (the tab draws them when the page is made; the script asks for them again when the tab is opened or the window comes back). Entries newer than $seen are marked. */
 function changes_entries_html($rows, $seen) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
     $media = function ($n) { return number_format($n) . ' media'; };
     ob_start();
 ?>
@@ -63,13 +63,14 @@ function changes_entries_html($rows, $seen) {
         $names = json_decode((string) $r['names'], true); $names = is_array($names) ? $names : [];
         $gone = json_decode((string) $r['gone'], true); $gone = is_array($gone) ? $gone : [];
         $more = (int) $r['more'];
-        $label = [ 'add' => ['ADDED', 'add'], 'rem' => ['REMOVED', 'rem'], 'ren' => ['RENAMED', 'ren'], 'new' => ['FOLDER', 'fol'], 'gone' => ['FOLDER', 'fol'] ][$kind] ?? ['', ''];
+        $label = [ 'add' => ['ADDED', 'add'], 'rem' => ['REMOVED', 'rem'], 'ren' => ['RENAMED', 'ren'], 'new' => ['FOLDER', 'fol'], 'gone' => ['FOLDER', 'fol'], 'data' => ['TYPED DATA', 'rem'] ][$kind] ?? ['', ''];
         $where = $folder === '' ? 'the front page' : $folder;
         $open = '?' . ($folder !== '' ? 'folder=' . rawurlencode($folder) : '') . (in_array($kind, ['add', 'ren', 'new'], true) ? ($folder !== '' ? '&' : '') . 'since=' . max(0, (int) $r['t0'] - 2) : '');
         $link = $kind === 'gone' ? '<b>' . $esc($where) . '</b>' : '<a href="' . $esc($open) . '">' . $esc($where) . '</a>';
         if ($kind === 'add') $text = $media($n) . ' added to ' . $link;
         elseif ($kind === 'rem') $text = $media($n) . ' removed from ' . $link;
         elseif ($kind === 'ren') $text = $media($n) . ' in ' . $link . ' renamed or replaced';
+        elseif ($kind === 'data') $text = 'What was typed for ' . number_format($n) . ' photo' . ($n === 1 ? '' : 's') . ' in ' . $link . ' was removed (the photo' . ($n === 1 ? ' is' : 's are') . ' gone: deleted, or renamed by hand)';
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
         $hay = strtolower($where . ' ' . implode(' ', $names) . ' ' . implode(' ', $gone));
