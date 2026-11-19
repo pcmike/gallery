@@ -3853,12 +3853,40 @@ function moved_in_remove_leftovers($dir, $files) {
 /** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
 function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
 
-/** The old plain capture-dates files in the folders of $files: [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
+/** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
+function old_dates_walk($realDir, $rel, array &$out, &$budget) {
+    if ($budget <= 0) return;
+    $budget--;
+    $out[] = ['real' => $realDir, 'rel' => $rel];
+    foreach (@scandir($realDir) ?: [] as $e) {
+        if ($e === '.' || $e === '..' || $e[0] === '.' || in_array($e, SCAN_SKIP_FOLDERS, true)) continue;
+        $p = $realDir . '/' . $e;
+        if (is_link($p) || !is_dir($p)) continue;
+        old_dates_walk($p, $rel === '' ? $e : $rel . '/' . $e, $out, $budget);
+    }
+}
+
+/** The old plain capture-dates files in the folders of $files [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
     $found = [];
-    foreach (moved_in_folders($dir, $files) as $f) {
+    // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
+    // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.
+    $folders = []; $seen = [];
+    foreach (moved_in_folders($dir, $files) as $f) { $folders[] = $f; $seen[(string) (realpath($f['real']) ?: $f['real'])] = true; }
+    $budget = SCAN_MAX_FOLDERS; $walked = [];
+    old_dates_walk((string) (realpath($dir) ?: $dir), '', $walked, $budget);
+    foreach (gallery_mounts() as $name => $real) {
+        $name = (string) $name;
+        if ($name === '' || strpbrk($name, "/\\") !== false || !is_dir($real) || is_link($real)) continue;
+        old_dates_walk((string) (realpath($real) ?: $real), $name, $walked, $budget);
+    }
+    foreach ($walked as $w) {
+        if (isset($seen[$w['real']])) continue;
+        $seen[$w['real']] = true; $folders[] = ['real' => $w['real'], 'rel' => $w['rel'], 'files' => []];
+    }
+    foreach ($folders as $f) {
         $cacheDir = $f['real'] . '/.gallery-cache';
         if (!is_dir($cacheDir) || is_link($cacheDir)) continue;
         $elsewhere = strpos(rtrim((string) (realpath($f['real']) ?: $f['real']), '/') . '/', $ownRoot) !== 0;
@@ -5113,7 +5141,21 @@ function geo_resolve_url($base, $location) {
 
 /** Is this address one a download may be fetched from: not this machine, not a private network, not a reserved range (a metadata service, a link-local address)? */
 function geo_ip_is_public($ip) {
-    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) return false;
+    // (PHP's two flags leave some ranges that are not the open internet either: carrier-grade NAT and Tailscale, the benchmark and protocol ranges, multicast, and the IPv6 forms that carry an IPv4 address inside them.)
+    $bin = @inet_pton((string) $ip);
+    if ($bin === false) return false;
+    if (strlen($bin) === 4) {   // (an IPv4 address mapped into IPv6, ::ffff:a.b.c.d, is already refused by the flags above: the whole ::ffff:0:0/96 is reserved)
+        $v4 = $bin; $a = ord($v4[0]); $b = ord($v4[1]);
+        return !($a === 100 && ($b & 0xC0) === 64) && !($a === 198 && ($b & 0xFE) === 18) && !($a === 192 && $b === 0 && ord($v4[2]) === 0) && $a < 224 && !($a === 0);
+    }
+    $w = unpack('n8', $bin);
+    if (($w[1] & 0xFF00) === 0xFF00) return false;                      // ff00::/8 multicast
+    if (($w[1] & 0xFFC0) === 0xFEC0 || ($w[1] & 0xFFC0) === 0xFE80) return false;   // fec0::/10 (old site-local), fe80::/10
+    if ($w[1] === 0x2002) return false;                                 // 2002::/16 6to4
+    if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // 64:ff9b::/96 NAT64
+    if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // ::/96, ::1 and the IPv4-compatible forms
+    return true;
 }
 
 /** The addresses a host stands for: the address itself, or what the name resolves to (IPv4, else IPv6); [] when it does not resolve; null when this PHP can't look names up at all
@@ -5123,7 +5165,8 @@ function geo_resolve_ips($host) {
     if ($host === '') return [];
     if (filter_var($host, FILTER_VALIDATE_IP) !== false) return [$host];
     if (!function_exists('gethostbynamel')) return null;
-    $ips = (array) @gethostbynamel($host);
+    $ips = @gethostbynamel($host);
+    $ips = is_array($ips) ? $ips : [];   // (false, a name that can't be looked up, is no address: (array) false would have made it a list of one)
     if (!$ips && function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $ips[] = $r['ipv6'];
     return array_values($ips);
 }
@@ -5700,7 +5743,10 @@ function update_status_html() {
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
 function update_admin_action($action) {
     if ($action === 'update_check') {
-        if (($_POST['force'] ?? '') === '1' || update_check_due()) update_fetch();
+        if (($_POST['force'] ?? '') === '1' || update_check_due()) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // (the sign-in is not needed while the releases page is asked: every other admin request from this browser would wait for the answer)
+            update_fetch();
+        }
         $rows = array_map('health_headsup_row_html', update_headsups());
         admin_json_exit(['ok' => true, 'rows' => $rows, 'text' => update_status_text(), 'newer' => update_newer() !== null]);
     }
@@ -9605,16 +9651,18 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount) {
+        $keptCount = 0;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount) {
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
             // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
-            if (changes_record_removed_data($folderRel, $gone) === false) { $orphanCount = 0; return; }
+            if (changes_record_removed_data($folderRel, $gone) === false) { $keptCount = count($gone); $orphanCount = 0; return; }
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone);
         });
+        if ($keptCount > 0) $galleryNotices[] = $keptCount . ' caption/location/web ' . ($keptCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos could not be written in the Changes tab (the log could not be written to), so ' . ($keptCount === 1 ? 'it was' : 'they were') . ' left where ' . ($keptCount === 1 ? 'it is' : 'they are') . ' and nothing was removed. It is tried again at the next look.';
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1
                 ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.' . (changes_tab_wanted() ? ' What it said is in the Changes tab.' : '')
@@ -10727,7 +10775,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
-        if (strcasecmp($target, '.md') === 0) {   // (nothing before the "md": that would be a hidden file with no name)
+        if (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}]/u', (string) substr($target, 0, -3))) {   // (nothing before the "md", or only spaces and invisible characters such as U+200B: a note with no name that can be seen)
             return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
@@ -11789,7 +11837,7 @@ function gallery_setting_definitions() {
              'risk' => 'Runs ffmpeg once per new video; each clip uses a little disk.',
              'offwarn' => 'Hover clips and scrubbing stop.'],
             ['name' => 'FFMPEG_PATH', 'type' => 'text', 'check' => 'ffmpeg', 'width' => '380px', 'placeholder' => 'found by itself', 'label' => 'Where ffmpeg is', 'requires' => 'ENABLE_VIDEO',
-             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", in a folder only its owner can write to.'],
+             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", that neither it nor its folder is writable by everyone.'],
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
              'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show, plus what each file says about itself (when, where), read once. If it can\'t write, originals are sent.',
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
@@ -12111,8 +12159,13 @@ function site_settings_save($ajax = false) {
     // this same lock: two saves at the same moment each built the file from what they had read before the other finished, so both said
     // "Saved." and one change was gone.
     // (The two checks that can be slow, a program started and a host name looked up, are made first, outside the lock: the save below finds their answers kept.)
-    if (isset($_POST['set_FFMPEG_PATH']) && is_string($_POST['set_FFMPEG_PATH'])) site_settings_check_ffmpeg(trim($_POST['set_FFMPEG_PATH']));
-    if (isset($_POST['set_COUNTRY_DB_URL']) && is_string($_POST['set_COUNTRY_DB_URL'])) site_settings_check_country_url(trim($_POST['set_COUNTRY_DB_URL']));
+    // (Only for a value that differs from the one saved, and only when the page is not out of date: an unchanged value is never judged again, and a stale page is refused below without running anything.)
+    $preState = gallery_config_load(); $prePath = gallery_config_path();
+    if (in_array($preState['status'] ?? '', ['absent', 'ok'], true) && hash_equals(md5(is_file($prePath) ? (string) @file_get_contents($prePath) : ''), (string) ($_POST['config_hash'] ?? ''))) {
+        $preCfg = (array) ($preState['cfg'] ?? []);
+        if (isset($_POST['set_FFMPEG_PATH']) && is_string($_POST['set_FFMPEG_PATH']) && trim($_POST['set_FFMPEG_PATH']) !== (string) ($preCfg['FFMPEG_PATH'] ?? '')) site_settings_check_ffmpeg(trim($_POST['set_FFMPEG_PATH']));
+        if (isset($_POST['set_COUNTRY_DB_URL']) && is_string($_POST['set_COUNTRY_DB_URL']) && trim($_POST['set_COUNTRY_DB_URL']) !== (string) ($preCfg['COUNTRY_DB_URL'] ?? '')) site_settings_check_country_url(trim($_POST['set_COUNTRY_DB_URL']));
+    }
     $lock = @fopen(__FILE__, 'r');
     if ($lock) flock($lock, LOCK_EX);
     try {
@@ -15100,21 +15153,34 @@ function changes_data_line($bare, array $entry) {
         if ($v === '' || $v === null || $v === false || $v === []) continue;
         $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
-    return substr($bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)'), 0, 4000);
+    return $bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)');   // (never cut: what was typed is what is written)
 }
 
-/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log, one entry for the folder, before the gallery takes it out of the folder's data.
+/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log before the gallery takes it out of the folder's data: every photo, every
+ *  word, however many. They go in as many entries as it takes (a photo's line is never cut or split; an entry holds at most changes_names_per_entry() photos and about 200 KB),
+ *  all in one write, so either all of it is in the log or none of it is.
  *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
- *  false when a log is kept but could not take it (the caller then leaves the data where it is). */
+ *  false when a log is kept but could not take all of it (the caller then leaves the data where it is). */
 function changes_record_removed_data($folderRel, array $gone) {
     if (!$gone) return true;
     if (!changes_tab_wanted()) return 'nolog';
-    $lines = [];
-    foreach ($gone as $bare => $entry) $lines[] = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
-    [$j, $more] = changes_pack($lines);
+    $entries = []; $cur = []; $curBytes = 0;
+    foreach ($gone as $bare => $entry) {
+        $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+        if ($cur && (count($cur) >= changes_names_per_entry() || $curBytes + strlen($line) > 200000)) { $entries[] = $cur; $cur = []; $curBytes = 0; }
+        $cur[] = $line; $curBytes += strlen($line);
+    }
+    if ($cur) $entries[] = $cur;
+    $rows = [];
+    foreach ($entries as $lines) {
+        $j = json_encode($lines, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($j) || json_decode($j, true) !== $lines) return false;   // (text that can't be written down exactly is never removed)
+        $rows[] = [$j, count($lines)];
+    }
     $now = time();
-    $ok = visitlog_tx(function ($db) use ($folderRel, $lines, $j, $more, $now) {
-        $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([$now, $now, $now, 'data', (string) $folderRel, count($lines), $j, $more, '[]']);
+    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now) {
+        $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
         return true;
     });
     return $ok === true ? true : false;

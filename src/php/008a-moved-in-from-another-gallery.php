@@ -79,12 +79,40 @@ function moved_in_remove_leftovers($dir, $files) {
 /** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
 function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
 
-/** The old plain capture-dates files in the folders of $files: [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
+/** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
+function old_dates_walk($realDir, $rel, array &$out, &$budget) {
+    if ($budget <= 0) return;
+    $budget--;
+    $out[] = ['real' => $realDir, 'rel' => $rel];
+    foreach (@scandir($realDir) ?: [] as $e) {
+        if ($e === '.' || $e === '..' || $e[0] === '.' || in_array($e, SCAN_SKIP_FOLDERS, true)) continue;
+        $p = $realDir . '/' . $e;
+        if (is_link($p) || !is_dir($p)) continue;
+        old_dates_walk($p, $rel === '' ? $e : $rel . '/' . $e, $out, $budget);
+    }
+}
+
+/** The old plain capture-dates files in the folders of $files [['path', 'folder' (as the gallery names it, '' for the main page), 'elsewhere' (a place from elsewhere on the server), 'bytes'], ...].
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
     $found = [];
-    foreach (moved_in_folders($dir, $files) as $f) {
+    // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
+    // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.
+    $folders = []; $seen = [];
+    foreach (moved_in_folders($dir, $files) as $f) { $folders[] = $f; $seen[(string) (realpath($f['real']) ?: $f['real'])] = true; }
+    $budget = SCAN_MAX_FOLDERS; $walked = [];
+    old_dates_walk((string) (realpath($dir) ?: $dir), '', $walked, $budget);
+    foreach (gallery_mounts() as $name => $real) {
+        $name = (string) $name;
+        if ($name === '' || strpbrk($name, "/\\") !== false || !is_dir($real) || is_link($real)) continue;
+        old_dates_walk((string) (realpath($real) ?: $real), $name, $walked, $budget);
+    }
+    foreach ($walked as $w) {
+        if (isset($seen[$w['real']])) continue;
+        $seen[$w['real']] = true; $folders[] = ['real' => $w['real'], 'rel' => $w['rel'], 'files' => []];
+    }
+    foreach ($folders as $f) {
         $cacheDir = $f['real'] . '/.gallery-cache';
         if (!is_dir($cacheDir) || is_link($cacheDir)) continue;
         $elsewhere = strpos(rtrim((string) (realpath($f['real']) ?: $f['real']), '/') . '/', $ownRoot) !== 0;

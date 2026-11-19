@@ -296,7 +296,7 @@ function gallery_setting_definitions() {
              'risk' => 'Runs ffmpeg once per new video; each clip uses a little disk.',
              'offwarn' => 'Hover clips and scrubbing stop.'],
             ['name' => 'FFMPEG_PATH', 'type' => 'text', 'check' => 'ffmpeg', 'width' => '380px', 'placeholder' => 'found by itself', 'label' => 'Where ffmpeg is', 'requires' => 'ENABLE_VIDEO',
-             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", in a folder only its owner can write to.'],
+             'help' => 'Leave empty: the gallery looks in the usual places. Only if ffmpeg is somewhere unusual, enter its full path, ending in /ffmpeg. The server runs it, so it is checked when saved: a file named ffmpeg that answers "ffmpeg version", that neither it nor its folder is writable by everyone.'],
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
              'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show, plus what each file says about itself (when, where), read once. If it can\'t write, originals are sent.',
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
@@ -618,8 +618,13 @@ function site_settings_save($ajax = false) {
     // this same lock: two saves at the same moment each built the file from what they had read before the other finished, so both said
     // "Saved." and one change was gone.
     // (The two checks that can be slow, a program started and a host name looked up, are made first, outside the lock: the save below finds their answers kept.)
-    if (isset($_POST['set_FFMPEG_PATH']) && is_string($_POST['set_FFMPEG_PATH'])) site_settings_check_ffmpeg(trim($_POST['set_FFMPEG_PATH']));
-    if (isset($_POST['set_COUNTRY_DB_URL']) && is_string($_POST['set_COUNTRY_DB_URL'])) site_settings_check_country_url(trim($_POST['set_COUNTRY_DB_URL']));
+    // (Only for a value that differs from the one saved, and only when the page is not out of date: an unchanged value is never judged again, and a stale page is refused below without running anything.)
+    $preState = gallery_config_load(); $prePath = gallery_config_path();
+    if (in_array($preState['status'] ?? '', ['absent', 'ok'], true) && hash_equals(md5(is_file($prePath) ? (string) @file_get_contents($prePath) : ''), (string) ($_POST['config_hash'] ?? ''))) {
+        $preCfg = (array) ($preState['cfg'] ?? []);
+        if (isset($_POST['set_FFMPEG_PATH']) && is_string($_POST['set_FFMPEG_PATH']) && trim($_POST['set_FFMPEG_PATH']) !== (string) ($preCfg['FFMPEG_PATH'] ?? '')) site_settings_check_ffmpeg(trim($_POST['set_FFMPEG_PATH']));
+        if (isset($_POST['set_COUNTRY_DB_URL']) && is_string($_POST['set_COUNTRY_DB_URL']) && trim($_POST['set_COUNTRY_DB_URL']) !== (string) ($preCfg['COUNTRY_DB_URL'] ?? '')) site_settings_check_country_url(trim($_POST['set_COUNTRY_DB_URL']));
+    }
     $lock = @fopen(__FILE__, 'r');
     if ($lock) flock($lock, LOCK_EX);
     try {

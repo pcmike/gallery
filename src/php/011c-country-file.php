@@ -56,7 +56,21 @@ function geo_resolve_url($base, $location) {
 
 /** Is this address one a download may be fetched from: not this machine, not a private network, not a reserved range (a metadata service, a link-local address)? */
 function geo_ip_is_public($ip) {
-    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) return false;
+    // (PHP's two flags leave some ranges that are not the open internet either: carrier-grade NAT and Tailscale, the benchmark and protocol ranges, multicast, and the IPv6 forms that carry an IPv4 address inside them.)
+    $bin = @inet_pton((string) $ip);
+    if ($bin === false) return false;
+    if (strlen($bin) === 4) {   // (an IPv4 address mapped into IPv6, ::ffff:a.b.c.d, is already refused by the flags above: the whole ::ffff:0:0/96 is reserved)
+        $v4 = $bin; $a = ord($v4[0]); $b = ord($v4[1]);
+        return !($a === 100 && ($b & 0xC0) === 64) && !($a === 198 && ($b & 0xFE) === 18) && !($a === 192 && $b === 0 && ord($v4[2]) === 0) && $a < 224 && !($a === 0);
+    }
+    $w = unpack('n8', $bin);
+    if (($w[1] & 0xFF00) === 0xFF00) return false;                      // ff00::/8 multicast
+    if (($w[1] & 0xFFC0) === 0xFEC0 || ($w[1] & 0xFFC0) === 0xFE80) return false;   // fec0::/10 (old site-local), fe80::/10
+    if ($w[1] === 0x2002) return false;                                 // 2002::/16 6to4
+    if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // 64:ff9b::/96 NAT64
+    if ($w[1] === 0 && $w[2] === 0 && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) return false;   // ::/96, ::1 and the IPv4-compatible forms
+    return true;
 }
 
 /** The addresses a host stands for: the address itself, or what the name resolves to (IPv4, else IPv6); [] when it does not resolve; null when this PHP can't look names up at all
@@ -66,7 +80,8 @@ function geo_resolve_ips($host) {
     if ($host === '') return [];
     if (filter_var($host, FILTER_VALIDATE_IP) !== false) return [$host];
     if (!function_exists('gethostbynamel')) return null;
-    $ips = (array) @gethostbynamel($host);
+    $ips = @gethostbynamel($host);
+    $ips = is_array($ips) ? $ips : [];   // (false, a name that can't be looked up, is no address: (array) false would have made it a list of one)
     if (!$ips && function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $ips[] = $r['ipv6'];
     return array_values($ips);
 }

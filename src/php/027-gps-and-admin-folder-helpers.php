@@ -83,16 +83,18 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount) {
+        $keptCount = 0;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount) {
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
             // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
-            if (changes_record_removed_data($folderRel, $gone) === false) { $orphanCount = 0; return; }
+            if (changes_record_removed_data($folderRel, $gone) === false) { $keptCount = count($gone); $orphanCount = 0; return; }
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone);
         });
+        if ($keptCount > 0) $galleryNotices[] = $keptCount . ' caption/location/web ' . ($keptCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos could not be written in the Changes tab (the log could not be written to), so ' . ($keptCount === 1 ? 'it was' : 'they were') . ' left where ' . ($keptCount === 1 ? 'it is' : 'they are') . ' and nothing was removed. It is tried again at the next look.';
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1
                 ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.' . (changes_tab_wanted() ? ' What it said is in the Changes tab.' : '')
@@ -1205,7 +1207,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
-        if (strcasecmp($target, '.md') === 0) {   // (nothing before the "md": that would be a hidden file with no name)
+        if (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}]/u', (string) substr($target, 0, -3))) {   // (nothing before the "md", or only spaces and invisible characters such as U+200B: a note with no name that can be seen)
             return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so

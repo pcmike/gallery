@@ -4757,7 +4757,7 @@ try:
     hhash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "hist-admin-pw"], capture_output=True, text=True).stdout
     open(SITE_H + "/db.mmdb.gz", "wb").write(os.urandom(300))   # (not a real country file: the first press of Turn on… only asks what it would need)
     sh_ = socket.socket(); sh_.bind(("127.0.0.1", 0)); PH = sh_.getsockname()[1]; sh_.close(); BH = f"http://127.0.0.1:{PH}"
-    open(SITE_H + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": hhash, "PRIVATE_VIEW_PASSWORD": "hist-view-pw", "TRUSTED_PROXY": "cloudflare", "TRUSTED_PROXY_RANGES": ["127.0.0.1/32"], "COUNTRY_DB_URL": BH + "/db.mmdb.gz"}) + "\n")
+    open(SITE_H + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": hhash, "PRIVATE_VIEW_PASSWORD": "hist-view-pw", "TRUSTED_PROXY": "cloudflare", "TRUSTED_PROXY_RANGES": ["127.0.0.1/32"], "COUNTRY_DB_URL": BH + "/db.mmdb.gz", "CHECK_FOR_UPDATES": False}) + "\n")
     srvH = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PH}", "-t", SITE_H], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={**os.environ, "PHP_CLI_SERVER_WORKERS": "4"})   # (several workers: the country file's check fetches from this same server)
     time.sleep(1.0)
     UA_PHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"

@@ -231,7 +231,10 @@ function update_status_html() {
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
 function update_admin_action($action) {
     if ($action === 'update_check') {
-        if (($_POST['force'] ?? '') === '1' || update_check_due()) update_fetch();
+        if (($_POST['force'] ?? '') === '1' || update_check_due()) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // (the sign-in is not needed while the releases page is asked: every other admin request from this browser would wait for the answer)
+            update_fetch();
+        }
         $rows = array_map('health_headsup_row_html', update_headsups());
         admin_json_exit(['ok' => true, 'rows' => $rows, 'text' => update_status_text(), 'newer' => update_newer() !== null]);
     }

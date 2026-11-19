@@ -575,7 +575,7 @@ function start_server($docroot, $port, $router = null) {
     }
     $cleanupProcs[] = $proc;
 
-    $deadline = microtime(true) + 5;
+    $deadline = microtime(true) + 15;   // (a long run leaves hundreds of servers up and the machine short of memory: a new one may be slow to start)
     while (microtime(true) < $deadline) {
         $conn = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
         if ($conn) {
@@ -13598,6 +13598,161 @@ echo json_encode(["status" => $r["status"], "error" => $r["error"], "log" => $GL
     check('[redirect] a mirror of your own on this machine (plain http, as the tests and a local mirror use it) can still send on to another port here: only a download that started at https is held to this', ($hpLoop['status'] ?? null) === 200 && count($hpLoop['log'] ?? []) === 2 && array_key_exists(1, $hpLoop['log'][1] ?? []) && $hpLoop['log'][1][1] === null, json_encode($hpLoop));
     $hpHttp = $hpRun('https://8.8.8.8/start', 'http://127.0.0.1:2/b');
     check('[redirect] a download that starts at https and is sent on to plain http to this machine is still refused (the earlier rule), at that hop', ($hpHttp['status'] ?? null) === 0 && count($hpHttp['log'] ?? []) === 1 && str_contains((string) ($hpHttp['error'] ?? ''), 'not allowed'), json_encode($hpHttp));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N16 and N17 (b): a name that can't be looked up is said so (and an address list of one `false` is no list); the "public address" rule also refuses the ranges PHP's two flags leave
+echo "== chunk 9 follow-up N16/N17b: name lookups and the public-address rule ==\n";
+{
+    $pbSrc = $g2Fn('geo_url_ok') . "\n" . $g2Fn('geo_resolve_url') . "\n" . $g2Fn('geo_host_in') . "\n" . $g2Fn('geo_ip_is_public') . "\n" . $g2Fn('geo_resolve_ips') . "\n" . $g2Fn('geo_http') . "\n";
+    $pbLong = 'x' . str_repeat('a', 300) . '.example.com';   // (PHP refuses a name this long by itself: no lookup goes out)
+    $pbOut = json_decode($g2Run($pbSrc . 'echo json_encode(["ips" => geo_resolve_ips(' . var_export($pbLong, true) . '), "v6only" => geo_resolve_ips("[2606:4700:4700::1111]")]);'), true) ?: [];
+    check('[N16] a name that can\'t be looked up has no addresses (an empty list, not a list of one false), and an IPv6 address stands for itself', ($pbOut['ips'] ?? null) === [] && ($pbOut['v6only'] ?? null) === ['2606:4700:4700::1111'], json_encode($pbOut));
+    $pbRedir = json_decode($g2Run($pbSrc . '$GLOBALS["log"] = [];
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) { $GLOBALS["log"][] = $url; if (count($GLOBALS["log"]) === 1) return ["status" => 302, "headers" => ["location" => ' . var_export("https://$pbLong/x", true) . '], "body" => "", "error" => ""]; return ["status" => 200, "headers" => [], "body" => "ok", "error" => ""]; }
+$r = geo_http("https://8.8.8.8/start"); echo json_encode(["status" => $r["status"], "error" => $r["error"], "n" => count($GLOBALS["log"])]);'), true) ?: [];
+    check('[N16] a download sent on to a name that can\'t be found is refused saying it could not be found (not that it is a private network), and no second request is made', ($pbRedir['status'] ?? null) === 0 && ($pbRedir['n'] ?? null) === 1 && str_contains((string) ($pbRedir['error'] ?? ''), 'could not be found') && !str_contains((string) ($pbRedir['error'] ?? ''), 'private'), json_encode($pbRedir));
+    $pbNo = ['100.64.0.1', '100.127.255.254', '198.18.0.1', '198.19.255.1', '192.0.0.5', '224.0.0.1', '239.255.255.250', '0.0.0.0', '127.0.0.1', '10.1.2.3', '169.254.169.254', '::1', '64:ff9b::808:808', '2002:808:808::1', 'fec0::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '::ffff:100.64.0.1', '::ffff:8.8.8.8', 'fd00::1'];
+    $pbYes = ['8.8.8.8', '1.1.1.1', '100.63.255.255', '100.128.0.1', '198.17.255.255', '198.20.0.1', '192.0.1.1', '223.255.255.254', '2606:4700:4700::1111', '2001:4860:4860::8888'];
+    $pbRes = json_decode($g2Run($g2Fn('geo_ip_is_public') . "\n" . 'echo json_encode(array_map(function ($ip) { return geo_ip_is_public($ip); }, ' . var_export(array_merge($pbNo, $pbYes), true) . '));'), true) ?: [];
+    $pbWrong = [];
+    foreach (array_merge($pbNo, $pbYes) as $i => $ip) { $want = $i >= count($pbNo); if (($pbRes[$i] ?? null) !== $want) $pbWrong[] = $ip; }
+    check('[N17 b] the public-address rule refuses this machine, private ranges, carrier-grade NAT (Tailscale), the benchmark/protocol/multicast ranges, 6to4, NAT64, site-local and IPv4 hidden inside IPv6 (even a public one: refused, to be safe), and accepts the addresses just outside each range', $pbWrong === [], json_encode($pbWrong));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N17 (a): the slow checks of a Settings save (a program started, a name looked up) are made only for a value that changed, and not for a page that is out of date
+echo "== chunk 9 follow-up N17a: unchanged values are not judged again ==\n";
+{
+    $saFx = new_fixture_dir('setslow'); mkdir("$saFx/Alpha", 0777, true); make_jpeg("$saFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    $saCfg = "$saFx/.gallery-config.php"; file_put_contents($saCfg, cfg_text(['ADMIN_PASSWORD' => 'sa-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$saFx/index.php"); @touch("$saFx/index.php", time() - 3600);
+    $saBin = new_fixture_dir('setslow-bin'); chmod($saBin, 0755); $saMark1 = "$saBin/mark1.txt"; $saMark2 = "$saBin/mark2.txt";
+    foreach ([1 => $saMark1, 2 => $saMark2] as $n => $mark) { mkdir("$saBin/p$n", 0755); file_put_contents("$saBin/p$n/ffmpeg", "#!/bin/sh\necho run >> $mark\necho 'ffmpeg version 9.9-test'\n"); chmod("$saBin/p$n/ffmpeg", 0755); }
+    $saPort = find_free_port(); $saProc = start_server($saFx, $saPort); $saBase = "http://127.0.0.1:$saPort";
+    [, , $saH] = http_post("$saBase/?admin", ['access_code' => 'sa-admin-pw-1'], [], false); $saOwn = ['Cookie: ' . extract_cookie_header($saH)];
+    $saRuns = fn ($mark) => is_file($mark) ? count(file($mark)) : 0;
+    $saForm = function () use ($saBase, $saOwn) { $form = ''; foreach (html_post_forms((string) http_get("$saBase/?admin", $saOwn)[1]) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) { $form = $f['html']; break; } return form_default_fields($form); };
+    $saPost = function (array $f, $hash = null) use ($saBase, $saOwn, $saCfg, $saForm) {
+        $ff = $saForm();   // (the page is looked at first, then the number of runs is taken, then the save is posted)
+        return fn () => json_decode(http_post("$saBase/?admin", array_merge(['csrf_token' => $ff['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $hash ?? md5_file($saCfg)], $f), array_merge($saOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?? [];
+    };
+    $go = $saPost(['set_FFMPEG_PATH' => "$saBin/p1/ffmpeg"]); $b = $saRuns($saMark1); $r = $go();
+    check('[N17 a] a changed ffmpeg path is tried (the program is started once) and saved', ($r['ok'] ?? null) === true && $saRuns($saMark1) - $b === 1 && (cfg_read($saCfg)['FFMPEG_PATH'] ?? null) === "$saBin/p1/ffmpeg", json_encode([$r, $saRuns($saMark1) - $b]));
+    $go = $saPost(['set_FFMPEG_PATH' => "$saBin/p1/ffmpeg"]); $b = $saRuns($saMark1); $r = $go();
+    check('[N17 a] the same path posted again (the whole form, as the page without scripts does) does not start the program again', $saRuns($saMark1) === $b && ($r['ok'] ?? null) === true, json_encode([$r, $saRuns($saMark1) - $b]));
+    $go = $saPost(['set_FFMPEG_PATH' => "$saBin/p2/ffmpeg"], 'not-the-current-hash'); $r = $go();
+    check('[N17 a] a page that is out of date is refused without starting the program it typed', ($r['ok'] ?? null) === false && !is_file($saMark2) && (cfg_read($saCfg)['FFMPEG_PATH'] ?? null) === "$saBin/p1/ffmpeg", json_encode([$r, is_file($saMark2)]));
+    @proc_terminate($saProc);
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N17 (d) and (i): Health also finds old capture-date files in folders with no pictures now; a note can't be named with only invisible characters before .md
+echo "== chunk 9 follow-up N17 d/i: empty folders in Health, invisible note names ==\n";
+{
+    $deFx = new_fixture_dir('olddates-empty'); mkdir("$deFx/Alpha", 0777, true); make_jpeg("$deFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    mkdir("$deFx/Emptied/.gallery-cache", 0755, true); file_put_contents("$deFx/Emptied/.gallery-cache/taken3.json", json_encode(['gone.jpg' => [1, 2, 3]]));
+    mkdir("$deFx/TextOnly/.gallery-cache", 0755, true); file_put_contents("$deFx/TextOnly/notes.txt", 'x'); file_put_contents("$deFx/TextOnly/.gallery-cache/taken.json", '{}');
+    mkdir("$deFx/Alpha/Deeper/.gallery-cache", 0755, true); file_put_contents("$deFx/Alpha/Deeper/.gallery-cache/taken2.json", '{}');
+    mkdir("$deFx/.hidden/.gallery-cache", 0755, true); file_put_contents("$deFx/.hidden/.gallery-cache/taken3.json", '{}');   // (a dot folder is never a photo folder: not looked in)
+    $deVictim = "$deFx/victim.txt"; file_put_contents($deVictim, 'mine'); mkdir("$deFx/Linked/.gallery-cache", 0755, true); symlink($deVictim, "$deFx/Linked/.gallery-cache/taken3.json");
+    file_put_contents("$deFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'de-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'PHOTO_SORT_ORDER' => 'filename', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$deFx/index.php"); @touch("$deFx/index.php", time() - 3600);
+    $dePort = find_free_port(); $deProc = start_server($deFx, $dePort); $deBase = "http://127.0.0.1:$dePort";
+    [, , $deH] = http_post("$deBase/?admin", ['access_code' => 'de-admin-pw-1'], [], false); $deOwn = ['Cookie: ' . extract_cookie_header($deH)];
+    $deTxt = html_entity_decode(strip_tags((string) http_get("$deBase/?admin&classic=1", $deOwn)[1]));
+    check('[N17 d] Health names the old capture-date files in folders with no picture now (an emptied one, one holding only a text file, one under a folder with a picture), 3 in all, and not a dot folder or a link', str_contains($deTxt, '3 old capture-date files') && str_contains($deTxt, 'Emptied') && str_contains($deTxt, 'TextOnly'), substr($deTxt, 0, 300));
+    $deCsrf = admin_token($deBase, $deOwn);
+    $deR = json_decode(http_post("$deBase/?admin", ['csrf_token' => $deCsrf, 'action' => 'health_remove_old_dates'], array_merge($deOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    check('[N17 d] the button removes them, and only them (the dot folder\'s file stays, and the link is not followed)', ($deR['ok'] ?? false) === true && !file_exists("$deFx/Emptied/.gallery-cache/taken3.json") && !file_exists("$deFx/TextOnly/.gallery-cache/taken.json") && !file_exists("$deFx/Alpha/Deeper/.gallery-cache/taken2.json") && is_file("$deFx/.hidden/.gallery-cache/taken3.json") && file_get_contents($deVictim) === 'mine' && is_link("$deFx/Linked/.gallery-cache/taken3.json"), json_encode($deR));
+    // a note named with only invisible characters
+    $deNote = fn (array $f) => json_decode(http_post("$deBase/?admin&folder=Alpha", $f + ['csrf_token' => $deCsrf, 'action' => 'save_notes', 'md_file' => '', 'content' => "{gallery}\nbody\n"], array_merge($deOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $deBefore = glob("$deFx/Alpha/*.md") ?: [];
+    $deBad = [];
+    foreach (["\u{200B}", "\u{200B}.md", " \u{00A0} ", "\u{FEFF}\u{200D}", '.md', ''] as $nm) { $r = $deNote(['new_name' => $nm]); if (($r['ok'] ?? true) !== false || (glob("$deFx/Alpha/*.md") ?: []) !== $deBefore || (glob("$deFx/Alpha/.*md") ?: []) !== []) $deBad[] = [$nm, $r]; }
+    check('[N17 i] a new note named with only an invisible character, spaces or nothing before .md is refused, and nothing is written', $deBad === [], json_encode($deBad));
+    $deOk = $deNote(['new_name' => "trip\u{200B}"]);
+    check('[N17 i] ...and a name with something to see in it still saves', ($deOk['ok'] ?? false) === true && count(glob("$deFx/Alpha/*.md") ?: []) === 1, json_encode($deOk));
+    @proc_terminate($deProc);
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N15: what is removed for photos that are gone is ALL in the Changes tab: every photo (as many lines as it takes), every word, and when the log can't take it nothing is removed
+echo "== chunk 9 follow-up N15: the removed data is completely in the Changes tab ==\n";
+{
+    $tdFx = new_fixture_dir('typedall'); mkdir("$tdFx/Alpha", 0777, true); make_jpeg("$tdFx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    $tdEmoji = str_repeat("\u{1F600}", 1000); $tdMixed = 'Café ' . str_repeat('日本語', 300) . ' "quoted" & <b>';
+    $tdItems = ['a2.jpg' => ['caption' => 'stays']];
+    for ($i = 1; $i <= 205; $i++) $tdItems[sprintf('gone%03d.jpg', $i)] = ['caption' => "Caption number $i"];
+    $tdItems['emoji.jpg'] = ['caption' => $tdEmoji, 'web' => 'https://example.com/e'];
+    $tdItems['mixed.jpg'] = ['caption' => $tdMixed, 'location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => str_repeat("\u{00E9}", 400)]];
+    $tdItems['plain.jpg'] = ['caption' => 'A short plain caption'];
+    file_put_contents("$tdFx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => $tdItems]) . "\n");
+    file_put_contents("$tdFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'td-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$tdFx/index.php"); @touch("$tdFx/index.php", time() - 3600);
+    $tdPort = find_free_port(); $tdProc = start_server($tdFx, $tdPort); $tdBase = "http://127.0.0.1:$tdPort";
+    [, , $tdH] = http_post("$tdBase/?admin", ['access_code' => 'td-admin-pw-1'], [], false); $tdOwn = ['Cookie: ' . extract_cookie_header($tdH)];
+    http_get("$tdBase/?admin&classic=1", $tdOwn);   // (the first look takes the picture: the log starts here)
+    $tdNow = fn () => json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$tdFx/Alpha/.gallery-items.php")), true)['items'] ?? [];
+    http_get("$tdBase/");   // (a stranger's view does the clean-up; none of those photos exists)
+    $tdAfter = $tdNow();
+    check('[N15] all 208 entries of photos that are not there are taken out of the folder\'s data, and the one that is there stays', array_keys($tdAfter) === ['a2.jpg'], json_encode(array_slice(array_keys($tdAfter), 0, 5)));
+    $tdList = json_decode((string) http_get("$tdBase/?admin&changes_list=1", $tdOwn)[1], true); $tdHtml = (string) ($tdList['html'] ?? '');
+    $tdTxt = html_entity_decode(strip_tags($tdHtml));
+    preg_match_all('/gone\d{3}\.jpg/', $tdTxt, $tdNames);
+    check('[N15] every one of the 205 captioned photos is named in the Changes tab (as two lines: 200 and 5), not the first 200 and "and 5 more"', count(array_unique($tdNames[0])) === 205 && substr_count($tdHtml, 'data-g="data"') === 2 && !str_contains($tdTxt, 'and 5 more'), json_encode([count(array_unique($tdNames[0])), substr_count($tdHtml, 'data-g="data"')]));
+    check('[N15] ...and "Caption number 205" is there with its photo', str_contains($tdTxt, 'gone205.jpg') && str_contains($tdTxt, 'Caption number 205'));
+    check('[N15] a caption of 1,000 emoji is in the log whole (never cut inside a letter), beside the plain one, and the long mixed caption and its 400-letter place are whole too', str_contains($tdTxt, $tdEmoji) && str_contains($tdTxt, 'A short plain caption') && str_contains($tdTxt, $tdMixed) && str_contains($tdTxt, str_repeat("\u{00E9}", 400)) && str_contains($tdTxt, 'https://example.com/e'), strlen($tdTxt));
+    // the log is kept but refuses the write (a trigger in the table stands in for a full disk or a broken file): nothing is removed, the owner is told, and the next look does it
+    if (!extension_loaded('pdo_sqlite')) {
+        skip_note('[N15] this PHP has no pdo_sqlite, so a log that refuses a write can\'t be made here');
+    } else {
+        $tdFx2 = new_fixture_dir('typedlock'); mkdir("$tdFx2/Alpha", 0777, true); make_jpeg("$tdFx2/Alpha/a2.jpg", 40, 30, 120, 90, 60); make_jpeg("$tdFx2/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+        file_put_contents("$tdFx2/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => 'must not be lost'], 'a2.jpg' => ['caption' => 'stays']]]) . "\n");
+        file_put_contents("$tdFx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'td-admin-pw-2', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$tdFx2/index.php"); @touch("$tdFx2/index.php", time() - 3600);
+        $tdPort2 = find_free_port(); $tdProc2 = start_server($tdFx2, $tdPort2); $tdBase2 = "http://127.0.0.1:$tdPort2";
+        [, , $tdH2] = http_post("$tdBase2/?admin", ['access_code' => 'td-admin-pw-2'], [], false); $tdOwn2 = ['Cookie: ' . extract_cookie_header($tdH2)];
+        http_get("$tdBase2/?admin&classic=1", $tdOwn2);
+        $tdLog = glob("$tdFx2/.gallery-visits-*.sqlite") ?: [];
+        $tdNow2 = fn () => json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$tdFx2/Alpha/.gallery-items.php")), true)['items'] ?? [];
+        if (!$tdLog) {
+            check('[N15] the log file exists to be held', false, 'no log file');
+        } else {
+            $tdDb = new PDO('sqlite:' . $tdLog[0]); $tdDb->exec("CREATE TRIGGER refuse_data BEFORE INSERT ON changes WHEN NEW.kind = 'data' BEGIN SELECT RAISE(ABORT, 'refused for the test'); END");
+            unlink("$tdFx2/Alpha/a1.jpg");
+            $tdPage = (string) http_get("$tdBase2/", $tdOwn2)[1];   // (the owner's view of the gallery tries, is refused, and says so in its banner)
+            $tdHeld = $tdNow2();
+            $tdDb->exec('DROP TRIGGER refuse_data'); unset($tdDb);
+            check('[N15] while the log refuses the write, the entry of the deleted photo is NOT removed (its caption is still in the folder\'s data), and the owner is told why', ($tdHeld['a1.jpg']['caption'] ?? null) === 'must not be lost' && str_contains(html_entity_decode($tdPage), 'could not be written in the Changes tab'), json_encode([$tdHeld, str_contains($tdPage, 'could not be written')]));
+            http_get("$tdBase2/");
+            $tdList2 = json_decode((string) http_get("$tdBase2/?admin&changes_list=1", $tdOwn2)[1], true);
+            check('[N15] ...and at the next look, with the log free again, it is written in the Changes tab and then removed', !isset($tdNow2()['a1.jpg']) && str_contains(html_entity_decode(strip_tags((string) ($tdList2['html'] ?? ''))), 'must not be lost'), json_encode(array_keys($tdNow2())));
+        }
+    }
+    @proc_terminate($tdProc); if (isset($tdProc2)) @proc_terminate($tdProc2);
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N18: the once-a-day look for a new version lets go of the sign-in while it waits for the releases page, so another admin request is not held up
+echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n";
+{
+    $ugSlow = new_fixture_dir('updslow'); file_put_contents("$ugSlow/router.php", "<?php sleep(4); header('Content-Type: application/json'); echo '{}';\n");
+    $ugSlowPort = find_free_port(); putenv('PHP_CLI_SERVER_WORKERS=2'); $ugSlowProc = start_server($ugSlow, $ugSlowPort, "$ugSlow/router.php"); putenv('PHP_CLI_SERVER_WORKERS');
+    $ugFx = new_fixture_dir('updsession'); mkdir("$ugFx/Alpha", 0777, true); make_jpeg("$ugFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$ugFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ug-admin-pw-1', 'UPDATE_FEED_URL' => "http://127.0.0.1:$ugSlowPort/feed.json", 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$ugFx/index.php"); @touch("$ugFx/index.php", time() - 3600);
+    $ugPort = find_free_port(); putenv('PHP_CLI_SERVER_WORKERS=4'); $ugProc = start_server($ugFx, $ugPort); putenv('PHP_CLI_SERVER_WORKERS'); $ugBase = "http://127.0.0.1:$ugPort";
+    [, , $ugH] = http_post("$ugBase/?admin", ['access_code' => 'ug-admin-pw-1'], [], false); $ugCookie = extract_cookie_header($ugH); $ugOwn = ['Cookie: ' . $ugCookie];
+    $ugCsrf = admin_token($ugBase, $ugOwn);
+    $ugBody = http_build_query(['csrf_token' => $ugCsrf, 'action' => 'update_check', 'force' => '1']);
+    $ugSock = @stream_socket_client("tcp://127.0.0.1:$ugPort", $e1, $e2, 3);
+    fwrite($ugSock, "POST /?admin HTTP/1.1\r\nHost: 127.0.0.1:$ugPort\r\nCookie: $ugCookie\r\nX-Requested-With: gallery-fetch\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($ugBody) . "\r\nConnection: close\r\n\r\n$ugBody");
+    usleep(700000);   // (the check is now waiting for the releases page)
+    $ugT = microtime(true); $ugOther = http_get("$ugBase/?admin&classic=1", $ugOwn); $ugDt = microtime(true) - $ugT;
+    stream_set_timeout($ugSock, 8); $ugAns = stream_get_contents($ugSock); fclose($ugSock);
+    check('[N18] while the update check waits for the releases page (4 s here), another admin request from the same browser is answered at once, not after it', $ugOther[0] === 200 && $ugDt < 2.0 && str_contains((string) $ugAns, '200 OK'), json_encode([$ugOther[0], round($ugDt, 2), substr((string) $ugAns, 0, 60)]));
+    foreach ([$ugSlowProc, $ugProc] as $ugP) @proc_terminate($ugP);   // (the suite keeps every server until its end: these are done)
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

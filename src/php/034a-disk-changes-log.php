@@ -159,21 +159,34 @@ function changes_data_line($bare, array $entry) {
         if ($v === '' || $v === null || $v === false || $v === []) continue;
         $bits[] = ($labels[$k] ?? ucfirst((string) $k)) . ': ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
-    return substr($bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)'), 0, 4000);
+    return $bare . ($bits ? ' — ' . implode(' · ', $bits) : ' — (a setting only, nothing typed)');   // (never cut: what was typed is what is written)
 }
 
-/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log, one entry for the folder, before the gallery takes it out of the folder's data.
+/** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log before the gallery takes it out of the folder's data: every photo, every
+ *  word, however many. They go in as many entries as it takes (a photo's line is never cut or split; an entry holds at most changes_names_per_entry() photos and about 200 KB),
+ *  all in one write, so either all of it is in the log or none of it is.
  *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
- *  false when a log is kept but could not take it (the caller then leaves the data where it is). */
+ *  false when a log is kept but could not take all of it (the caller then leaves the data where it is). */
 function changes_record_removed_data($folderRel, array $gone) {
     if (!$gone) return true;
     if (!changes_tab_wanted()) return 'nolog';
-    $lines = [];
-    foreach ($gone as $bare => $entry) $lines[] = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
-    [$j, $more] = changes_pack($lines);
+    $entries = []; $cur = []; $curBytes = 0;
+    foreach ($gone as $bare => $entry) {
+        $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
+        if ($cur && (count($cur) >= changes_names_per_entry() || $curBytes + strlen($line) > 200000)) { $entries[] = $cur; $cur = []; $curBytes = 0; }
+        $cur[] = $line; $curBytes += strlen($line);
+    }
+    if ($cur) $entries[] = $cur;
+    $rows = [];
+    foreach ($entries as $lines) {
+        $j = json_encode($lines, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($j) || json_decode($j, true) !== $lines) return false;   // (text that can't be written down exactly is never removed)
+        $rows[] = [$j, count($lines)];
+    }
     $now = time();
-    $ok = visitlog_tx(function ($db) use ($folderRel, $lines, $j, $more, $now) {
-        $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([$now, $now, $now, 'data', (string) $folderRel, count($lines), $j, $more, '[]']);
+    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now) {
+        $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
         return true;
     });
     return $ok === true ? true : false;
