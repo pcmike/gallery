@@ -83,17 +83,24 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        $keptCount = 0;
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount) {
+        $keptCount = 0; $goneNames = []; $logged = false;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged) {
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
             // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
-            if (changes_record_removed_data($folderRel, $gone) === false) { $keptCount = count($gone); $orphanCount = 0; return; }
+            $rec = changes_record_removed_data($folderRel, $gone);
+            if ($rec === false) { $keptCount = count($gone); $orphanCount = 0; return; }
+            $logged = $rec === true;
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
-            $orphanCount = count($gone);
+            $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
+        // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
+        if ($goneNames && array_intersect_key(items_read($folderPath)['items'] ?? [], array_flip($goneNames))) {
+            $galleryNotices[] = count($goneNames) . ' caption/location/web ' . (count($goneNames) === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . (count($goneNames) === 1 ? 'is' : 'are') . ($logged ? ' written in the Changes tab, but' : '') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (is the disk full, or is the folder not writable by the web server?). It is tried again at the next look. The Health check in Settings says more.';
+            $orphanCount = 0;
+        } elseif ($goneNames && $logged) changes_removed_data_done($folderRel);
         if ($keptCount > 0) $galleryNotices[] = $keptCount . ' caption/location/web ' . ($keptCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos could not be written in the Changes tab (the log could not be written to), so ' . ($keptCount === 1 ? 'it was' : 'they were') . ' left where ' . ($keptCount === 1 ? 'it is' : 'they are') . ' and nothing was removed. It is tried again at the next look.';
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1

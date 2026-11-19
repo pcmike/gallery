@@ -165,11 +165,14 @@ function changes_data_line($bare, array $entry) {
 /** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log before the gallery takes it out of the folder's data: every photo, every
  *  word, however many. They go in as many entries as it takes (a photo's line is never cut or split; an entry holds at most changes_names_per_entry() photos and about 200 KB),
  *  all in one write, so either all of it is in the log or none of it is.
- *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
- *  false when a log is kept but could not take all of it (the caller then leaves the data where it is). */
+ *  $gone is bare photo name => its data. Returns true when the log took it (or already has these very entries, see below), 'nolog' when this server keeps no log (no SQLite, or no
+ *  log file yet in a folder that can't be written: the data is removed all the same), and false when a log is kept but could not take all of it (the caller then leaves the data
+ *  where it is). A log FILE that is there but that the web server may not write counts as a log that can't take it: nothing typed is lost without a record.
+ *  A caller whose own save then fails leaves the data in place and asks again at the next look; so that the log is not written to again each time, these entries are
+ *  remembered (a note in the log's meta table, made in the same write) and found again by their text; changes_removed_data_done() forgets the note once the data is gone. */
 function changes_record_removed_data($folderRel, array $gone) {
     if (!$gone) return true;
-    if (!changes_tab_wanted()) return 'nolog';
+    if (!changes_tab_wanted()) return visitlog_driver_ok() && is_file(visitlog_path()) ? false : 'nolog';
     $entries = []; $cur = []; $curBytes = 0;
     foreach ($gone as $bare => $entry) {
         $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
@@ -184,12 +187,26 @@ function changes_record_removed_data($folderRel, array $gone) {
         $rows[] = [$j, count($lines)];
     }
     $now = time();
-    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now) {
+    $note = 'datahold:' . md5((string) $folderRel); $hash = md5(implode("\n", array_column($rows, 0)));
+    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now, $note, $hash) {
+        $has = $db->prepare('SELECT v FROM meta WHERE k = ?'); $has->execute([$note]);
+        if ($has->fetchColumn() === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
+            $in = $db->prepare('SELECT 1 FROM changes WHERE kind = ? AND folder = ? AND names = ? LIMIT 1'); $all = true;
+            foreach ($rows as [$j]) { $in->execute(['data', (string) $folderRel, $j]); if ($in->fetchColumn() === false) { $all = false; break; } }
+            if ($all) return true;
+        }
         $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
+        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash]);
         return true;
     });
     return $ok === true ? true : false;
+}
+
+/** The caller has taken the data out of the folder's file: the note that these entries were waiting for that is no longer needed. */
+function changes_removed_data_done($folderRel) {
+    if (!changes_tab_wanted()) return;
+    visitlog_tx(function ($db) use ($folderRel) { $db->prepare('DELETE FROM meta WHERE k = ?')->execute(['datahold:' . md5((string) $folderRel)]); return true; });
 }
 
 /** Does this server keep the log of disk activity (and so show the Changes tab)? It lives in the visitor log's SQLite file. */

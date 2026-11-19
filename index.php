@@ -9646,17 +9646,24 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        $keptCount = 0;
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount) {
+        $keptCount = 0; $goneNames = []; $logged = false;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged) {
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
             }
             // (written in the Changes tab first, inside this save so that only one request does it; where no log is kept they go as before; where one is kept and can't take it, they stay)
-            if (changes_record_removed_data($folderRel, $gone) === false) { $keptCount = count($gone); $orphanCount = 0; return; }
+            $rec = changes_record_removed_data($folderRel, $gone);
+            if ($rec === false) { $keptCount = count($gone); $orphanCount = 0; return; }
+            $logged = $rec === true;
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
-            $orphanCount = count($gone);
+            $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
+        // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
+        if ($goneNames && array_intersect_key(items_read($folderPath)['items'] ?? [], array_flip($goneNames))) {
+            $galleryNotices[] = count($goneNames) . ' caption/location/web ' . (count($goneNames) === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . (count($goneNames) === 1 ? 'is' : 'are') . ($logged ? ' written in the Changes tab, but' : '') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (is the disk full, or is the folder not writable by the web server?). It is tried again at the next look. The Health check in Settings says more.';
+            $orphanCount = 0;
+        } elseif ($goneNames && $logged) changes_removed_data_done($folderRel);
         if ($keptCount > 0) $galleryNotices[] = $keptCount . ' caption/location/web ' . ($keptCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos could not be written in the Changes tab (the log could not be written to), so ' . ($keptCount === 1 ? 'it was' : 'they were') . ' left where ' . ($keptCount === 1 ? 'it is' : 'they are') . ' and nothing was removed. It is tried again at the next look.';
         if ($orphanCount > 0) {
             $galleryNotices[] = $orphanCount === 1
@@ -15154,11 +15161,14 @@ function changes_data_line($bare, array $entry) {
 /** Writes what was typed for photos that are gone (a deleted file, or one renamed by hand) into the log before the gallery takes it out of the folder's data: every photo, every
  *  word, however many. They go in as many entries as it takes (a photo's line is never cut or split; an entry holds at most changes_names_per_entry() photos and about 200 KB),
  *  all in one write, so either all of it is in the log or none of it is.
- *  $gone is bare photo name => its data. Returns true when the log took it, 'nolog' when this server keeps no log (the admin chose that: the data is removed all the same), and
- *  false when a log is kept but could not take all of it (the caller then leaves the data where it is). */
+ *  $gone is bare photo name => its data. Returns true when the log took it (or already has these very entries, see below), 'nolog' when this server keeps no log (no SQLite, or no
+ *  log file yet in a folder that can't be written: the data is removed all the same), and false when a log is kept but could not take all of it (the caller then leaves the data
+ *  where it is). A log FILE that is there but that the web server may not write counts as a log that can't take it: nothing typed is lost without a record.
+ *  A caller whose own save then fails leaves the data in place and asks again at the next look; so that the log is not written to again each time, these entries are
+ *  remembered (a note in the log's meta table, made in the same write) and found again by their text; changes_removed_data_done() forgets the note once the data is gone. */
 function changes_record_removed_data($folderRel, array $gone) {
     if (!$gone) return true;
-    if (!changes_tab_wanted()) return 'nolog';
+    if (!changes_tab_wanted()) return visitlog_driver_ok() && is_file(visitlog_path()) ? false : 'nolog';
     $entries = []; $cur = []; $curBytes = 0;
     foreach ($gone as $bare => $entry) {
         $line = changes_data_line((string) $bare, is_array($entry) ? $entry : []);
@@ -15173,12 +15183,26 @@ function changes_record_removed_data($folderRel, array $gone) {
         $rows[] = [$j, count($lines)];
     }
     $now = time();
-    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now) {
+    $note = 'datahold:' . md5((string) $folderRel); $hash = md5(implode("\n", array_column($rows, 0)));
+    $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now, $note, $hash) {
+        $has = $db->prepare('SELECT v FROM meta WHERE k = ?'); $has->execute([$note]);
+        if ($has->fetchColumn() === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
+            $in = $db->prepare('SELECT 1 FROM changes WHERE kind = ? AND folder = ? AND names = ? LIMIT 1'); $all = true;
+            foreach ($rows as [$j]) { $in->execute(['data', (string) $folderRel, $j]); if ($in->fetchColumn() === false) { $all = false; break; } }
+            if ($all) return true;
+        }
         $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
+        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash]);
         return true;
     });
     return $ok === true ? true : false;
+}
+
+/** The caller has taken the data out of the folder's file: the note that these entries were waiting for that is no longer needed. */
+function changes_removed_data_done($folderRel) {
+    if (!changes_tab_wanted()) return;
+    visitlog_tx(function ($db) use ($folderRel) { $db->prepare('DELETE FROM meta WHERE k = ?')->execute(['datahold:' . md5((string) $folderRel)]); return true; });
 }
 
 /** Does this server keep the log of disk activity (and so show the Changes tab)? It lives in the visitor log's SQLite file. */
@@ -16695,7 +16719,7 @@ function health_checks($dir, $files) {
     $state = gallery_config_load();
     $cfgPath = gallery_config_path();
     if ($state['status'] === 'absent') $add('Settings and passwords', 'info', 'No settings file yet', 'Everything runs on the defaults; .gallery-config.php appears when you change something here.');
-    elseif ($state['status'] === 'ok') $add('Settings and passwords', is_writable($cfgPath) ? 'ok' : 'warn', 'Settings file readable' . (is_writable($cfgPath) ? ' and writable' : ' but not writable'), is_writable($cfgPath) ? '' : 'Changes in Settings can\'t be saved until the web server may write .gallery-config.php.');
+    elseif ($state['status'] === 'ok') $add('Settings and passwords', is_writable($cfgPath) ? 'ok' : 'bad', 'Settings file readable' . (is_writable($cfgPath) ? ' and writable' : ' but not writable'), is_writable($cfgPath) ? '' : 'Changes in Settings can\'t be saved until the web server may write .gallery-config.php (a file made by another user, for example by a restore or a copy made as root, is not writable by the web server).');
     else $add('Settings and passwords', 'bad', 'Settings file can\'t be read as settings', 'Fix or delete .gallery-config.php; until then the settings in index.php apply.');
     foreach (($GLOBALS['__gallery_config_problems'] ?? []) as $problem) $add('Settings and passwords', 'warn', 'Settings problem', $problem);
     $pwRow = function ($label, $value, $emptyStatus, $emptyDetail) use ($add) {
@@ -16733,11 +16757,13 @@ function health_checks($dir, $files) {
     $folders = [rtrim($dir, '/') => true];
     foreach ($files as $f) { $folders[containing_folder_real_path($dir, $f)] = true; if (count($folders) >= 300) break; }
     foreach (gallery_mounts() as $mountPath) if (is_string($mountPath) && is_dir($mountPath) && !is_link($mountPath)) $folders[rtrim($mountPath, '/')] = true;   // (a place from elsewhere that holds only folders is never reached by the line above, and its own title and settings are saved in it)
-    $unwritable = []; $badData = []; $withData = 0; $entries = 0;
+    $unwritable = []; $badData = []; $withData = 0; $entries = 0; $unwritableFiles = [];
+    $nameOf = function ($folder) use ($dir) { return $folder === rtrim($dir, '/') ? '(top folder)' : substr(scan_path_as_named($folder . '/x'), 0, -2); };
     foreach (array_keys($folders) as $folder) {
         if (!is_writable($folder)) $unwritable[] = $folder;
         $itemsFile = items_path($folder);
         if (!is_file($itemsFile)) continue;
+        if (!is_link($itemsFile) && !is_writable($itemsFile)) $unwritableFiles[] = $nameOf($folder) . ' (the settings file for its photos)';
         $withData++;
         [$state, $decoded] = json_file_load($itemsFile, []);
         if ($state === 'broken') { $badData[] = $folder; continue; }
@@ -16745,7 +16771,14 @@ function health_checks($dir, $files) {
     }
     $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
     $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
-    $add('Folders and files', $unwritable ? 'warn' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
+    foreach ([[links_path(), 'the share links file'], [collections_path(), 'the collections file']] as [$gf, $gl]) if (is_file($gf) && !is_link($gf) && !is_writable($gf)) $unwritableFiles[] = $gl;
+    if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own file' . (count($unwritableFiles) === 1 ? ' is' : 's are') . ' not writable by the web server',
+        'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
+        'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+        ['Give it the files, for example:', 'sudo chown -R www-data: /path/to/the/gallery'],
+        'Or let the group write: `sudo chmod -R g+w /path/to/the/gallery`, with the web server\'s user in that group. A network share may need its own permissions changed instead.',
+        'Then press Check again at the top of this page.']);
+    $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
         $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
         'The web server\'s user needs to be able to write in those folders. On Debian or Ubuntu that user is usually `www-data`; on other systems it may be `nginx`, `apache` or `http` (the command `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
         ['Give it the folder, for example:', 'sudo chown -R www-data: /path/to/the/folder'],
@@ -17137,6 +17170,11 @@ function health_database_rows($add, $dir, $files) {
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
+    } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
+        $add($G, 'bad', 'The visitor and change log can\'t be written', 'The file ' . basename($logFile) . ' is there, but the web server may not write to it (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. ' . $uses, null, '', [
+            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
+            'Then press Check again at the top of this page.']);
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
@@ -17314,8 +17352,8 @@ function health_server_rows($add) {
     $many = count($vols) > 1;
     foreach ($vols as $v) {
         $where = $many ? ' on ' . $v['name'] : '';
-        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Thumbnails, logs and captions are written there; when the disk is full they stop being kept and settings can fail to save. New photos can\'t be added either.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
-        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Photos, thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
+        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'The gallery needs room for itself on this disk too, not only for your photos: captions and settings, thumbnails, view counts, the visitor and change logs and the backup are all kept here. When the disk is full they stop being saved, settings fail to save, the Changes tab can\'t record what is removed (so the captions of deleted photos are kept until there is room), and new photos can\'t be added.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
+        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'This disk holds more than the photos you share: the gallery keeps its captions and settings, thumbnails, view counts, logs and backup here, and they grow over time. If it runs out, saving fails and the logs (the Changes tab included) stop being kept. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
     }
     if ($vols && !$many && $vols[0]['free'] >= 1073741824) $add($G, 'info', 'Disk space: ' . health_bytes($vols[0]['free']) . ' free (' . $vols[0]['pct'] . '%)');
     if ($many) {

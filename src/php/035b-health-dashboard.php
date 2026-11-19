@@ -127,6 +127,11 @@ function health_database_rows($add, $dir, $files) {
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
+    } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
+        $add($G, 'bad', 'The visitor and change log can\'t be written', 'The file ' . basename($logFile) . ' is there, but the web server may not write to it (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. ' . $uses, null, '', [
+            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
+            'Then press Check again at the top of this page.']);
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
@@ -304,8 +309,8 @@ function health_server_rows($add) {
     $many = count($vols) > 1;
     foreach ($vols as $v) {
         $where = $many ? ' on ' . $v['name'] : '';
-        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Thumbnails, logs and captions are written there; when the disk is full they stop being kept and settings can fail to save. New photos can\'t be added either.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
-        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Photos, thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
+        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'The gallery needs room for itself on this disk too, not only for your photos: captions and settings, thumbnails, view counts, the visitor and change logs and the backup are all kept here. When the disk is full they stop being saved, settings fail to save, the Changes tab can\'t record what is removed (so the captions of deleted photos are kept until there is room), and new photos can\'t be added.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
+        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'This disk holds more than the photos you share: the gallery keeps its captions and settings, thumbnails, view counts, logs and backup here, and they grow over time. If it runs out, saving fails and the logs (the Changes tab included) stop being kept. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
     }
     if ($vols && !$many && $vols[0]['free'] >= 1073741824) $add($G, 'info', 'Disk space: ' . health_bytes($vols[0]['free']) . ' free (' . $vols[0]['pct'] . '%)');
     if ($many) {

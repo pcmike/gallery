@@ -13756,6 +13756,84 @@ echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n"
 }
 
 /* --------------------------------------------------------------------- */
+// chunk-9 follow-up (pass 5): a log file the web server may not write keeps the typed data (N21), the same entry is not written again and again when the folder's own file
+// can't be saved (N20), and Health says loudly when the gallery's own files can't be written
+echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log once, Health is loud ==\n";
+{
+    $p5Fx = new_fixture_dir('p5log'); mkdir("$p5Fx/Alpha", 0777, true); make_jpeg("$p5Fx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$p5Fx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => 'must not be lost'], 'a2.jpg' => ['caption' => 'stays']]]) . "\n");
+    file_put_contents("$p5Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'p5-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$p5Fx/index.php"); @touch("$p5Fx/index.php", time() - 3600);
+    $p5Port = find_free_port(); $p5Proc = start_server($p5Fx, $p5Port); $p5Base = "http://127.0.0.1:$p5Port";
+    [, , $p5H] = http_post("$p5Base/?admin", ['access_code' => 'p5-admin-pw-1'], [], false); $p5Own = ['Cookie: ' . extract_cookie_header($p5H)];
+    http_get("$p5Base/?admin&classic=1", $p5Own);   // (the first look makes the log)
+    $p5Logs = glob("$p5Fx/.gallery-visits-*") ?: [];
+    $p5Items = fn () => json_decode(data_file_strip_guard_for_tests((string) file_get_contents("$p5Fx/Alpha/.gallery-items.php")), true)['items'] ?? [];
+    $p5Rows = function () use ($p5Fx) { $f = glob("$p5Fx/.gallery-visits-*.sqlite")[0] ?? null; if (!$f) return -1; $db = new PDO('sqlite:' . $f); return (int) $db->query("SELECT COUNT(*) FROM changes WHERE kind = 'data'")->fetchColumn(); };
+    foreach ($p5Logs as $p5L) @chmod($p5L, 0444);
+    if (!$p5Logs || is_writable($p5Logs[0])) {
+        skip_note('[N21] the log file can be written here whatever its mode (the suite runs as a user that ignores it), so an unwritable log can\'t be made');
+    } else {
+        // (the gallery puts a log file of its own user back to a mode it can write whenever it opens it, so each step sets the read-only mode again: what it can't mend is a file of another user)
+        $p5Ro = function () use ($p5Logs) { foreach ($p5Logs as $p5L) @chmod($p5L, 0444); };
+        $p5Health = html_entity_decode((string) http_get("$p5Base/?admin&classic=1", $p5Own)[1]);
+        check('[N21] Health says in a red row that the log can\'t be written, and what that means for the typed data, with how to fix it', ($p5I = strpos($p5Health, 'The visitor and change log can\'t be written')) !== false && str_contains(substr($p5Health, $p5I, 3500), 'are kept in the folder, not removed') && str_contains(substr($p5Health, $p5I, 3500), 'sudo chown www-data') && str_contains(substr($p5Health, max(0, $p5I - 300), 300), 'health-bad'));
+        check('[N21] ...it is a loud row (counted among the things to look at), not a quiet note', preg_match('~(\d+) things? to look at~', $p5Health, $p5M) === 1 && (int) $p5M[1] >= 1);
+        $p5Ro();
+        http_get("$p5Base/");   // (a stranger's view would clean up the entry of the photo that is not there)
+        check('[N21] a log file that is there but that the web server may not write keeps the typed data: the entry of the deleted photo is NOT removed and nothing is written', ($p5Items()['a1.jpg']['caption'] ?? null) === 'must not be lost' && $p5Rows() === 0, json_encode($p5Items()));
+        $p5Ro();
+        $p5Front = (string) http_get("$p5Base/", $p5Own)[1];
+        check('[N21] ...the owner is told on the page', str_contains($p5Front, 'could not be written in the Changes tab') && str_contains($p5Front, 'nothing was removed'));
+        foreach ($p5Logs as $p5L) @chmod($p5L, 0644);
+        http_get("$p5Base/");
+        check('[N21] ...with the log writable again, the next look writes it in the Changes tab and then removes it', !isset($p5Items()['a1.jpg']) && $p5Rows() === 1, json_encode($p5Items()) . ' rows ' . $p5Rows());
+    }
+    // Health: a settings file for photos that the web server may not write, in a folder it may write in (a restore as another user does this)
+    $p5Itf = "$p5Fx/Alpha/.gallery-items.php"; @chmod($p5Itf, 0444);
+    if (is_writable($p5Itf)) {
+        skip_note('[Health] the settings file can be written here whatever its mode, so an unwritable one can\'t be made');
+    } else {
+        $p5Health2 = html_entity_decode((string) http_get("$p5Base/?admin&classic=1", $p5Own)[1]);
+        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}sudo chown -R www-data~s', $p5Health2) === 1);
+    }
+    @chmod($p5Itf, 0644);
+    proc_terminate($p5Proc);
+    // N20: the log takes the entry and then the folder's own file can't be saved (the folder's disk is full): the entry is written ONCE however many times the page is looked at.
+    // The folder gets a small disk of its own that only this server sees (a user namespace and a tmpfs), filled up.
+    $p5Probe = new_fixture_dir('p5probe'); $p5Out = [];
+    exec('unshare -rm sh -c ' . escapeshellarg('mount -t tmpfs -o size=1m tmpfs ' . escapeshellarg($p5Probe)) . ' 2>&1', $p5Out, $p5Rc);
+    if (!extension_loaded('pdo_sqlite')) skip_note('[N20] this PHP has no pdo_sqlite, so there is no log to write twice');
+    elseif ($p5Rc !== 0) skip_note('[N20] this machine does not let the suite make a small disk of its own (unshare -rm and a tmpfs), so a full folder can\'t be made');
+    else {
+        $fzFx = new_fixture_dir('p5full'); $fzStage = new_fixture_dir('p5stage'); mkdir("$fzFx/Asia", 0777, true);
+        $fzItems = ['gone-asia.jpg' => ['caption' => 'typed in Asia']];
+        for ($i = 0; $i < 3; $i++) { make_jpeg("$fzStage/keep$i.jpg", 40, 30, 30 * $i, 90, 160); $fzItems["keep$i.jpg"] = ['caption' => str_repeat('x', 3000)]; }
+        file_put_contents("$fzStage/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => $fzItems]) . "\n");
+        file_put_contents("$fzFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'p5-admin-pw-2', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$fzFx/index.php"); @touch("$fzFx/index.php", time() - 3600);
+        $fzPort = find_free_port(); $fzProc0 = start_server($fzFx, $fzPort); $fzBase = "http://127.0.0.1:$fzPort";
+        [, , $fzH] = http_post("$fzBase/?admin", ['access_code' => 'p5-admin-pw-2'], [], false); $fzOwn = ['Cookie: ' . extract_cookie_header($fzH)];
+        http_get("$fzBase/?admin&classic=1", $fzOwn); proc_terminate($fzProc0); usleep(300000);   // (the log is made on the ordinary disk, outside the small one)
+        $fill = 'php -r ' . escapeshellarg('$h = fopen($argv[1] . "/fill.bin", "w"); while (@fwrite($h, str_repeat("x", 4096)) === 4096) {} fclose($h);');
+        $script = 'mount -t tmpfs -o size=1m tmpfs ' . escapeshellarg("$fzFx/Asia") . ' && cp -a ' . escapeshellarg("$fzStage/.") . ' ' . escapeshellarg("$fzFx/Asia/") . ' && ' . str_replace('php -r', escapeshellarg(PHP_BINARY) . ' -r', $fill) . ' ' . escapeshellarg("$fzFx/Asia") . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $fzPort . ' -t ' . escapeshellarg($fzFx);
+        $fzProc = proc_open(['unshare', '-rm', 'sh', '-c', $script], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $fzPipes); $cleanupProcs[] = $fzProc;
+        $fzUp = false; for ($i = 0; $i < 100 && !$fzUp; $i++) { $c = @fsockopen('127.0.0.1', $fzPort, $e1, $e2, 0.2); if ($c) { fclose($c); $fzUp = true; } else usleep(100000); }
+        $fzRows = function () use ($fzFx) { $f = glob("$fzFx/.gallery-visits-*.sqlite")[0] ?? null; if (!$f) return -1; $db = new PDO('sqlite:' . $f); return (int) $db->query("SELECT COUNT(*) FROM changes WHERE kind = 'data'")->fetchColumn(); };
+        if (!$fzUp) check('[N20] the full folder\'s server started', false);
+        else {
+            foreach (['/?folder=Asia', '/?folder=Asia', '/', '/'] as $fzPath) http_get($fzBase . $fzPath);
+            check('[N20] the log took the entry and the folder\'s file could not be saved: four looks by strangers wrote ONE entry, not four', $fzRows() === 1, 'entries ' . $fzRows());
+            [, , $fzH2] = http_post("$fzBase/?admin", ['access_code' => 'p5-admin-pw-2'], [], false); $fzOwn2 = ['Cookie: ' . extract_cookie_header($fzH2)];
+            $fzFront = html_entity_decode((string) http_get("$fzBase/", $fzOwn2)[1]);
+            check('[N20] ...and the owner is told the truth: written in the Changes tab but still in the folder because its file could not be saved, and NOT that it was cleaned up', str_contains($fzFront, 'written in the Changes tab, but still in the folder "Asia"') && !str_contains($fzFront, 'was cleaned up'), substr(strip_tags($fzFront), 0, 300));
+            check('[N20] ...and still one entry after the owner\'s look', $fzRows() === 1, 'entries ' . $fzRows());
+        }
+        @proc_terminate($fzProc);
+    }
+}
+
+/* --------------------------------------------------------------------- */
 // The grid and the viewer must number the photos the same way: a collection's card is not in the viewer's list (its photos are, where they really are)
 echo "== a collection's card does not shift the viewer's numbering ==\n";
 {
