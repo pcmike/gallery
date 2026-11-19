@@ -4036,13 +4036,14 @@ if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
 }
 // Collections shown on the front page (those in it, and those marked to show there) are cards among the folders. They claim no photo: every
 // member stays where it really is, and a card shows only the members this visitor may see (the filter below drops one with none).
+$collectionCardKeys = [];   // (the keys of the groups that are collection cards: a card opens a page of its own, never the viewer, so its photos are not in the viewer's list)
 if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
     // (what this visitor may see is worked out here for the cards: a card's address depends on whether the folder its collection is kept in shows them anything)
     $cardVisible = is_admin_browser() ? $files : array_values(array_filter($files, function ($f) use ($dir, $itemsData, $photoPass) {
         return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);
     }));
     foreach (collection_cards($dir, '', $files, $cardVisible) as [$collectionKey, $collectionRec, $collectionFiles]) {
-        if (!isset($folderGroups[$collectionKey])) $folderGroups[$collectionKey] = $collectionFiles;
+        if (!isset($folderGroups[$collectionKey])) { $folderGroups[$collectionKey] = $collectionFiles; $collectionCardKeys[$collectionKey] = true; }
     }
 }
 $folderGroupKeys = array_fill_keys(array_keys($folderGroups), true);
@@ -4297,13 +4298,7 @@ foreach ($groupOrder as $key) {
 }
 $groups = $orderedGroups;
 
-$files = [];
-foreach ($groups as $groupFiles) {
-    foreach ($groupFiles as $f) {
-        $files[] = $f;
-    }
-}
-$files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
+$files = viewer_flat_list($groups, $collectionCardKeys);
 
 // Reverse lookup used by ?track below: which $groups key currently
 // contains a given filename. Needed because an explicit named group's
@@ -26226,7 +26221,19 @@ function flat_divider_html($boxKey, $sub, $boxSlug) {
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = [], $folderMeta = [], $folderLinkPrefix = '') {
+/** The viewer's list of photos: what the cards show, in the cards' order. A collection's card opens the collection's own page and not the viewer,
+ *  and every photo in it is also on the card of the place it really is, so the card adds nothing to the list (and build_gallery_html, which numbers
+ *  each tile from this same list, does not count it). */
+function viewer_flat_list($groups, $collectionCardKeys) {
+    $out = [];
+    foreach ($groups as $key => $groupFiles) {
+        if (isset($collectionCardKeys[$key])) continue;
+        foreach ($groupFiles as $f) $out[] = $f;
+    }
+    return $out;
+}
+
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = [], $folderMeta = [], $folderLinkPrefix = '', $collectionCardKeys = []) {
     $html = '';
     $flatIndex = 0;
 
@@ -26243,7 +26250,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
             $label = $groupLabels[$key] ?? $key;
             $coverStatus = $groupStatus[$key] ?? '';
             $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null, $coverStatus, status_accent_color($coverStatus, $groupColors[$key] ?? null));
-            $flatIndex += count($groupFiles);
+            if (!isset($collectionCardKeys[$key])) $flatIndex += count($groupFiles);   // (a collection's photos are in the list where they really are, not a second time at its card)
             continue;
         }
 
@@ -27978,6 +27985,7 @@ $folderMdContents = [];
 $folderGalleryNotices = [];
 $folderNoteBoxesHtml = [];
 if ($currentFolderPath !== null) {
+    $collectionCardKeys = [];   // (this level's own: the front page's cards are not on a folder's page)
     $folderFiles = $currentFolderFiles;
     $folderPrefix = $currentFolderPath . '/';
     $folderLinkPrefix = $folderPrefix;
@@ -28005,7 +28013,7 @@ if ($currentFolderPath !== null) {
         // The collections that live in this folder are cards among its folders (never in Flat, which shows the photos in boxes).
         if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
             foreach (collection_cards($dir, $currentFolderPath, $allFiles, $files) as [$collectionKey, $collectionRec, $collectionFiles]) {
-                if (!isset($level['folders'][$collectionKey])) $level['folders'][$collectionKey] = $collectionFiles;
+                if (!isset($level['folders'][$collectionKey])) { $level['folders'][$collectionKey] = $collectionFiles; $collectionCardKeys[$collectionKey] = true; }
             }
         }
     }
@@ -28100,21 +28108,10 @@ if ($currentFolderPath !== null) {
     $groups = $orderedHere;
     // The flat list has to follow the new card order exactly: every
     // card's lightbox index is drawn from it.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
-    }
-    $files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
+    $files = viewer_flat_list($groups, $collectionCardKeys);
 } elseif (!is_revealed()) {
     // The front page: a link's own photos were moved into loose groups above, so the flat list follows the cards' order.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
-    }
+    $files = viewer_flat_list($groups, $collectionCardKeys);
 }
 
 // A subfolder may optionally carry its own {gallery}-marked .md,
@@ -28304,7 +28301,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <div class="empty">No media here yet.</div>
 <?php else: ?>
   <div class="gallery<?= $fewCovers . $oneUp ?>">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix, $collectionCardKeys) ?>
   </div>
 <?php endif; ?>
 

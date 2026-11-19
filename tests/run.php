@@ -13755,5 +13755,40 @@ echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n"
     foreach ([$ugSlowProc, $ugProc] as $ugP) @proc_terminate($ugP);   // (the suite keeps every server until its end: these are done)
 }
 
+/* --------------------------------------------------------------------- */
+// The grid and the viewer must number the photos the same way: a collection's card is not in the viewer's list (its photos are, where they really are)
+echo "== a collection's card does not shift the viewer's numbering ==\n";
+{
+    $cnFx = new_fixture_dir('collnumber'); mkdir("$cnFx/Rand", 0777, true);
+    foreach (['r1.jpg', 'r2.jpg', 'r3.jpg'] as $cnI => $cnF) make_jpeg("$cnFx/$cnF", 40, 30, 30 + $cnI * 40, 90, 160);
+    for ($cnI = 1; $cnI <= 8; $cnI++) make_jpeg("$cnFx/Rand/" . sprintf('p%02d.jpg', $cnI), 40, 30, 20 + $cnI * 20, 120, 90);
+    $cnG = data_file_guard_line_for_tests();
+    file_put_contents("$cnFx/Rand/.gallery-items.php", $cnG . json_encode(['folderId' => 'bbbbbbbbbbb1']));
+    file_put_contents("$cnFx/.gallery-collections.php", $cnG . json_encode(['collections' => [
+        ['id' => 'c000000000011', 'parent' => 'bbbbbbbbbbb1', 'name' => 'bestof', 'title' => 'Best of', 'items' => [['fid' => 'bbbbbbbbbbb1', 'file' => 'p03.jpg']], 'at' => 1],
+        ['id' => 'c000000000012', 'parent' => '', 'name' => 'toppicks', 'title' => 'Top picks', 'items' => [['fid' => 'bbbbbbbbbbb1', 'file' => 'p05.jpg']], 'at' => 1],
+    ]]));
+    file_put_contents("$cnFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cn-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+    copy($indexSrc, "$cnFx/index.php");
+    $cnPort = find_free_port(); $cnProc = start_server($cnFx, $cnPort); $cnBase = "http://127.0.0.1:$cnPort";
+    [, , $cnH] = http_post("$cnBase/?admin", ['access_code' => 'cn-admin-pw-1'], [], false); $cnOwn = ['Cookie: ' . extract_cookie_header($cnH)];
+    // Every photo tile on the page must open, by its number, the very photo it shows.
+    $cnCheck = function (string $page) {
+        if (!preg_match('/const files = (\[[^;]*\]);/', $page, $m)) return 'no list';
+        $list = json_decode($m[1], true); $seen = 0;
+        preg_match_all('/onclick="openLightbox\((\d+)\)"><img src="\?img=([^&"]+)/', $page, $t, PREG_SET_ORDER);
+        foreach ($t as $tile) { $seen++; if (($list[(int) $tile[1]] ?? null) !== rawurldecode($tile[2])) return 'tile ' . rawurldecode($tile[2]) . ' opens ' . ($list[(int) $tile[1]] ?? 'nothing'); }
+        return $list === array_values(array_unique($list)) ? ($seen > 0 ? 'ok' : 'no tiles') : 'a photo is in the list twice';
+    };
+    foreach ([['a stranger', []], ['the owner', $cnOwn]] as [$cnWho, $cnHdr]) {
+        check("[collection numbering] in a folder that holds a collection, every photo tile opens the photo it shows ($cnWho)", $cnCheck((string) http_get("$cnBase/?folder=Rand", $cnHdr)[1]) === 'ok', $cnCheck((string) http_get("$cnBase/?folder=Rand", $cnHdr)[1]));
+    }
+    [, $cnFront] = http_get("$cnBase/", $cnOwn); preg_match('/const files = (\[[^;]*\]);/', (string) $cnFront, $cnM);
+    check('[collection numbering] ...and the front page, with a collection card among the folders and loose photos, lists each photo once, and its tiles open what they show (the owner)', $cnCheck((string) $cnFront) === 'ok' && count(json_decode($cnM[1] ?? '[]', true)) === 11, $cnCheck((string) $cnFront));
+    [, $cnFrontS] = http_get("$cnBase/");
+    check('[collection numbering] ...and for a stranger', $cnCheck((string) $cnFrontS) === 'ok', $cnCheck((string) $cnFrontS));
+    @proc_terminate($cnProc);
+}
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

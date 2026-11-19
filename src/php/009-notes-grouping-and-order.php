@@ -126,13 +126,14 @@ if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
 }
 // Collections shown on the front page (those in it, and those marked to show there) are cards among the folders. They claim no photo: every
 // member stays where it really is, and a card shows only the members this visitor may see (the filter below drops one with none).
+$collectionCardKeys = [];   // (the keys of the groups that are collection cards: a card opens a page of its own, never the viewer, so its photos are not in the viewer's list)
 if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
     // (what this visitor may see is worked out here for the cards: a card's address depends on whether the folder its collection is kept in shows them anything)
     $cardVisible = is_admin_browser() ? $files : array_values(array_filter($files, function ($f) use ($dir, $itemsData, $photoPass) {
         return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);
     }));
     foreach (collection_cards($dir, '', $files, $cardVisible) as [$collectionKey, $collectionRec, $collectionFiles]) {
-        if (!isset($folderGroups[$collectionKey])) $folderGroups[$collectionKey] = $collectionFiles;
+        if (!isset($folderGroups[$collectionKey])) { $folderGroups[$collectionKey] = $collectionFiles; $collectionCardKeys[$collectionKey] = true; }
     }
 }
 $folderGroupKeys = array_fill_keys(array_keys($folderGroups), true);
@@ -387,13 +388,7 @@ foreach ($groupOrder as $key) {
 }
 $groups = $orderedGroups;
 
-$files = [];
-foreach ($groups as $groupFiles) {
-    foreach ($groupFiles as $f) {
-        $files[] = $f;
-    }
-}
-$files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
+$files = viewer_flat_list($groups, $collectionCardKeys);
 
 // Reverse lookup used by ?track below: which $groups key currently
 // contains a given filename. Needed because an explicit named group's

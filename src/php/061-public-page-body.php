@@ -154,6 +154,7 @@ $folderMdContents = [];
 $folderGalleryNotices = [];
 $folderNoteBoxesHtml = [];
 if ($currentFolderPath !== null) {
+    $collectionCardKeys = [];   // (this level's own: the front page's cards are not on a folder's page)
     $folderFiles = $currentFolderFiles;
     $folderPrefix = $currentFolderPath . '/';
     $folderLinkPrefix = $folderPrefix;
@@ -181,7 +182,7 @@ if ($currentFolderPath !== null) {
         // The collections that live in this folder are cards among its folders (never in Flat, which shows the photos in boxes).
         if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
             foreach (collection_cards($dir, $currentFolderPath, $allFiles, $files) as [$collectionKey, $collectionRec, $collectionFiles]) {
-                if (!isset($level['folders'][$collectionKey])) $level['folders'][$collectionKey] = $collectionFiles;
+                if (!isset($level['folders'][$collectionKey])) { $level['folders'][$collectionKey] = $collectionFiles; $collectionCardKeys[$collectionKey] = true; }
             }
         }
     }
@@ -276,21 +277,10 @@ if ($currentFolderPath !== null) {
     $groups = $orderedHere;
     // The flat list has to follow the new card order exactly: every
     // card's lightbox index is drawn from it.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
-    }
-    $files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
+    $files = viewer_flat_list($groups, $collectionCardKeys);
 } elseif (!is_revealed()) {
     // The front page: a link's own photos were moved into loose groups above, so the flat list follows the cards' order.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
-    }
+    $files = viewer_flat_list($groups, $collectionCardKeys);
 }
 
 // A subfolder may optionally carry its own {gallery}-marked .md,
@@ -480,7 +470,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <div class="empty">No media here yet.</div>
 <?php else: ?>
   <div class="gallery<?= $fewCovers . $oneUp ?>">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix, $collectionCardKeys) ?>
   </div>
 <?php endif; ?>
 

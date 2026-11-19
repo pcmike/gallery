@@ -448,7 +448,19 @@ function flat_divider_html($boxKey, $sub, $boxSlug) {
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = [], $folderMeta = [], $folderLinkPrefix = '') {
+/** The viewer's list of photos: what the cards show, in the cards' order. A collection's card opens the collection's own page and not the viewer,
+ *  and every photo in it is also on the card of the place it really is, so the card adds nothing to the list (and build_gallery_html, which numbers
+ *  each tile from this same list, does not count it). */
+function viewer_flat_list($groups, $collectionCardKeys) {
+    $out = [];
+    foreach ($groups as $key => $groupFiles) {
+        if (isset($collectionCardKeys[$key])) continue;
+        foreach ($groupFiles as $f) $out[] = $f;
+    }
+    return $out;
+}
+
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = [], $folderMeta = [], $folderLinkPrefix = '', $collectionCardKeys = []) {
     $html = '';
     $flatIndex = 0;
 
@@ -465,7 +477,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
             $label = $groupLabels[$key] ?? $key;
             $coverStatus = $groupStatus[$key] ?? '';
             $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null, $coverStatus, status_accent_color($coverStatus, $groupColors[$key] ?? null));
-            $flatIndex += count($groupFiles);
+            if (!isset($collectionCardKeys[$key])) $flatIndex += count($groupFiles);   // (a collection's photos are in the list where they really are, not a second time at its card)
             continue;
         }
 
