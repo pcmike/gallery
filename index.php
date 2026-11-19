@@ -1237,7 +1237,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'backupdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'tz', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'backupdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'tz', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'changes_entry', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -5169,6 +5169,17 @@ function geo_resolve_ips($host) {
     return array_values($ips);
 }
 
+/** The public IPv6 addresses a host stands for (its own address when it is one): the ones a connection may be tied to when the IPv4 address it was tied to can't be reached. A private
+ *  or reserved one is left out, never connected to. */
+function geo_public_ipv6($host) {
+    $host = strtolower(trim((string) $host, '[]'));
+    if ($host === '') return [];
+    if (filter_var($host, FILTER_VALIDATE_IP) !== false) return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false && geo_ip_is_public($host) ? [$host] : [];
+    $out = [];
+    if (function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6']) && geo_ip_is_public($r['ipv6'])) $out[] = $r['ipv6'];
+    return array_values(array_unique($out));
+}
+
 /** Is this address's host one of $hosts (a name, or ".example.com" for it and everything under it)? */
 function geo_host_in($url, array $hosts) {
     $h = strtolower((string) (parse_url((string) $url, PHP_URL_HOST) ?? ''));
@@ -5194,7 +5205,7 @@ function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinI
             CURLOPT_WRITEFUNCTION => function ($c, $d) use (&$out, $maxBytes) { $out['body'] .= $d; return strlen($out['body']) > $maxBytes ? 0 : strlen($d); }]);
         curl_exec($ch);
         $out['status'] = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE); $out['headers'] = $hd;
-        if (curl_errno($ch) !== 0 && $out['status'] === 0) $out['error'] = curl_error($ch);
+        if (curl_errno($ch) !== 0 && $out['status'] === 0) { $out['error'] = curl_error($ch); $out['errno'] = curl_errno($ch); }
         if (PHP_VERSION_ID < 80500) curl_close($ch);   // (deprecated in PHP 8.5, where the handle is closed when it goes out of use)
         return $out;
     }
@@ -5233,8 +5244,13 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
             foreach ($ips as $ip) if (!geo_ip_is_public($ip)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is on this machine or a private network, so it was not followed.'; return $out; }
             if (!$ips && function_exists('gethostbynamel')) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which could not be found.'; return $out; }
             foreach ($ips as $ip) if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) { $pin = $ip; break; }
+            if ($pin === null) foreach ($ips as $ip) { $pin = $ip; break; }   // (a name with no IPv4 address at all: tied to the IPv6 address that was checked)
         }
         $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $pin);
+        // The IPv4 address it was tied to could not be reached (curl's "could not connect" or a timeout): a server with no IPv4 route, reaching IPv4 only through a translator, is
+        // like that. The name's own public IPv6 addresses, checked the same way, are tried next; a private one is never used.
+        if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true))
+            foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST)), 0, 2) as $v6) { $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $v6); if ($r['status'] !== 0) break; }
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
             $next = geo_resolve_url($cur, $r['headers']['location']);
             if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }
@@ -16998,6 +17014,17 @@ function render_admin_changes_panel($csrfToken) {
 <?php
 }
 
+/** The lines of one typed-data entry (every photo's name and what was typed for it), as the markup that goes inside its opened line; null when there is no such entry. */
+function changes_data_names_html($id) {
+    $row = changes_read(function ($db) use ($id) { $st = $db->prepare('SELECT names, more FROM changes WHERE id = ? AND kind = ?'); $st->execute([(int) $id, 'data']); return $st->fetch(); }, null);
+    if (!is_array($row)) return null;
+    $names = json_decode((string) $row['names'], true); $names = is_array($names) ? $names : [];
+    $o = '';
+    foreach ($names as $x) $o .= '<code>' . htmlspecialchars((string) $x, ENT_QUOTES, 'UTF-8') . '</code>';
+    if ((int) $row['more'] > 0) $o .= '<em class="muted">and ' . number_format((int) $row['more']) . ' more</em>';
+    return $o;
+}
+
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
     $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
@@ -17028,7 +17055,11 @@ function changes_entries_html($rows, $seen) {
         elseif ($kind === 'data') $text = 'What was typed for ' . number_format($n) . ' photo' . ($n === 1 ? '' : 's') . ' in ' . $link . ' was removed (the photo' . ($n === 1 ? ' is' : 's are') . ' gone: deleted, or renamed by hand)';
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
-        $hay = strtolower($where . ' ' . implode(' ', $names) . ' ' . implode(' ', $gone));
+        // A typed-data entry holds every word that was typed for each photo: it can be megabytes, so the list does not carry it. It is fetched when the line is opened (changes_data_names_html),
+        // and the search looks at the photos' names, which is what the box says it searches.
+        $lazy = $kind === 'data';
+        $hayNames = $lazy ? array_map(function ($x) { $q = strpos((string) $x, ' — '); return $q === false ? (string) $x : substr((string) $x, 0, $q); }, $names) : $names;
+        $hay = strtolower($where . ' ' . implode(' ', $hayNames) . ' ' . implode(' ', $gone));
         $list = function ($ns, $extra) use ($esc) { $o = ''; foreach ($ns as $x) $o .= '<code>' . $esc($x) . '</code>'; if ($extra > 0) $o .= '<em class="muted">and ' . number_format($extra) . ' more</em>'; return $o; };
     ?>
       <div class="ch-e<?= (int) $r['id'] > $seen ? ' ch-new' : '' ?>" data-id="<?= (int) $r['id'] ?>" data-g="<?= $esc($groupOf[$kind] ?? '') ?>" data-t="<?= (int) $r['t'] ?>" data-text="<?= $esc($hay) ?>">
@@ -17040,6 +17071,8 @@ function changes_entries_html($rows, $seen) {
         <div class="ch-x" hidden>
           <?php if ($kind === 'ren'): ?>
             <div class="ch-cols"><div class="ch-col ch-gone"><h4>Gone (<?= number_format($n) ?>)</h4><?= $list($gone, max(0, $n - count($gone))) ?></div><div class="ch-col ch-came"><h4>New (<?= number_format($n) ?>)</h4><?= $list($names, $more) ?></div></div>
+          <?php elseif ($lazy): ?>
+            <div class="ch-names ch-lazy" data-id="<?= (int) $r['id'] ?>"></div>
           <?php else: ?>
             <div class="ch-names"><?= $list($names, $more) ?></div>
           <?php endif; ?>
@@ -23594,6 +23627,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
+    // A typed-data entry's lines are not in the list (they can be megabytes): they are fetched when its line is opened.
+    function loadLazy(e) {
+      var box = e.querySelector('.ch-lazy'); if (!box || box.getAttribute('data-loaded') || box.getAttribute('data-loading')) return;
+      box.setAttribute('data-loading', '1'); box.textContent = 'Loading\u2026';
+      fetch('?admin&changes_entry=' + encodeURIComponent(box.getAttribute('data-id')), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        box.removeAttribute('data-loading');
+        if (j && j.ok) { box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
+      }).catch(function () { box.removeAttribute('data-loading'); box.textContent = 'Could not load this entry. Close it and open it again.'; });
+    }
     var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
     function refreshList() {
       if (refreshing) return refreshing;
@@ -23605,6 +23647,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           if (fresh[e.getAttribute('data-id')]) e.classList.add('ch-new');
           if (!open[e.getAttribute('data-id')]) return;
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
+          loadLazy(e);
         });
         paint(list);
         [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
@@ -23635,6 +23678,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
       x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.innerHTML = open ? '<i class="tri up" aria-hidden="true"></i> Hide' : '<i class="tri" aria-hidden="true"></i> Show';
+      if (open) loadLazy(b.closest('.ch-e'));
     });
     // Trim the log…
     var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');
@@ -24056,6 +24100,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         $chRows = changes_list(500);
         $chSeen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
         admin_json_exit(['ok' => true, 'n' => count($chRows), 'html' => changes_entries_html($chRows, $chSeen), 'counts' => array_map(function ($g) { return $g[1]; }, changes_group_counts($chRows))]);
+    }
+    if (isset($_GET['changes_entry'])) {   // one typed-data entry's lines (what was typed for each photo), asked for when its line in the Changes tab is opened
+        header('Cache-Control: no-store');
+        $chHtml = is_string($_GET['changes_entry']) && preg_match('/^\d{1,12}$/D', $_GET['changes_entry']) === 1 ? changes_data_names_html((int) $_GET['changes_entry']) : null;
+        admin_json_exit($chHtml === null ? ['ok' => false] : ['ok' => true, 'html' => $chHtml]);
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');

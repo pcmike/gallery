@@ -3529,6 +3529,21 @@ try:
         comes_back()
         chl = b.js("(() => ({n: document.querySelectorAll('.ch-e[data-text*=chtab]:not([hidden])').length, open: !document.querySelector('.ch-e[data-text*=chtab1] .ch-x').hidden, q: document.querySelector('.ch-search').value}))()")
         ok(chl["n"] == 2 and chl["open"] and chl["q"] == "chtab", "[changes tab] a photo arriving while the tab is in front is drawn when the window comes back, and the entry you opened and the search stay", str(chl))
+        # typed data removed for a photo that is gone: the list carries no text of it; the lines come when the entry is opened, and stay when the list is drawn again
+        gp = SITE_L + "/Rome/.gallery-items.php"
+        gd = json.loads(open(gp).read().split("\n", 1)[1]) if os.path.exists(gp) else {}
+        gd.setdefault("items", {})["ghost-typed.jpg"] = {"caption": "ghost caption words"}; open(gp, "w").write(LGUARD + json.dumps(gd) + "\n")
+        try: urllib.request.urlopen(BL + "/?folder=Rome").read()   # (a stranger's view does the tidying)
+        except Exception: pass
+        comes_back()
+        gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return e ? {text: e.querySelector('.ch-lazy').textContent, hidden: e.querySelector('.ch-x').hidden} : null; })()")
+        ok(gl is not None and gl["text"] == "" and gl["hidden"], "[changes tab] a typed-data entry is in the list with its lines not carried (they are fetched when it is opened)", str(gl))
+        b.js("document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed] .ch-tg').click()"); b.drain(1.5)
+        gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return e.querySelector('.ch-lazy').textContent; })()")
+        ok("ghost-typed.jpg" in gl and "Caption: ghost caption words" in gl, "[changes tab] opening it brings what was typed for the photo", gl)
+        comes_back()
+        gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return {open: !e.querySelector('.ch-x').hidden, text: e.querySelector('.ch-lazy').textContent}; })()")
+        ok(gl["open"] and "Caption: ghost caption words" in gl["text"], "[changes tab] ...and when the list is drawn again with the entry open it is still open, with its lines", str(gl))
         # the kinds list is the Visitors tab's own (a list under the chip: rows with a tick, Done), stays open while ticking, Esc and Done close it
         b.js("document.querySelector('#changes .ch-pill').click()"); b.drain(0.3)
         pl = b.js("(() => { const p = document.querySelector('#changes .ch-pop'), c = document.querySelector('#changes .ch-pill'), o = p.querySelector('.vt-opt[data-g=add]'); return {open: !p.hidden, exp: c.getAttribute('aria-expanded'), radius: getComputedStyle(p).borderRadius, minw: getComputedStyle(p).minWidth, chip: getComputedStyle(c).borderRadius, tick: getComputedStyle(o.querySelector('.tk')).visibility, all: p.querySelector('[data-all]').classList.contains('on')}; })()")

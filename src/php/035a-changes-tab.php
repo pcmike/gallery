@@ -43,6 +43,17 @@ function render_admin_changes_panel($csrfToken) {
 <?php
 }
 
+/** The lines of one typed-data entry (every photo's name and what was typed for it), as the markup that goes inside its opened line; null when there is no such entry. */
+function changes_data_names_html($id) {
+    $row = changes_read(function ($db) use ($id) { $st = $db->prepare('SELECT names, more FROM changes WHERE id = ? AND kind = ?'); $st->execute([(int) $id, 'data']); return $st->fetch(); }, null);
+    if (!is_array($row)) return null;
+    $names = json_decode((string) $row['names'], true); $names = is_array($names) ? $names : [];
+    $o = '';
+    foreach ($names as $x) $o .= '<code>' . htmlspecialchars((string) $x, ENT_QUOTES, 'UTF-8') . '</code>';
+    if ((int) $row['more'] > 0) $o .= '<em class="muted">and ' . number_format((int) $row['more']) . ' more</em>';
+    return $o;
+}
+
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
     $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
@@ -73,7 +84,11 @@ function changes_entries_html($rows, $seen) {
         elseif ($kind === 'data') $text = 'What was typed for ' . number_format($n) . ' photo' . ($n === 1 ? '' : 's') . ' in ' . $link . ' was removed (the photo' . ($n === 1 ? ' is' : 's are') . ' gone: deleted, or renamed by hand)';
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
-        $hay = strtolower($where . ' ' . implode(' ', $names) . ' ' . implode(' ', $gone));
+        // A typed-data entry holds every word that was typed for each photo: it can be megabytes, so the list does not carry it. It is fetched when the line is opened (changes_data_names_html),
+        // and the search looks at the photos' names, which is what the box says it searches.
+        $lazy = $kind === 'data';
+        $hayNames = $lazy ? array_map(function ($x) { $q = strpos((string) $x, ' — '); return $q === false ? (string) $x : substr((string) $x, 0, $q); }, $names) : $names;
+        $hay = strtolower($where . ' ' . implode(' ', $hayNames) . ' ' . implode(' ', $gone));
         $list = function ($ns, $extra) use ($esc) { $o = ''; foreach ($ns as $x) $o .= '<code>' . $esc($x) . '</code>'; if ($extra > 0) $o .= '<em class="muted">and ' . number_format($extra) . ' more</em>'; return $o; };
     ?>
       <div class="ch-e<?= (int) $r['id'] > $seen ? ' ch-new' : '' ?>" data-id="<?= (int) $r['id'] ?>" data-g="<?= $esc($groupOf[$kind] ?? '') ?>" data-t="<?= (int) $r['t'] ?>" data-text="<?= $esc($hay) ?>">
@@ -85,6 +100,8 @@ function changes_entries_html($rows, $seen) {
         <div class="ch-x" hidden>
           <?php if ($kind === 'ren'): ?>
             <div class="ch-cols"><div class="ch-col ch-gone"><h4>Gone (<?= number_format($n) ?>)</h4><?= $list($gone, max(0, $n - count($gone))) ?></div><div class="ch-col ch-came"><h4>New (<?= number_format($n) ?>)</h4><?= $list($names, $more) ?></div></div>
+          <?php elseif ($lazy): ?>
+            <div class="ch-names ch-lazy" data-id="<?= (int) $r['id'] ?>"></div>
           <?php else: ?>
             <div class="ch-names"><?= $list($names, $more) ?></div>
           <?php endif; ?>

@@ -3286,6 +3286,15 @@
     }
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
+    // A typed-data entry's lines are not in the list (they can be megabytes): they are fetched when its line is opened.
+    function loadLazy(e) {
+      var box = e.querySelector('.ch-lazy'); if (!box || box.getAttribute('data-loaded') || box.getAttribute('data-loading')) return;
+      box.setAttribute('data-loading', '1'); box.textContent = 'Loading\u2026';
+      fetch('?admin&changes_entry=' + encodeURIComponent(box.getAttribute('data-id')), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        box.removeAttribute('data-loading');
+        if (j && j.ok) { box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
+      }).catch(function () { box.removeAttribute('data-loading'); box.textContent = 'Could not load this entry. Close it and open it again.'; });
+    }
     var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
     function refreshList() {
       if (refreshing) return refreshing;
@@ -3297,6 +3306,7 @@
           if (fresh[e.getAttribute('data-id')]) e.classList.add('ch-new');
           if (!open[e.getAttribute('data-id')]) return;
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
+          loadLazy(e);
         });
         paint(list);
         [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
@@ -3327,6 +3337,7 @@
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
       x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.innerHTML = open ? '<i class="tri up" aria-hidden="true"></i> Hide' : '<i class="tri" aria-hidden="true"></i> Show';
+      if (open) loadLazy(b.closest('.ch-e'));
     });
     // Trim the log…
     var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');

@@ -593,6 +593,13 @@ function start_server($docroot, $port, $router = null) {
  *  (status + Location header) instead of transparently following it. */
 function data_file_guard_line_for_tests() { return "<?php http_response_code(404); exit; ?>\n"; }
 function data_file_strip_guard_for_tests($raw) { $raw = (string) $raw; return strncmp($raw, '<?php', 5) === 0 ? substr($raw, strpos($raw, "\n") + 1) : $raw; }
+/** The Changes tab as the owner sees it: [the list's answer, its markup with every typed-data entry's lines added (those are fetched when a line is opened)]. */
+function changes_full_html($base, $headers) {
+    $j = json_decode((string) http_get("$base/?admin&changes_list=1", $headers)[1], true); $html = (string) ($j['html'] ?? '');
+    preg_match_all('/class="ch-names ch-lazy" data-id="(\d+)"/', $html, $m);
+    foreach ($m[1] as $id) { $e = json_decode((string) http_get("$base/?admin&changes_entry=$id", $headers)[1], true); $html .= (string) ($e['html'] ?? ''); }
+    return [$j, $html];
+}
 function http_get($url, $headers = [], $followRedirects = true) {
     $opts = ['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 5]];
     if (!$followRedirects) {
@@ -11766,7 +11773,7 @@ $sSnap = function () use ($fxS) {
         if (is_file($f)) $o[basename(dirname($f)) . '/' . basename($f)] = md5_file($f);
     ksort($o); return $o;
 };
-$sGets = ['?admin', '?admin&classic=1', '?admin&shell=1', '?admin&folder=Trip', '?admin&inframe=1', '?admin&csrf=1', '?admin&health=1', '?admin&hidden=1', '?admin&item=pub.jpg', '?admin&changed=1', '?admin&changes_list=1', '?admin&shelltree=1', '?admin&shellmeta=1', '?admin&shellcounts=1', '?admin&privcounts=1', '?admin&pbcounts=1', '?admin&linkspanel=1', '?admin&linkpreview=0123456789', '?admin&linkphotos=0123456789', '?admin&linkcover=0123456789', '?admin&browserspanel=1', '?admin&browserhist=0123456789ab', '?admin&visits=1&tab=visitors', '?admin&visitsexport=1', '?admin&backupdownload=1', '?admin&filesdownload=1', '?admin&accelcheck=1&prefix=x', '?admin&since=1', '?admin&after=1'];
+$sGets = ['?admin', '?admin&classic=1', '?admin&shell=1', '?admin&folder=Trip', '?admin&inframe=1', '?admin&csrf=1', '?admin&health=1', '?admin&hidden=1', '?admin&item=pub.jpg', '?admin&changed=1', '?admin&changes_list=1', '?admin&changes_entry=1', '?admin&shelltree=1', '?admin&shellmeta=1', '?admin&shellcounts=1', '?admin&privcounts=1', '?admin&pbcounts=1', '?admin&linkspanel=1', '?admin&linkpreview=0123456789', '?admin&linkphotos=0123456789', '?admin&linkcover=0123456789', '?admin&browserspanel=1', '?admin&browserhist=0123456789ab', '?admin&visits=1&tab=visitors', '?admin&visitsexport=1', '?admin&backupdownload=1', '?admin&filesdownload=1', '?admin&accelcheck=1&prefix=x', '?admin&since=1', '?admin&after=1'];
 $sBefore = $sSnap(); $sTok = $sOwner['token'];
 foreach ($sGets as $q) {
     http_get("$baseS/$q", ["Cookie: {$sOwner['both']}", $sUA('10')]);
@@ -13501,7 +13508,7 @@ echo "== chunk 9 follow-up: removed captions are logged in the Changes tab ==\n"
     http_get("$cpBase/");   // a stranger's page view does the clean-up
     $cpAfter = $cpItemsNow();
     check('[caption log] a stranger\'s view still takes out the data of the photos that are gone, and keeps the data of the photo that is still there', !isset($cpAfter['a1.jpg']) && !isset($cpAfter['a3.jpg']) && ($cpAfter['a2.jpg']['caption'] ?? null) === 'Second photo', json_encode($cpAfter));
-    $cpList = json_decode((string) http_get("$cpBase/?admin&changes_list=1", $cpOwn)[1], true); $cpHtml = (string) ($cpList['html'] ?? '');
+    [$cpList, $cpHtml] = changes_full_html($cpBase, $cpOwn);
     $cpTxt = html_entity_decode(strip_tags($cpHtml));
     check('[caption log] ...and the Changes tab says so, with each photo\'s name and exactly what was typed: the caption, the web link, the place and the location', str_contains($cpTxt, 'a1.jpg') && str_contains($cpTxt, 'Caption: Grandma at the lake') && str_contains($cpTxt, 'Web link: https://example.com/lake') && str_contains($cpTxt, 'Lake Tahoe') && str_contains($cpTxt, '39.1') && str_contains($cpTxt, '-120.05') && str_contains($cpTxt, 'a3.jpg'), substr($cpTxt, 0, 600));
     check('[caption log] ...as escaped text, never as markup (the caption with <b> and &amp; in it)', str_contains($cpHtml, 'Third &lt;b&gt;photo&lt;/b&gt; &amp; &quot;more&quot;') && !str_contains($cpHtml, '<b>photo</b>'), substr($cpHtml, 0, 300));
@@ -13697,11 +13704,16 @@ echo "== chunk 9 follow-up N15: the removed data is completely in the Changes ta
     http_get("$tdBase/");   // (a stranger's view does the clean-up; none of those photos exists)
     $tdAfter = $tdNow();
     check('[N15] all 208 entries of photos that are not there are taken out of the folder\'s data, and the one that is there stays', array_keys($tdAfter) === ['a2.jpg'], json_encode(array_slice(array_keys($tdAfter), 0, 5)));
-    $tdList = json_decode((string) http_get("$tdBase/?admin&changes_list=1", $tdOwn)[1], true); $tdHtml = (string) ($tdList['html'] ?? '');
+    [$tdList, $tdHtml] = changes_full_html($tdBase, $tdOwn); $tdLean = (string) ($tdList['html'] ?? '');
     $tdTxt = html_entity_decode(strip_tags($tdHtml));
     preg_match_all('/gone\d{3}\.jpg/', $tdTxt, $tdNames);
     check('[N15] every one of the 205 captioned photos is named in the Changes tab (as two lines: 200 and 5), not the first 200 and "and 5 more"', count(array_unique($tdNames[0])) === 205 && substr_count($tdHtml, 'data-g="data"') === 2 && !str_contains($tdTxt, 'and 5 more'), json_encode([count(array_unique($tdNames[0])), substr_count($tdHtml, 'data-g="data"')]));
     check('[N15] ...and "Caption number 205" is there with its photo', str_contains($tdTxt, 'gone205.jpg') && str_contains($tdTxt, 'Caption number 205'));
+    $tdLeanTxt = html_entity_decode(strip_tags($tdLean));
+    check('[N15 lazy] the Changes list itself does not carry the typed text (a big removal made it megabytes, fetched again every time the tab came back): the captions are not in it, the photos\' names are (the search finds them), and it is a fraction of the whole', !str_contains($tdLean, 'Caption number 205') && !str_contains($tdLean, $tdEmoji) && str_contains($tdLean, 'gone205.jpg') && strlen($tdLean) * 2 < strlen($tdHtml), strlen($tdLean) . ' of ' . strlen($tdHtml));
+    $tdEid = preg_match('/class="ch-names ch-lazy" data-id="(\d+)"/', $tdLean, $tdEm) ? (int) $tdEm[1] : 0;
+    $tdE1 = json_decode((string) http_get("$tdBase/?admin&changes_entry=$tdEid", $tdOwn)[1], true); $tdE2 = json_decode((string) http_get("$tdBase/?admin&changes_entry=99999", $tdOwn)[1], true); $tdE3 = json_decode((string) http_get("$tdBase/?admin&changes_entry=abc", $tdOwn)[1], true);
+    check('[N15 lazy] one entry\'s lines come from their own address when the line is opened; an entry that is not there, or an address that is not a number, answers no (and a stranger gets nothing of it)', ($tdE1['ok'] ?? false) === true && str_contains((string) ($tdE1['html'] ?? ''), '<code>gone') && ($tdE2['ok'] ?? true) === false && ($tdE3['ok'] ?? true) === false && !is_array(json_decode(http_get("$tdBase/?admin&changes_entry=$tdEid")[1], true)), json_encode([$tdEid, $tdE2, $tdE3]));
     check('[N15] a caption of 1,000 emoji is in the log whole (never cut inside a letter), beside the plain one, and the long mixed caption and its 400-letter place are whole too', str_contains($tdTxt, $tdEmoji) && str_contains($tdTxt, 'A short plain caption') && str_contains($tdTxt, $tdMixed) && str_contains($tdTxt, str_repeat("\u{00E9}", 400)) && str_contains($tdTxt, 'https://example.com/e'), strlen($tdTxt));
     // the log is kept but refuses the write (a trigger in the table stands in for a full disk or a broken file): nothing is removed, the owner is told, and the next look does it
     if (!extension_loaded('pdo_sqlite')) {
@@ -13726,8 +13738,8 @@ echo "== chunk 9 follow-up N15: the removed data is completely in the Changes ta
             $tdDb->exec('DROP TRIGGER refuse_data'); unset($tdDb);
             check('[N15] while the log refuses the write, the entry of the deleted photo is NOT removed (its caption is still in the folder\'s data), and the owner is told why', ($tdHeld['a1.jpg']['caption'] ?? null) === 'must not be lost' && str_contains(html_entity_decode($tdPage), 'could not be written in the Changes tab'), json_encode([$tdHeld, str_contains($tdPage, 'could not be written')]));
             http_get("$tdBase2/");
-            $tdList2 = json_decode((string) http_get("$tdBase2/?admin&changes_list=1", $tdOwn2)[1], true);
-            check('[N15] ...and at the next look, with the log free again, it is written in the Changes tab and then removed', !isset($tdNow2()['a1.jpg']) && str_contains(html_entity_decode(strip_tags((string) ($tdList2['html'] ?? ''))), 'must not be lost'), json_encode(array_keys($tdNow2())));
+            [$tdList2, $tdFull2] = changes_full_html($tdBase2, $tdOwn2);
+            check('[N15] ...and at the next look, with the log free again, it is written in the Changes tab and then removed', !isset($tdNow2()['a1.jpg']) && str_contains(html_entity_decode(strip_tags($tdFull2)), 'must not be lost'), json_encode(array_keys($tdNow2())));
         }
     }
     @proc_terminate($tdProc); if (isset($tdProc2)) @proc_terminate($tdProc2);
@@ -13851,7 +13863,7 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
     $o5Port = find_free_port(); $o5Proc = start_server($o5Fx, $o5Port); $o5Base = "http://127.0.0.1:$o5Port";
     [, , $o5H] = http_post("$o5Base/?admin", ['access_code' => 'o5-admin-pw-1'], [], false); $o5Own = ['Cookie: ' . extract_cookie_header($o5H)];
     http_get("$o5Base/?admin&classic=1", $o5Own); http_get("$o5Base/");
-    $o5List = json_decode((string) http_get("$o5Base/?admin&changes_list=1", $o5Own)[1], true); $o5Txt = html_entity_decode(strip_tags((string) ($o5List['html'] ?? '')));
+    [$o5List, $o5Full] = changes_full_html($o5Base, $o5Own); $o5Txt = html_entity_decode(strip_tags($o5Full));
     check('[N22 c] a location with a latitude and no longitude, a location with something besides lat, lng and place, and an entry that is not a list are all written in the Changes tab as they are', str_contains($o5Txt, 'g1.jpg') && str_contains($o5Txt, '12.5') && str_contains($o5Txt, 'Location: 1, 2') && str_contains($o5Txt, 'Place: Paris') && str_contains($o5Txt, '"zoom":9') && str_contains($o5Txt, 'Entry: an odd entry') && !str_contains($o5Txt, 'g1.jpg — (a setting only'), substr($o5Txt, 0, 600));
     proc_terminate($o5Proc);
     // (e) more folders than the gallery looks at on one visit: the Health row says the look was cut short
@@ -13868,6 +13880,42 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
     $o5T2 = html_entity_decode(strip_tags((string) http_get("$o5Base2/?admin&classic=1", $o5Own2)[1]));
     check('[N22 e] ...and after they are removed, with none found, there is still a row that says the look was cut short (a quiet look is not mistaken for a clean one)', ($o5R['ok'] ?? false) === true && str_contains($o5T2, 'Old capture-date files: the look was cut short') && !str_contains($o5T2, '1 old capture-date file from'), json_encode($o5R));
     proc_terminate($o5Proc2);
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up (pass 5), N23: a download that is sent on is tied to the address that was checked; where that IPv4 address can't be reached (a server with no IPv4 route) the name's
+// own public IPv6 address is tried, and a name with only IPv6 is tied to it. No PHP here has curl (the tie is made with it), so the choice is tested with a stand-in for the one request.
+echo "== pass 5 N23: a tied download falls back to the name's IPv6 address ==\n";
+{
+    $v6Real = $g2Fn('geo_url_ok') . "\n" . $g2Fn('geo_resolve_url') . "\n" . $g2Fn('geo_host_in') . "\n" . $g2Fn('geo_ip_is_public') . "\n" . $g2Fn('geo_http') . "\n" . $g2Fn('geo_public_ipv6') . "\n";
+    // for the choice tests geo_public_ipv6 is a table (a name can't be looked up offline); the real one is tested on written-out addresses below
+    $v6Src = str_replace($g2Fn('geo_public_ipv6'), '', $v6Real) . 'function geo_public_ipv6($host) { return $GLOBALS["sc"]["v6list"]; }' . "\n";
+    $v6Run = function (array $sc) use ($g2Run, $v6Src) {
+        return json_decode($g2Run($v6Src . '$GLOBALS["sc"] = ' . var_export($sc, true) . '; $GLOBALS["pins"] = [];
+function geo_resolve_ips($host) { return $GLOBALS["sc"]["ips"]; }
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) {
+    $GLOBALS["pins"][] = $pinIp;
+    if ($pinIp === null) return ["status" => 302, "headers" => ["location" => "https://moved.example/file"], "body" => "", "error" => ""];
+    $k = strpos($pinIp, ":") === false ? "v4" : "v6";
+    if ($k === "v4") return ["status" => $GLOBALS["sc"]["v4status"], "headers" => [], "body" => $GLOBALS["sc"]["v4status"] === 200 ? "ok" : "", "error" => $GLOBALS["sc"]["v4status"] === 200 ? "" : "Failed to connect", "errno" => $GLOBALS["sc"]["v4errno"]];
+    return ["status" => 200, "headers" => [], "body" => "ok-v6", "error" => ""];
+}
+$r = geo_http("https://8.8.8.8/start"); echo json_encode(["status" => $r["status"], "body" => $r["body"], "pins" => $GLOBALS["pins"]]);'), true) ?: [];
+    };
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 7]);
+    check('[N23] the tied IPv4 address can\'t be reached (curl error 7): the name\'s public IPv6 address is tried next and the download goes through', ($a['status'] ?? null) === 200 && ($a['body'] ?? '') === 'ok-v6' && ($a['pins'] ?? null) === [null, '8.8.4.4', '2606:4700:4700::1111'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 200, 'v4errno' => 0]);
+    check('[N23] ...when the IPv4 address answers there is no second try', ($a['status'] ?? null) === 200 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => [], 'v4status' => 0, 'v4errno' => 7]);
+    check('[N23] ...a name with no public IPv6 address is not tried again (the answer stays "could not connect")', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 60]);
+    check('[N23] ...and a failure that is not about reaching the address (a certificate that does not fit, curl error 60) is not tried on another address', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    $a = $v6Run(['ips' => ['2606:4700:4700::1111'], 'v6list' => [], 'v4status' => 0, 'v4errno' => 0]);
+    check('[N23] a name with only an IPv6 address is tied to it (before, it was not tied at all)', ($a['status'] ?? null) === 200 && ($a['pins'] ?? null) === [null, '2606:4700:4700::1111'], json_encode($a));
+    // the real geo_public_ipv6, on addresses written out (a name can't be looked up offline)
+    $v6Lit = json_decode($g2Run($v6Real . 'echo json_encode([geo_public_ipv6("2606:4700:4700::1111"), geo_public_ipv6("[2606:4700:4700::1111]"), geo_public_ipv6("fd00::1"), geo_public_ipv6("::1"), geo_public_ipv6("8.8.8.8"), geo_public_ipv6("64:ff9b:1::1"), geo_public_ipv6("")]);'), true) ?: [];
+    check('[N23] the IPv6 addresses it may use are public ones only: a public literal stands for itself, a private, loopback, translation or IPv4 one is left out', $v6Lit === [['2606:4700:4700::1111'], ['2606:4700:4700::1111'], [], [], [], [], []], json_encode($v6Lit));
+    // (and curl itself takes an IPv6 address for the tie, written plainly: checked by hand with libcurl 8.14 against a server on ::1, not part of this suite)
 }
 
 /* --------------------------------------------------------------------- */

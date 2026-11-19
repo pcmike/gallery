@@ -227,6 +227,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         $chSeen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
         admin_json_exit(['ok' => true, 'n' => count($chRows), 'html' => changes_entries_html($chRows, $chSeen), 'counts' => array_map(function ($g) { return $g[1]; }, changes_group_counts($chRows))]);
     }
+    if (isset($_GET['changes_entry'])) {   // one typed-data entry's lines (what was typed for each photo), asked for when its line in the Changes tab is opened
+        header('Cache-Control: no-store');
+        $chHtml = is_string($_GET['changes_entry']) && preg_match('/^\d{1,12}$/D', $_GET['changes_entry']) === 1 ? changes_data_names_html((int) $_GET['changes_entry']) : null;
+        admin_json_exit($chHtml === null ? ['ok' => false] : ['ok' => true, 'html' => $chHtml]);
+    }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
         header('Content-Type: application/json; charset=UTF-8');
