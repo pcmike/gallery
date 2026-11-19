@@ -3532,7 +3532,7 @@ try:
         # typed data removed for a photo that is gone: the list carries no text of it; the lines come when the entry is opened, and stay when the list is drawn again
         gp = SITE_L + "/Rome/.gallery-items.php"
         gd = json.loads(open(gp).read().split("\n", 1)[1]) if os.path.exists(gp) else {}
-        gd.setdefault("items", {})["ghost-typed.jpg"] = {"caption": "ghost caption words"}; open(gp, "w").write(LGUARD + json.dumps(gd) + "\n")
+        gd["items"] = gd["items"] if isinstance(gd.get("items"), dict) else {}; gd["items"]["ghost-typed.jpg"] = {"caption": "ghost caption words"}; open(gp, "w").write(LGUARD + json.dumps(gd) + "\n")
         try: urllib.request.urlopen(BL + "/?folder=Rome").read()   # (a stranger's view does the tidying)
         except Exception: pass
         comes_back()
