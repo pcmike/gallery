@@ -5111,6 +5111,23 @@ function geo_resolve_url($base, $location) {
     return $root . $dir . $location;
 }
 
+/** Is this address one a download may be fetched from: not this machine, not a private network, not a reserved range (a metadata service, a link-local address)? */
+function geo_ip_is_public($ip) {
+    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+}
+
+/** The addresses a host stands for: the address itself, or what the name resolves to (IPv4, else IPv6); [] when it does not resolve; null when this PHP can't look names up at all
+ *  (the function is switched off), so nothing can be said. */
+function geo_resolve_ips($host) {
+    $host = strtolower(trim((string) $host, '[]'));
+    if ($host === '') return [];
+    if (filter_var($host, FILTER_VALIDATE_IP) !== false) return [$host];
+    if (!function_exists('gethostbynamel')) return null;
+    $ips = (array) @gethostbynamel($host);
+    if (!$ips && function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $ips[] = $r['ipv6'];
+    return array_values($ips);
+}
+
 /** Is this address's host one of $hosts (a name, or ".example.com" for it and everything under it)? */
 function geo_host_in($url, array $hosts) {
     $h = strtolower((string) (parse_url((string) $url, PHP_URL_HOST) ?? ''));
@@ -5125,10 +5142,11 @@ function geo_host_in($url, array $hosts) {
 
 /** One request, with curl if this PHP has it, else PHP's own streams, and no following of redirects (geo_http does that, one checked step at a time).
  *  Returns ['status' => int (0: no answer), 'headers' => [lowercase name => value], 'body' => string, 'error' => text]. */
-function geo_http_once($url, $method, array $headers, $maxBytes, $timeout) {
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) {
     $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
     if (function_exists('curl_init')) {
         $ch = curl_init($url); $hd = [];
+        if ($pinIp !== null) curl_setopt($ch, CURLOPT_RESOLVE, [strtolower((string) parse_url($url, PHP_URL_HOST)) . ':' . (int) (parse_url($url, PHP_URL_PORT) ?: 443) . ':' . $pinIp]);   // (the address that was checked is the one connected to, whatever the name says a moment later)
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_NOBODY => $method === 'HEAD',
             CURLOPT_HTTPHEADER => $headers, CURLOPT_USERAGENT => 'Drop-in Photo Gallery ' . GALLERY_VERSION, CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HEADERFUNCTION => function ($c, $l) use (&$hd) { if (strpos($l, ':') !== false) { [$k, $v] = explode(':', $l, 2); $hd[strtolower(trim($k))] = trim($v); } return strlen($l); },
@@ -5163,10 +5181,19 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     // Plain http to this machine is for the first address (a mirror the owner runs here) and for what that same kind of address sends on; a download that starts at an https
     // address is never sent on to a port of this server, whoever serves it. (A download with a list of hosts it may come from has that list for its hops.)
     $loopOk = $hosts !== null || strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'http';
+    $startsHttps = strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'https';
     for ($hop = 0; $hop <= 3; $hop++) {
         if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
-        $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout);
+        $pin = null;
+        if ($hop > 0 && $startsHttps) {   // (a download that began at an https address is never sent on to this machine or a private network, by address or by a name that resolves there)
+            $ips = geo_resolve_ips((string) parse_url($cur, PHP_URL_HOST));
+            if ($ips === null) $ips = [];   // (no way to look the name up here: it is followed as it always was, with the https and host rules that were already there)
+            foreach ($ips as $ip) if (!geo_ip_is_public($ip)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is on this machine or a private network, so it was not followed.'; return $out; }
+            if (!$ips && function_exists('gethostbynamel')) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which could not be found.'; return $out; }
+            foreach ($ips as $ip) if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) { $pin = $ip; break; }
+        }
+        $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $pin);
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
             $next = geo_resolve_url($cur, $r['headers']['location']);
             if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }
@@ -5358,7 +5385,7 @@ function geo_refresh($force = false) {
     if (!function_exists('gzdecode')) return $fail('This PHP has no zlib, which unpacking the file needs.');
     $probe = geo_probe();
     if (!$probe['ok']) return $fail($probe['error']);
-    if (!$force && is_file(geo_db_path()) && $state['modified'] === $probe['modified'] && (int) $state['length'] === $probe['gz'] && $state['ym'] === $probe['ym']) {
+    if (!$force && is_file(geo_db_path()) && $state['modified'] === $probe['modified'] && (int) $state['length'] === $probe['gz'] && $state['ym'] === $probe['ym'] && (string) ($state['src'] ?? '') === COUNTRY_DB_URL) {
         $state['error'] = ''; $state['triedAt'] = $now;
         json_file_update(geo_state_path(), [], function (&$d) use ($state) { $d = $state; });
         @touch(geo_state_path(), $now);
@@ -5379,7 +5406,7 @@ function geo_refresh($force = false) {
     if ($db !== null) { @fclose($db['fh']); }
     if (!$good) { @unlink($tmp); return $fail('The downloaded file is not a country list this gallery can read.'); }
     if (!@rename($tmp, geo_db_path())) { @unlink($tmp); return $fail('The new file could not be put in place.'); }
-    $state = ['ym' => $probe['ym'], 'modified' => $probe['modified'], 'length' => $probe['gz'], 'at' => $now, 'error' => '', 'triedAt' => $now, 'raw' => $rawLen];
+    $state = ['ym' => $probe['ym'], 'modified' => $probe['modified'], 'length' => $probe['gz'], 'at' => $now, 'error' => '', 'triedAt' => $now, 'raw' => $rawLen, 'src' => COUNTRY_DB_URL];   // ('src': which address it came from, so a different one is fetched even when the date and size match)
     json_file_update(geo_state_path(), [], function (&$d) use ($state) { $d = $state; });
     @touch(geo_state_path(), $now);
     return ['ok' => true, 'changed' => true, 'error' => ''];
@@ -11708,11 +11735,13 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
 /**
  * The settings the admin's "Settings" screen can change: one table that
  * drives both the form and the validation, so nothing outside it can ever be
- * written. Passwords are handled separately (never shown, confirmed), and
- * EXTRA_FOLDERS / NGINX_ACCEL_REDIRECT_PREFIX are deliberately file-only:
- * the first points the gallery at paths elsewhere on the server and the
- * second needs matching web-server config, so neither belongs behind a web
- * form. The screen only ever writes .gallery-config.php.
+ * written. Passwords are handled separately (never shown, confirmed). The one
+ * deliberately file-only setting is UPDATE_FEED_URL: it decides where new code
+ * is fetched from, so it does not belong behind a web form (an entry here with
+ * 'in' is shown inside another control, or by a switch of its own, not as a row).
+ * The two settings that name a program or an address the server will use,
+ * FFMPEG_PATH and COUNTRY_DB_URL, are checked hard when saved. The screen only
+ * ever writes .gallery-config.php.
  */
 function gallery_setting_definitions() {
     return [
@@ -11818,7 +11847,6 @@ function gallery_setting_definitions() {
              'help' => 'How long a phone or computer that was given the private-view password keeps seeing private items, counted from its last visit. 0 ends it when the browser closes. Changing the private-view password ends it for everyone; the list below ends one device at a time.',
              'risk' => 'Whoever has typed the private-view password stays in private view on that device for that long.'],
             ['name' => 'COUNTRY_LOOKUP', 'type' => 'bool', 'in' => true, 'label' => 'Look up the country of each address', 'help' => ''],
-            ['name' => 'COUNTRY_DB_URL', 'type' => 'text', 'in' => true, 'label' => 'Where the country file comes from', 'help' => ''],
             ['name' => 'BROWSER_HISTORY_DAYS', 'type' => 'number', 'label' => 'Keep each browser\'s address history for (days)', 'min' => 1, 'max' => 3650, 'step' => 1,
              'help' => 'Every address a signed-in browser has used, with the time, the country when known and the device it said it was. Inside this time nothing limits how much is kept; the list shows how big each one has grown.'],
             ['name' => 'BROWSER_ENDED_DAYS', 'type' => 'number', 'label' => 'Keep signed-out browsers listed for (days)', 'min' => 0, 'max' => 3650, 'step' => 1,
@@ -11833,6 +11861,8 @@ function gallery_setting_definitions() {
              'help' => 'Needs a country for each address (the country lookup below, or a country header from your proxy). Always flagged in red; this also signs it out. Someone travelling or on a VPN will have to type the password again.'],
             ['name' => 'BROWSER_END_ON_NETWORKS', 'type' => 'bool', 'label' => 'Sign a browser out if it passes the networks limit',
              'help' => 'The limit above. Always flagged in red; this also signs it out.'],
+            ['name' => 'COUNTRY_DB_URL', 'type' => 'text', 'check' => 'countryurl', 'width' => '420px', 'placeholder' => 'DB-IP, by itself', 'label' => 'Another source for the country file',
+             'help' => 'Only if DB-IP\'s address stops working: an https address of a country file in the same format (MMDB, gzipped), with {ym} where the month goes (2026-11). Leave empty for DB-IP. A public host only. After changing it, press Refresh now in the country lookup below.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'CHECK_FOR_UPDATES', 'type' => 'bool', 'label' => 'Look for a new version of the gallery',
@@ -11981,6 +12011,11 @@ function extra_folder_names_update($history, $before, $after, $edit) {
 /** Why a typed ffmpeg path can't be used (''= it can, or it is empty): the setting names a program the server will run, so only a file called ffmpeg, in a folder and with
  *  permissions that only its owner can change, that really answers "ffmpeg version", is taken. */
 function site_settings_check_ffmpeg($path) {
+    static $memo = [];   // (asked before the settings lock is taken, so a slow program or lookup never holds up another save: the answer is kept for the save itself)
+    if (isset($memo[$path])) return $memo[$path];
+    return $memo[$path] = site_settings_check_ffmpeg_now($path);
+}
+function site_settings_check_ffmpeg_now($path) {
     if ($path === '') return '';
     if (strlen($path) > 400 || strpbrk($path, "\0\r\n") !== false || $path[0] !== '/') return 'must be the full path, starting with / (for example /opt/ffmpeg/bin/ffmpeg).';
     if (basename($path) !== 'ffmpeg') return 'must end in /ffmpeg: that is the program the gallery runs.';
@@ -11991,6 +12026,32 @@ function site_settings_check_ffmpeg($path) {
     if (!function_exists('proc_open')) return 'can\'t be checked: this server does not let PHP start programs.';
     $line = run_first_line([$path, '-version'], 5);
     if ($line === null || strncmp($line, 'ffmpeg version', 14) !== 0) return 'did not answer "ffmpeg version" when asked (-version), so it is not taken for ffmpeg.';
+    return '';
+}
+
+/** Why a typed country-file address can't be used ('' = it can, or it is empty). A web form must not be a way to make the server ask for an address on its own network, so it is
+ *  stricter than the settings file (which the tests also use for plain http to this machine): https only, the usual port, no user name, and a public host (an address that is
+ *  private or reserved, or a name that does not resolve to a public address, is refused). Where the download goes after that is still checked at every step (https, redirects). */
+function site_settings_check_country_url($url) {
+    static $memo = [];
+    if (isset($memo[$url])) return $memo[$url];
+    return $memo[$url] = site_settings_check_country_url_now($url);
+}
+function site_settings_check_country_url_now($url) {
+    if ($url === '') return '';
+    if (strlen($url) > 300 || preg_match('/[\x00-\x20\x7f]/', $url)) return 'must be one address with no spaces, at most 300 characters.';
+    if (preg_match('/\{(?!ym\})/', $url)) return 'may only use {ym} (the month) in braces.';
+    $p = parse_url($url);
+    if (!is_array($p) || ($p['scheme'] ?? '') !== 'https' || empty($p['host'])) return 'must start with https:// (a plain http address is not accepted here).';
+    if (isset($p['user']) || isset($p['pass']) || isset($p['fragment'])) return 'must not hold a user name, a password or a # part.';
+    if (isset($p['port']) && (int) $p['port'] !== 443) return 'must use the usual https port (443).';
+    $host = strtolower(trim((string) $p['host'], '[]'));
+    $isIp = filter_var($host, FILTER_VALIDATE_IP) !== false;
+    if (!$isIp && ($host === 'localhost' || strpos($host, '.') === false || preg_match('/\.(?:local|localhost|internal|lan|home|corp|intranet|invalid)$/', $host))) return 'must be a public host name, such as download.example.com.';
+    $ips = geo_resolve_ips($host);
+    if ($ips === null) return 'can\'t be checked: this PHP can\'t look up host names (gethostbynamel is switched off), so an address in numbers is the only kind accepted here.';
+    if (!$ips) return 'can\'t be found: the host name does not resolve from this server.';
+    foreach ($ips as $ip) if (!geo_ip_is_public($ip)) return $isIp ? 'is an address on this machine or a private network: the gallery does not fetch from there.' : 'names a host that resolves to this machine or a private network: the gallery does not fetch from there.';
     return '';
 }
 
@@ -12049,6 +12110,9 @@ function site_settings_save($ajax = false) {
     // One save at a time, and in line with the file's other writers (a password hashed at sign-in, the country-file switch), which hold
     // this same lock: two saves at the same moment each built the file from what they had read before the other finished, so both said
     // "Saved." and one change was gone.
+    // (The two checks that can be slow, a program started and a host name looked up, are made first, outside the lock: the save below finds their answers kept.)
+    if (isset($_POST['set_FFMPEG_PATH']) && is_string($_POST['set_FFMPEG_PATH'])) site_settings_check_ffmpeg(trim($_POST['set_FFMPEG_PATH']));
+    if (isset($_POST['set_COUNTRY_DB_URL']) && is_string($_POST['set_COUNTRY_DB_URL'])) site_settings_check_country_url(trim($_POST['set_COUNTRY_DB_URL']));
     $lock = @fopen(__FILE__, 'r');
     if ($lock) flock($lock, LOCK_EX);
     try {
@@ -12093,12 +12157,19 @@ function site_settings_save_locked($ajax) {
                 if ($history) $cfg['EXTRA_FOLDER_NAMES'] = $history; else unset($cfg['EXTRA_FOLDER_NAMES']);
                 $value = $value['named'];
             } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ffmpeg') {
+                if (trim($raw) === (string) ($cfg['FFMPEG_PATH'] ?? '')) continue;   // (what is there is not judged again by a save that did not change it)
                 $why = site_settings_check_ffmpeg(trim($raw));
                 if ($why !== '') { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
                 $value = trim($raw);
             } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'ranges') {
+                if (trim($raw) === (is_array($cfg['TRUSTED_PROXY_RANGES'] ?? null) ? implode(', ', array_filter($cfg['TRUSTED_PROXY_RANGES'], 'is_string')) : '')) continue;
                 $value = site_settings_parse_proxy_ranges($raw, $why);
                 if ($value === null) { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
+            } elseif ($d['type'] === 'text' && ($d['check'] ?? '') === 'countryurl') {
+                if (trim($raw) === (string) ($cfg['COUNTRY_DB_URL'] ?? '')) continue;
+                $why = site_settings_check_country_url(trim($raw));
+                if ($why !== '') { $errors[] = '"' . $d['label'] . '" ' . $why; continue; }
+                $value = trim($raw);
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
                 $value = $raw;

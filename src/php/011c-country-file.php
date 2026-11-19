@@ -54,6 +54,23 @@ function geo_resolve_url($base, $location) {
     return $root . $dir . $location;
 }
 
+/** Is this address one a download may be fetched from: not this machine, not a private network, not a reserved range (a metadata service, a link-local address)? */
+function geo_ip_is_public($ip) {
+    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+}
+
+/** The addresses a host stands for: the address itself, or what the name resolves to (IPv4, else IPv6); [] when it does not resolve; null when this PHP can't look names up at all
+ *  (the function is switched off), so nothing can be said. */
+function geo_resolve_ips($host) {
+    $host = strtolower(trim((string) $host, '[]'));
+    if ($host === '') return [];
+    if (filter_var($host, FILTER_VALIDATE_IP) !== false) return [$host];
+    if (!function_exists('gethostbynamel')) return null;
+    $ips = (array) @gethostbynamel($host);
+    if (!$ips && function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $ips[] = $r['ipv6'];
+    return array_values($ips);
+}
+
 /** Is this address's host one of $hosts (a name, or ".example.com" for it and everything under it)? */
 function geo_host_in($url, array $hosts) {
     $h = strtolower((string) (parse_url((string) $url, PHP_URL_HOST) ?? ''));
@@ -68,10 +85,11 @@ function geo_host_in($url, array $hosts) {
 
 /** One request, with curl if this PHP has it, else PHP's own streams, and no following of redirects (geo_http does that, one checked step at a time).
  *  Returns ['status' => int (0: no answer), 'headers' => [lowercase name => value], 'body' => string, 'error' => text]. */
-function geo_http_once($url, $method, array $headers, $maxBytes, $timeout) {
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) {
     $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
     if (function_exists('curl_init')) {
         $ch = curl_init($url); $hd = [];
+        if ($pinIp !== null) curl_setopt($ch, CURLOPT_RESOLVE, [strtolower((string) parse_url($url, PHP_URL_HOST)) . ':' . (int) (parse_url($url, PHP_URL_PORT) ?: 443) . ':' . $pinIp]);   // (the address that was checked is the one connected to, whatever the name says a moment later)
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_NOBODY => $method === 'HEAD',
             CURLOPT_HTTPHEADER => $headers, CURLOPT_USERAGENT => 'Drop-in Photo Gallery ' . GALLERY_VERSION, CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HEADERFUNCTION => function ($c, $l) use (&$hd) { if (strpos($l, ':') !== false) { [$k, $v] = explode(':', $l, 2); $hd[strtolower(trim($k))] = trim($v); } return strlen($l); },
@@ -106,10 +124,19 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     // Plain http to this machine is for the first address (a mirror the owner runs here) and for what that same kind of address sends on; a download that starts at an https
     // address is never sent on to a port of this server, whoever serves it. (A download with a list of hosts it may come from has that list for its hops.)
     $loopOk = $hosts !== null || strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'http';
+    $startsHttps = strtolower((string) (parse_url((string) $url, PHP_URL_SCHEME) ?? '')) === 'https';
     for ($hop = 0; $hop <= 3; $hop++) {
         if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
-        $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout);
+        $pin = null;
+        if ($hop > 0 && $startsHttps) {   // (a download that began at an https address is never sent on to this machine or a private network, by address or by a name that resolves there)
+            $ips = geo_resolve_ips((string) parse_url($cur, PHP_URL_HOST));
+            if ($ips === null) $ips = [];   // (no way to look the name up here: it is followed as it always was, with the https and host rules that were already there)
+            foreach ($ips as $ip) if (!geo_ip_is_public($ip)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is on this machine or a private network, so it was not followed.'; return $out; }
+            if (!$ips && function_exists('gethostbynamel')) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which could not be found.'; return $out; }
+            foreach ($ips as $ip) if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) { $pin = $ip; break; }
+        }
+        $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $pin);
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
             $next = geo_resolve_url($cur, $r['headers']['location']);
             if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }
@@ -301,7 +328,7 @@ function geo_refresh($force = false) {
     if (!function_exists('gzdecode')) return $fail('This PHP has no zlib, which unpacking the file needs.');
     $probe = geo_probe();
     if (!$probe['ok']) return $fail($probe['error']);
-    if (!$force && is_file(geo_db_path()) && $state['modified'] === $probe['modified'] && (int) $state['length'] === $probe['gz'] && $state['ym'] === $probe['ym']) {
+    if (!$force && is_file(geo_db_path()) && $state['modified'] === $probe['modified'] && (int) $state['length'] === $probe['gz'] && $state['ym'] === $probe['ym'] && (string) ($state['src'] ?? '') === COUNTRY_DB_URL) {
         $state['error'] = ''; $state['triedAt'] = $now;
         json_file_update(geo_state_path(), [], function (&$d) use ($state) { $d = $state; });
         @touch(geo_state_path(), $now);
@@ -322,7 +349,7 @@ function geo_refresh($force = false) {
     if ($db !== null) { @fclose($db['fh']); }
     if (!$good) { @unlink($tmp); return $fail('The downloaded file is not a country list this gallery can read.'); }
     if (!@rename($tmp, geo_db_path())) { @unlink($tmp); return $fail('The new file could not be put in place.'); }
-    $state = ['ym' => $probe['ym'], 'modified' => $probe['modified'], 'length' => $probe['gz'], 'at' => $now, 'error' => '', 'triedAt' => $now, 'raw' => $rawLen];
+    $state = ['ym' => $probe['ym'], 'modified' => $probe['modified'], 'length' => $probe['gz'], 'at' => $now, 'error' => '', 'triedAt' => $now, 'raw' => $rawLen, 'src' => COUNTRY_DB_URL];   // ('src': which address it came from, so a different one is fetched even when the date and size match)
     json_file_update(geo_state_path(), [], function (&$d) use ($state) { $d = $state; });
     @touch(geo_state_path(), $now);
     return ['ok' => true, 'changed' => true, 'error' => ''];

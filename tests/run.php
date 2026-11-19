@@ -5691,7 +5691,7 @@ check('[qr] the QR code button opens the large code at once, with Copy, Save and
 $nGroups = (preg_match_all('~<details class="site-group"[^>]*>\s*<summary><span class="site-group-title">(.*?)</span>(?: <span class="muted">(.*?)</span>)?~s', $nTab, $gm) ? $gm : [[], [], []]);
 check('[settings page] the groups are, in this order: Folders and photos, Videos and thumbnails, Visitors and logs, Location data, Sharing and access, Signing in and passwords, Server setup (advanced), then Files this gallery has made; "What is shown", "Share links" and "Passwords" are gone as groups', $nGroups[1] === ['Folders and photos', 'Videos and thumbnails', 'Visitors and logs', 'Location data', 'Sharing and access', 'Signing in and passwords', 'Server setup (advanced)', 'Files this gallery has made'] && !str_contains($nTab, '>What is shown<') && !str_contains($nTab, '>Passwords<'), json_encode($nGroups[1]));
 check('[settings page] every group starts closed (the first one no longer opens by itself)', !preg_match('/<details class="site-group"[^>]*\sopen/', $nTab));
-check('[settings page] the sign-in group holds both passwords, both signed-in lengths and the list of signed-in browsers, and says "11 settings"', preg_match('~Signing in and passwords</span> <span class="muted">11 settings</span>.*?name="pw_admin".*?name="pw_private".*?name="set_ADMIN_STAY_SIGNED_IN_DAYS".*?name="set_PRIVATE_VIEW_SIGNED_IN_DAYS".*?id="browsers-row".*?</details>~s', $nTab) === 1);
+check('[settings page] the sign-in group holds both passwords, both signed-in lengths and the list of signed-in browsers, and says "12 settings"', preg_match('~Signing in and passwords</span> <span class="muted">12 settings</span>.*?name="pw_admin".*?name="pw_private".*?name="set_ADMIN_STAY_SIGNED_IN_DAYS".*?name="set_PRIVATE_VIEW_SIGNED_IN_DAYS".*?id="browsers-row".*?</details>~s', $nTab) === 1);
 check('[settings page] Sharing and access has no visitor download row any more (it is on each folder), Scrub location data is in Location data, and the video settings are in Videos', preg_match('~Sharing and access</span>.*?set_CLOSE_PUBLIC_GALLERY.*?</details>~s', $nTab) === 1 && !str_contains($nTab, 'id="setting-PUBLIC_DOWNLOAD_MODE"') && preg_match('~Location data</span>.*?set_ENABLE_PHOTO_LOCATION.*?id="setting-SCRUB_LOCATION_DATA".*?</details>~s', $nTab) === 1 && preg_match('~>Videos and thumbnails</span>.*?set_ENABLE_VIDEO".*?set_ENABLE_VIDEO_THUMBNAILS.*?set_ENABLE_VIDEO_PREVIEWS.*?</details>~s', $nTab) === 1);
 check('[settings page] Prepare media is inside Videos and thumbnails, right under the Thumbnails switch, and is not a panel of its own above Settings', preg_match('~Videos and thumbnails</span>.*?set_ENABLE_THUMBNAIL_CACHE.*?id="media-panel".*?Visitors and logs~s', $nTab) === 1 && substr_count($nTab, 'id="media-panel"') === 1 && !preg_match('~<section class="panel media-panel"~', $nTab));
 file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_THUMBNAIL_CACHE' => false]));
@@ -13182,15 +13182,15 @@ exit 0
 echo "== chunk 9 follow-up N4: the country file's download and plain http to this machine ==\n";
 {
     $n4Src = (string) file_get_contents($indexSrc); $n4Code = '';
-    foreach (['geo_url_ok', 'geo_resolve_url', 'geo_host_in', 'geo_http'] as $n4Fn) { $at = strpos($n4Src, "function $n4Fn("); $n4Code .= substr($n4Src, $at, strpos($n4Src, "\n}\n", $at) + 3 - $at) . "\n"; }
+    foreach (['geo_url_ok', 'geo_resolve_url', 'geo_host_in', 'geo_ip_is_public', 'geo_resolve_ips', 'geo_http'] as $n4Fn) { $at = strpos($n4Src, "function $n4Fn("); $n4Code .= substr($n4Src, $at, strpos($n4Src, "\n}\n", $at) + 3 - $at) . "\n"; }
     // the one function that really asks the network is replaced by a stand-in that says what it was asked for and answers from a table of redirects
-    $n4Code .= 'function geo_http_once($url, $method, array $headers, $maxBytes, $timeout) { $GLOBALS["n4Asked"][] = $url; $to = $GLOBALS["n4Table"][$url] ?? null; return $to === null ? ["status" => 200, "headers" => [], "body" => "ok", "error" => ""] : ["status" => 302, "headers" => ["location" => $to], "body" => "", "error" => ""]; }';
+    $n4Code .= 'function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) { $GLOBALS["n4Asked"][] = $url; $to = $GLOBALS["n4Table"][$url] ?? null; return $to === null ? ["status" => 200, "headers" => [], "body" => "ok", "error" => ""] : ["status" => 302, "headers" => ["location" => $to], "body" => "", "error" => ""]; }';
     eval($n4Code);
     $n4Run = function (string $start, array $table, $hosts = null) { $GLOBALS['n4Asked'] = []; $GLOBALS['n4Table'] = $table; $r = geo_http($start, 'GET', [], 1000, 5, $hosts); return [$r['status'], $GLOBALS['n4Asked'], $r['error']]; };
     [$s1, $a1, $e1] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'http://127.0.0.1:9/internal']);
     check('[N4] a country file at an https address that sends the download on to http://127.0.0.1 is refused at that hop, and the address is never asked', $s1 === 0 && $a1 === ['https://mirror.example/x.gz'] && str_contains($e1, 'not allowed'), json_encode([$s1, $a1, $e1]));
-    [$s2, $a2] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'https://other.example/y.gz']);
-    check('[N4] ...a hop to another https address is still followed', $s2 === 200 && $a2 === ['https://mirror.example/x.gz', 'https://other.example/y.gz'], json_encode([$s2, $a2]));
+    [$s2, $a2] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'https://1.1.1.1/y.gz']);   // (a public address in numbers: a name would have to resolve here, and the hop is now held to a public destination)
+    check('[N4] ...a hop to another https address is still followed', $s2 === 200 && $a2 === ['https://mirror.example/x.gz', 'https://1.1.1.1/y.gz'], json_encode([$s2, $a2]));
     [$s3, $a3] = $n4Run('http://127.0.0.1:8080/x.gz', ['http://127.0.0.1:8080/x.gz' => 'http://127.0.0.1:8080/real.gz']);
     check('[N4] a mirror the owner runs on this machine (a first address of http://127.0.0.1) still works, and its own redirect on the same machine too', $s3 === 200 && count($a3) === 2, json_encode([$s3, $a3]));
     [$s4, $a4, $e4] = $n4Run('https://mirror.example/x.gz', ['https://mirror.example/x.gz' => 'http://localhost/internal'], ['.github.com']);
@@ -13522,6 +13522,82 @@ echo "== chunk 9 follow-up: removed captions are logged in the Changes tab ==\n"
         chmod($cpFx2, 0755);
         check('[caption log] where no log can be kept the data of a photo that is gone is removed as before (the admin chose a server without it)', !isset($cpAfter2['a1.jpg']) && ($cpAfter2['a2.jpg']['caption'] ?? null) === 'stays', json_encode($cpAfter2));
     }
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up: COUNTRY_DB_URL gets a row in Settings ("Another source for the country file"); a web form is stricter than the settings file about where the server may fetch from, and a different source is fetched even when the old one's date and size match
+echo "== chunk 9 follow-up: Settings row for another source of the country file ==\n";
+{
+    $cuFx = new_fixture_dir('countryurl'); mkdir("$cuFx/Alpha", 0777, true); make_jpeg("$cuFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    $cuCfg = "$cuFx/.gallery-config.php"; file_put_contents($cuCfg, cfg_text(['ADMIN_PASSWORD' => 'cu-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$cuFx/index.php"); @touch("$cuFx/index.php", time() - 3600);
+    $cuPort = find_free_port(); start_server($cuFx, $cuPort); $cuBase = "http://127.0.0.1:$cuPort";
+    [, , $cuH] = http_post("$cuBase/?admin", ['access_code' => 'cu-admin-pw-1'], [], false); $cuOwn = ['Cookie: ' . extract_cookie_header($cuH)];
+    $cuPage = fn () => (string) http_get("$cuBase/?admin", $cuOwn)[1];
+    $cuSave = function (array $fields) use ($cuBase, $cuOwn, $cuCfg, $cuPage) {
+        $form = ''; foreach (html_post_forms($cuPage()) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) { $form = $f['html']; break; }
+        $ff = form_default_fields($form);
+        [, $body] = http_post("$cuBase/?admin", array_merge(['csrf_token' => $ff['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => md5_file($cuCfg)], $fields), array_merge($cuOwn, ['X-Requested-With: gallery-fetch']));
+        return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+    };
+    check('[country url] Settings has a row for another source of the country file, in the signing-in group, with the month pattern explained', str_contains($cuPage(), 'name="set_COUNTRY_DB_URL"') && str_contains($cuPage(), 'Another source for the country file') && str_contains($cuPage(), '{ym}'));
+    $cuBefore = (string) file_get_contents($cuCfg);
+    $cuBad = ['plain http' => 'http://example.com/x-{ym}.gz', 'ftp' => 'ftp://example.com/x.gz', 'no scheme' => 'example.com/x.gz', 'a user name in it' => 'https://user:pw@example.com/x.gz', 'a port that is not 443' => 'https://example.com:8443/x.gz', 'a # part' => 'https://example.com/x.gz#a',
+        'this machine by address' => 'https://127.0.0.1/x.gz', 'this machine by IPv6 address' => 'https://[::1]/x.gz', 'a private network address' => 'https://10.0.0.5/x.gz', 'a link-local address (a cloud metadata service)' => 'https://169.254.169.254/latest/x.gz', 'localhost' => 'https://localhost/x.gz',
+        'a name with no dot' => 'https://intranet/x.gz', 'a .local name' => 'https://printer.local/x.gz', 'a space in it' => 'https://example.com/x y.gz', 'braces that are not {ym}' => 'https://example.com/{foo}.gz', 'more than 300 characters' => 'https://example.com/' . str_repeat('a', 300), 'a name that can\'t be found' => 'https://no-such-host.invalid/x.gz'];
+    foreach ($cuBad as $why => $val) {
+        $r = $cuSave(['set_COUNTRY_DB_URL' => $val]);
+        check("[country url] $why is refused with a reason, and nothing is written", ($r['ok'] ?? null) === false && ($r['text'] ?? '') !== '' && (string) file_get_contents($cuCfg) === $cuBefore, json_encode($r));
+    }
+    $cuOk = $cuSave(['set_COUNTRY_DB_URL' => 'https://93.184.216.34/dbip-country-lite-{ym}.mmdb.gz']);
+    check('[country url] an https address of a public host (here an address, so the test needs no DNS) with {ym} in it is accepted and stored, and shown again in the row', ($cuOk['ok'] ?? null) === true && (cfg_read($cuCfg)['COUNTRY_DB_URL'] ?? null) === 'https://93.184.216.34/dbip-country-lite-{ym}.mmdb.gz' && str_contains($cuPage(), 'value="https://93.184.216.34/dbip-country-lite-{ym}.mmdb.gz"'), json_encode($cuOk));
+    check('[country url] clearing it takes it out of the file again (DB-IP is used)', ($cuSave(['set_COUNTRY_DB_URL' => ''])['ok'] ?? null) === true && !isset(cfg_read($cuCfg)['COUNTRY_DB_URL']));
+    // a value that came in through the settings file (the tests use plain http to this machine) is not judged again by a save that does not change it
+    $cuMerge = function (array $more) use ($cuCfg) { file_put_contents($cuCfg, cfg_text($more + cfg_read($cuCfg))); };   // (the admin password stays as the first sign-in stored it: the session is tied to it)
+    $cuMerge(['COUNTRY_DB_URL' => 'http://127.0.0.1:9/x-{ym}.gz', 'TRUSTED_PROXY_RANGES' => ['10.0.0.0/4']]);
+    $cuSame = $cuSave(['set_COUNTRY_DB_URL' => 'http://127.0.0.1:9/x-{ym}.gz', 'set_TRUSTED_PROXY_RANGES' => '10.0.0.0/4', 'set_FFMPEG_PATH' => '']);
+    check('[country url] a value that is already in the settings file (even one this form would refuse) is not judged again by a save that leaves it as it is', ($cuSame['ok'] ?? null) === true && (cfg_read($cuCfg)['COUNTRY_DB_URL'] ?? null) === 'http://127.0.0.1:9/x-{ym}.gz' && (cfg_read($cuCfg)['TRUSTED_PROXY_RANGES'] ?? null) === ['10.0.0.0/4'], json_encode($cuSame));
+    // a different source is fetched even when its date and size are the same as the file in use
+    $cuSrv = new_fixture_dir('countryurl-src'); mkdir("$cuSrv/a", 0777, true); mkdir("$cuSrv/b", 0777, true); $cuYm = gmdate('Y-m');
+    foreach (['a', 'b'] as $cuD) { file_put_contents("$cuSrv/$cuD/dbip-country-lite-$cuYm.mmdb.gz", gzencode(make_test_mmdb(['203.0.113.0/24' => 'ES']))); touch("$cuSrv/$cuD/dbip-country-lite-$cuYm.mmdb.gz", 1700000000); }
+    $cuSrvPort = find_free_port(); start_server($cuSrv, $cuSrvPort);
+    $cuUrl = fn ($d) => "http://127.0.0.1:$cuSrvPort/$d/dbip-country-lite-{ym}.mmdb.gz";
+    $cuMerge(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => $cuUrl('a')]); $cuTmp = cfg_read($cuCfg); unset($cuTmp['TRUSTED_PROXY_RANGES']); file_put_contents($cuCfg, cfg_text($cuTmp));
+    $cuCsrf = extract_csrf_token($cuPage());
+    $cuAct = fn (string $a) => json_decode(http_post("$cuBase/?admin", ['action' => $a, 'csrf_token' => $cuCsrf], array_merge($cuOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $cuR1 = $cuAct('geo_refresh'); $cuR2 = $cuAct('geo_refresh');
+    $cuMerge(['COUNTRY_DB_URL' => $cuUrl('b')]);
+    $cuR3 = $cuAct('geo_refresh');
+    check('[country url] with the file already fetched (the admin page did it when it opened) a refresh says it is the newest, and after the source is changed to another address with the same date and size the next refresh fetches again (the file in use is from the old source)', ($cuR1['text'] ?? '') === 'You already have the newest file.' && ($cuR2['text'] ?? '') === 'You already have the newest file.' && ($cuR3['text'] ?? '') === 'Fetched the newest file.' && is_file("$cuFx/.gallery-geo.php"), json_encode([$cuR1, $cuR2, $cuR3]));
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up (N4 d, closed): a download that started at an https address is never sent on to this machine or a private network, whether by address or by a name that resolves there; the address that was checked is the one connected to
+echo "== chunk 9 follow-up: a redirect never leads into this machine or a private network ==\n";
+{
+    $hpSrc = $g2Fn('geo_url_ok') . "\n" . $g2Fn('geo_resolve_url') . "\n" . $g2Fn('geo_host_in') . "\n" . $g2Fn('geo_ip_is_public') . "\n" . $g2Fn('geo_resolve_ips') . "\n" . $g2Fn('geo_http') . "\n";
+    $hpRun = function (string $start, ?string $next) use ($g2Run, $hpSrc) {
+        $code = $hpSrc . '$GLOBALS["log"] = [];
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) {
+    $GLOBALS["log"][] = [$url, $pinIp];
+    if (count($GLOBALS["log"]) === 1 && $GLOBALS["next"] !== null) return ["status" => 302, "headers" => ["location" => $GLOBALS["next"]], "body" => "", "error" => ""];
+    return ["status" => 200, "headers" => [], "body" => "ok", "error" => ""];
+}
+$GLOBALS["next"] = ' . var_export($next, true) . ';
+$r = geo_http(' . var_export($start, true) . ');
+echo json_encode(["status" => $r["status"], "error" => $r["error"], "log" => $GLOBALS["log"]]);';
+        return json_decode($g2Run($code), true) ?: [];
+    };
+    foreach (['an address on this machine' => 'https://127.0.0.1:8443/x', 'an address on a private network' => 'https://10.0.0.5/x', 'a link-local address (a cloud metadata service)' => 'https://169.254.169.254/latest', 'localhost by name' => 'https://localhost/x', 'this machine by IPv6 address' => 'https://[::1]/x', 'a name that does not resolve' => 'https://no-such-host.invalid/x'] as $why => $next) {
+        $r = $hpRun('https://8.8.8.8/start', $next);
+        check("[redirect] a download that starts at https and is sent on to $why is not followed (no second request is made), and the answer says why", ($r['status'] ?? null) === 0 && count($r['log'] ?? []) === 1 && ($r['error'] ?? '') !== '' && (str_contains((string) $r['error'], 'private network') || str_contains((string) $r['error'], 'could not be found')), json_encode($r));
+    }
+    $hpOk = $hpRun('https://8.8.8.8/start', 'https://1.1.1.1/ok');
+    check('[redirect] ...and one sent on to another public address is followed, connecting to the address that was checked (the second request is told to use 1.1.1.1)', ($hpOk['status'] ?? null) === 200 && ($hpOk['log'][1][0] ?? '') === 'https://1.1.1.1/ok' && ($hpOk['log'][1][1] ?? null) === '1.1.1.1', json_encode($hpOk));
+    $hpLoop = $hpRun('http://127.0.0.1:1/a', 'http://127.0.0.1:2/b');
+    check('[redirect] a mirror of your own on this machine (plain http, as the tests and a local mirror use it) can still send on to another port here: only a download that started at https is held to this', ($hpLoop['status'] ?? null) === 200 && count($hpLoop['log'] ?? []) === 2 && array_key_exists(1, $hpLoop['log'][1] ?? []) && $hpLoop['log'][1][1] === null, json_encode($hpLoop));
+    $hpHttp = $hpRun('https://8.8.8.8/start', 'http://127.0.0.1:2/b');
+    check('[redirect] a download that starts at https and is sent on to plain http to this machine is still refused (the earlier rule), at that hop', ($hpHttp['status'] ?? null) === 0 && count($hpHttp['log'] ?? []) === 1 && str_contains((string) ($hpHttp['error'] ?? ''), 'not allowed'), json_encode($hpHttp));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
