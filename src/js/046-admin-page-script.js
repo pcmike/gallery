@@ -3268,11 +3268,23 @@
     }
     paint(root);
     function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
+    // A typed-data entry's lines are not in the list, so the search box asks the server which entries hold the words (the photos' names are matched here at once).
+    var found = { q: null, ids: {} }, findTimer = 0;
+    function find() {
+      var q = search.value.trim().toLowerCase(); if (findTimer) clearTimeout(findTimer);
+      if (!q) { found = { q: null, ids: {} }; return; }
+      findTimer = setTimeout(function () {
+        fetch('?admin&changes_find=' + encodeURIComponent(q), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+          if (!j || !j.ok || search.value.trim().toLowerCase() !== q) return;
+          var ids = {}; (j.ids || []).forEach(function (i) { ids[String(i)] = 1; }); found = { q: q, ids: ids }; apply();
+        }).catch(function () {});
+      }, 250);
+    }
     function apply() {
       [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
       var q = search.value.trim().toLowerCase(), c = chosen(), shown = 0, last = '';
       [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
-        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0);
+        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0 || (found.q === q && found.ids[e.getAttribute('data-id')] === 1));
         e.hidden = !ok; if (!ok) return;
         shown++;
         var d = dayOf(+e.getAttribute('data-t'));
@@ -3287,12 +3299,15 @@
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
     // A typed-data entry's lines are not in the list (they can be megabytes): they are fetched when its line is opened.
+    var lazyHtml = {};   // (an entry's lines never change once written: what was fetched is kept, so a list drawn again does not fetch an opened entry again)
     function loadLazy(e) {
       var box = e.querySelector('.ch-lazy'); if (!box || box.getAttribute('data-loaded') || box.getAttribute('data-loading')) return;
+      var id = box.getAttribute('data-id');
+      if (lazyHtml[id] !== undefined) { box.innerHTML = lazyHtml[id]; box.setAttribute('data-loaded', '1'); return; }
       box.setAttribute('data-loading', '1'); box.textContent = 'Loading\u2026';
-      fetch('?admin&changes_entry=' + encodeURIComponent(box.getAttribute('data-id')), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      fetch('?admin&changes_entry=' + encodeURIComponent(id), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
         box.removeAttribute('data-loading');
-        if (j && j.ok) { box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
+        if (j && j.ok) { lazyHtml[id] = j.html; box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
       }).catch(function () { box.removeAttribute('data-loading'); box.textContent = 'Could not load this entry. Close it and open it again.'; });
     }
     var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
@@ -3308,7 +3323,7 @@
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
           loadLazy(e);
         });
-        paint(list);
+        paint(list); if (search.value.trim()) find();
         [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
         if (empty) empty.hidden = j.n > 0;
         apply();
@@ -3332,7 +3347,7 @@
     root.querySelector('.ch-done').addEventListener('click', closePop);
     document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });
-    search.addEventListener('input', apply);
+    search.addEventListener('input', function () { apply(); find(); });
     list.addEventListener('click', function (ev) {
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;

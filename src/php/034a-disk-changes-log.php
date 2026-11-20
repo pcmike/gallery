@@ -147,7 +147,14 @@ function changes_check($dir, $files, $throttle) {
 }
 
 /** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
+/** A number too large for PHP to hold (a hand-typed 1e999 comes back as infinity) can't be written as JSON or as text: it is written as those words, wherever it sits in the entry. */
+function changes_data_finite($x) {
+    if (is_float($x) && !is_finite($x)) return '(a number too large to keep)';
+    if (is_array($x)) foreach ($x as $k => $v) $x[$k] = changes_data_finite($v);
+    return $x;
+}
 function changes_data_line($bare, $entry) {
+    $entry = changes_data_finite($entry);
     $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
     $empty = function ($x) { return $x === '' || $x === null || $x === false || $x === []; };
     $json = function ($x) { return json_encode($x, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); };
@@ -195,18 +202,26 @@ function changes_record_removed_data($folderRel, array $gone) {
     $now = time();
     $note = 'datahold:' . md5((string) $folderRel); $hash = md5(implode("\n", array_column($rows, 0)));
     $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now, $note, $hash) {
+        // (notes older than 30 days go: a folder renamed or emptied while its save was stuck would keep its note for good; a folder that is still stuck after that writes its entry once more)
+        $db->prepare('DELETE FROM meta WHERE k LIKE ? AND CAST(substr(v, 34) AS INTEGER) < ?')->execute(['datahold:%', $now - 30 * 86400]);
         $has = $db->prepare('SELECT v FROM meta WHERE k = ?'); $has->execute([$note]);
-        if ($has->fetchColumn() === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
+        if (explode('@', (string) $has->fetchColumn())[0] === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
             $in = $db->prepare('SELECT 1 FROM changes WHERE kind = ? AND folder = ? AND names = ? LIMIT 1'); $all = true;
             foreach ($rows as [$j]) { $in->execute(['data', (string) $folderRel, $j]); if ($in->fetchColumn() === false) { $all = false; break; } }
             if ($all) return true;
         }
         $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
-        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash]);
+        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash . '@' . $now]);
         return true;
     });
     return $ok === true ? true : false;
+}
+
+/** The folders that have a note of typed data waiting for the folder's own save (the meta keys, 'datahold:' and the md5 of the folder's name): [] when there is none or no log. A page
+ *  view asks this once, so a folder whose photos came back can forget its note (see gc_items_data). */
+function changes_holds() {
+    return changes_read(function ($db) { $o = []; foreach ($db->query("SELECT k FROM meta WHERE k LIKE 'datahold:%'") as $r) $o[(string) $r['k']] = 1; return $o; }, []);
 }
 
 /** The caller has taken the data out of the folder's file: the note that these entries were waiting for that is no longer needed. */

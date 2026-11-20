@@ -90,12 +90,30 @@ function geo_resolve_ips($host) {
 
 /** The public IPv6 addresses a host stands for (its own address when it is one): the ones a connection may be tied to when the IPv4 address it was tied to can't be reached. A private
  *  or reserved one is left out, never connected to. */
-function geo_public_ipv6($host) {
+function geo_public_ipv6($host, array $v4 = []) {
     $host = strtolower(trim((string) $host, '[]'));
     if ($host === '') return [];
     if (filter_var($host, FILTER_VALIDATE_IP) !== false) return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false && geo_ip_is_public($host) ? [$host] : [];
+    $aaaa = [];
+    if (function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $aaaa[] = (string) $r['ipv6'];
+    return geo_usable_ipv6($aaaa, $v4);
+}
+
+/** Of the IPv6 addresses a name answered with, the ones a connection may be tied to: public ones, and a translated one (64:ff9b::/96, what a server that reaches IPv4 only through a
+ *  translator is given for a host that has no IPv6 address of its own) only when the IPv4 address inside it is one of $v4, the name's own IPv4 addresses that were already checked as
+ *  public. A translated address that names any other IPv4 address, or a private one, is never used. */
+function geo_usable_ipv6(array $addrs, array $v4 = []) {
     $out = [];
-    if (function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6']) && geo_ip_is_public($r['ipv6'])) $out[] = $r['ipv6'];
+    foreach ($addrs as $a) {
+        if (geo_ip_is_public($a)) { $out[] = $a; continue; }
+        $bin = @inet_pton((string) $a);
+        if ($bin === false || strlen($bin) !== 16) continue;
+        $w = unpack('n8', $bin);
+        if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) {
+            $inside = (string) @inet_ntop(substr($bin, 12, 4));
+            if ($inside !== '' && in_array($inside, $v4, true) && geo_ip_is_public($inside)) $out[] = $a;
+        }
+    }
     return array_values(array_unique($out));
 }
 
@@ -124,7 +142,7 @@ function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinI
             CURLOPT_WRITEFUNCTION => function ($c, $d) use (&$out, $maxBytes) { $out['body'] .= $d; return strlen($out['body']) > $maxBytes ? 0 : strlen($d); }]);
         curl_exec($ch);
         $out['status'] = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE); $out['headers'] = $hd;
-        if (curl_errno($ch) !== 0 && $out['status'] === 0) { $out['error'] = curl_error($ch); $out['errno'] = curl_errno($ch); }
+        if (curl_errno($ch) !== 0 && $out['status'] === 0) { $out['error'] = curl_error($ch); $out['errno'] = curl_errno($ch); $out['connected'] = (float) curl_getinfo($ch, CURLINFO_CONNECT_TIME) > 0; }   // (connected: the connection was made and then failed, so another address would not help)
         if (PHP_VERSION_ID < 80500) curl_close($ch);   // (deprecated in PHP 8.5, where the handle is closed when it goes out of use)
         return $out;
     }
@@ -156,20 +174,26 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     for ($hop = 0; $hop <= 3; $hop++) {
         if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
-        $pin = null;
+        $pin = null; $v4s = [];
         if ($hop > 0 && $startsHttps) {   // (a download that began at an https address is never sent on to this machine or a private network, by address or by a name that resolves there)
             $ips = geo_resolve_ips((string) parse_url($cur, PHP_URL_HOST));
             if ($ips === null) $ips = [];   // (no way to look the name up here: it is followed as it always was, with the https and host rules that were already there)
             foreach ($ips as $ip) if (!geo_ip_is_public($ip)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is on this machine or a private network, so it was not followed.'; return $out; }
             if (!$ips && function_exists('gethostbynamel')) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which could not be found.'; return $out; }
-            foreach ($ips as $ip) if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) { $pin = $ip; break; }
+            $v4s = array_values(array_filter($ips, function ($ip) { return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false; }));
+            if ($v4s) $pin = $v4s[0];
             if ($pin === null) foreach ($ips as $ip) { $pin = $ip; break; }   // (a name with no IPv4 address at all: tied to the IPv6 address that was checked)
         }
+        $t0 = microtime(true);
         $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $pin);
-        // The IPv4 address it was tied to could not be reached (curl's "could not connect" or a timeout): a server with no IPv4 route, reaching IPv4 only through a translator, is
-        // like that. The name's own public IPv6 addresses, checked the same way, are tried next; a private one is never used.
-        if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true))
-            foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST)), 0, 2) as $v6) { $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $v6); if ($r['status'] !== 0) break; }
+        // The IPv4 address it was tied to could not be reached (curl's "could not connect" or a timeout while connecting): a server with no IPv4 route, reaching IPv4 only through a
+        // translator, is like that. The name's own public IPv6 addresses, checked the same way, are tried next; a private one is never used. A connection that was made and then
+        // stalled or failed is not tried again elsewhere, and all the tries share the one time limit: what is left of it is what a further try gets.
+        if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true) && empty($r['connected']))
+            foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST), $v4s), 0, 2) as $v6) {
+                $left = $timeout - (microtime(true) - $t0); if ($left < 2) break;
+                $r = geo_http_once($cur, $method, $headers, $maxBytes, (int) ceil($left), $v6); if ($r['status'] !== 0) break;
+            }
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
             $next = geo_resolve_url($cur, $r['headers']['location']);
             if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }

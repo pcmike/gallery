@@ -906,6 +906,12 @@ function health_checks($dir, $files) {
     $nameOf = function ($folder) use ($dir) { return $folder === rtrim($dir, '/') ? '(top folder)' : substr(scan_path_as_named($folder . '/x'), 0, -2); };
     foreach (array_keys($folders) as $folder) {
         if (!is_writable($folder)) $unwritable[] = $folder;
+        $cacheDir = $folder . '/.gallery-cache';   // (thumbnails and what the gallery knows about the folder's files: a folder or a file there that has another owner, after a restore made as root, can't be written)
+        if (is_dir($cacheDir) && !is_link($cacheDir)) {
+            $cacheLocked = !is_writable($cacheDir);
+            foreach (['meta1.php', 'taken4.php'] as $cacheFile) if (!$cacheLocked && is_file($cacheDir . '/' . $cacheFile) && !is_link($cacheDir . '/' . $cacheFile) && !is_writable($cacheDir . '/' . $cacheFile)) $cacheLocked = true;
+            if ($cacheLocked) $unwritableFiles[] = $nameOf($folder) . ' (its thumbnail folder)';
+        }
         $itemsFile = items_path($folder);
         if (!is_file($itemsFile)) continue;
         if (!is_link($itemsFile) && !is_writable($itemsFile)) $unwritableFiles[] = $nameOf($folder) . ' (the settings file for its photos)';
@@ -917,13 +923,13 @@ function health_checks($dir, $files) {
     $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
     $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
     foreach ([[links_path(), 'the share links file'], [collections_path(), 'the collections file']] as [$gf, $gl]) if (is_file($gf) && !is_link($gf) && !is_writable($gf)) $unwritableFiles[] = $gl;
-    if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own file' . (count($unwritableFiles) === 1 ? ' is' : 's are') . ' not writable by the web server',
-        'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
+    if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own files ' . (count($unwritableFiles) === 1 ? 'is' : 'are') . ' not writable by the web server',
+        'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections, thumbnails) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
         'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
-        ['Give it just the gallery\'s own files (the ones named above; your photos and folders stay with their owner), for example:', 'sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chown www-data: {} +'],
-        'Or let the group write to those files only: `sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chmod g+w {} +`, with the web server\'s user in that group. A network share may need its own permissions changed instead. A place from elsewhere that is named above needs the same command with its own path.',
+        ['Give it just the gallery\'s own files and the thumbnail folders (the ones named above; your photos and folders stay with their owner), for example:', 'sudo find /path/to/the/gallery/ \\( -name \'.gallery-*\' -o -path \'*/.gallery-cache/*\' \\) ! -type l -exec chown -h www-data: {} +'],
+        'Or let the group write to those only: `sudo find /path/to/the/gallery/ \\( -name \'.gallery-*.php\' -o -name \'.gallery-cache\' -o -path \'*/.gallery-cache/*\' \\) ! -type l -exec chmod g+w {} +`, with the web server\'s user in that group. A network share may need its own permissions changed instead. A place from elsewhere that is named above needs the same command with its own path.',
         'Then press Check again at the top of this page.']);
-    $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
+    $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders ' . (count($unwritable) === 1 ? 'is' : 'are') . ' not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
         $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
         'The web server\'s user needs to be able to write in those folders. On Debian or Ubuntu that user is usually `www-data`; on other systems it may be `nginx`, `apache` or `http` (the command `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
         ['Give it the folder, for example:', 'sudo chown -R www-data: /path/to/the/folder'],
@@ -1042,7 +1048,7 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
-    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format(SCAN_MAX_FOLDERS) . ' folders (the most the gallery looks at on one visit) were looked through for these, so there may be more further on.';
+    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format((int) ($GLOBALS['__old_dates_looked'] ?? 0)) . ' folders were looked through for these (a very large tree is not walked to its end: the most is ' . number_format(old_dates_ceiling()) . ' folders or a few seconds), so there may be more further on.';
     if ($odd) {   // (the plain capture-dates files an earlier version made: they hold file names, and no look of the gallery's own reaches them with the cache off and the order by name, or in a place from elsewhere)
         $odN = count($odd); $odElse = count(array_filter($odd, function ($e) { return $e['elsewhere']; }));
         $odWhere = array_values(array_unique(array_map(function ($e) { return $e['folder'] === '' ? 'the main page' : $e['folder']; }, $odd)));

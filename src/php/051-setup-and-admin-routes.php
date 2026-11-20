@@ -232,6 +232,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         $chHtml = is_string($_GET['changes_entry']) && preg_match('/^\d{1,12}$/D', $_GET['changes_entry']) === 1 ? changes_data_names_html((int) $_GET['changes_entry']) : null;
         admin_json_exit($chHtml === null ? ['ok' => false] : ['ok' => true, 'html' => $chHtml]);
     }
+    if (isset($_GET['changes_find'])) {   // which typed-data entries hold a word (the list does not carry their lines): the Changes tab's search box asks for it
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true, 'ids' => is_string($_GET['changes_find']) ? changes_data_find($_GET['changes_find']) : []]);
+    }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
         header('Content-Type: application/json; charset=UTF-8');

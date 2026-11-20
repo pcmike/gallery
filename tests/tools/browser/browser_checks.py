@@ -3544,6 +3544,17 @@ try:
         comes_back()
         gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return {open: !e.querySelector('.ch-x').hidden, text: e.querySelector('.ch-lazy').textContent}; })()")
         ok(gl["open"] and "Caption: ghost caption words" in gl["text"], "[changes tab] ...and when the list is drawn again with the entry open it is still open, with its lines", str(gl))
+        # ...and an opened entry is not fetched again each time the list is drawn (its lines never change): count the requests while a new photo makes the list change
+        b.js("window.__lz = 0; (function () { var f = window.fetch; window.fetch = function (u) { if (String(u).indexOf('changes_entry') >= 0) window.__lz++; return f.apply(this, arguments); }; })()")
+        open(SITE_L + "/Rome/chtab4.jpg", "wb").write(open(SITE_L + "/Rome/r1.jpg", "rb").read())
+        comes_back(); b.drain(1.0)
+        gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return {fetches: window.__lz, open: !e.querySelector('.ch-x').hidden, text: e.querySelector('.ch-lazy').textContent, newOne: !!document.querySelector('.ch-e[data-text*=chtab4]')}; })()")
+        ok(gl["newOne"] and gl["fetches"] == 0 and gl["open"] and "Caption: ghost caption words" in gl["text"], "[changes tab] ...a list drawn again because something new arrived does not fetch the opened entry again, and it keeps its lines", str(gl))
+        # the search box finds a typed-data entry by a word that was typed for its photo (the list does not carry it: the server says which entries hold it)
+        b.js("(function () { var q = document.querySelector('.ch-search'); q.value = 'GHOST caption WORDS'; q.dispatchEvent(new Event('input', {bubbles: true})); })()"); b.drain(1.5)
+        gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return {shown: !!e && !e.hidden, n: document.querySelectorAll('.ch-e:not([hidden])').length}; })()")
+        ok(gl["shown"] and gl["n"] == 1, "[changes tab] typing words that were typed for a photo (a caption, in capitals) shows the entry that holds them, and only that one", str(gl))
+        b.js("(function () { var q = document.querySelector('.ch-search'); q.value = 'chtab'; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
         # the kinds list is the Visitors tab's own (a list under the chip: rows with a tick, Done), stays open while ticking, Esc and Done close it
         b.js("document.querySelector('#changes .ch-pill').click()"); b.drain(0.3)
         pl = b.js("(() => { const p = document.querySelector('#changes .ch-pop'), c = document.querySelector('#changes .ch-pill'), o = p.querySelector('.vt-opt[data-g=add]'); return {open: !p.hidden, exp: c.getAttribute('aria-expanded'), radius: getComputedStyle(p).borderRadius, minw: getComputedStyle(p).minWidth, chip: getComputedStyle(c).borderRadius, tick: getComputedStyle(o.querySelector('.tk')).visibility, all: p.querySelector('[data-all]').classList.contains('on')}; })()")
@@ -3555,7 +3566,7 @@ try:
         ok(b.js("document.querySelector('#changes .ch-pill-t').textContent") == "All kinds" and not b.js("document.querySelector('#changes .ch-pill').classList.contains('on')"), "[changes tab] picking All kinds clears the choice")
         b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))"); b.drain(0.2)
         ok(b.js("document.querySelector('#changes .ch-pop').hidden") and b.js("document.querySelector('#changes .ch-pill').getAttribute('aria-expanded')") == "false", "[changes tab] Esc closes the list")
-        os.unlink(SITE_L + "/Rome/chtab1.jpg"); os.unlink(SITE_L + "/Rome/chtab2.jpg"); comes_back()
+        os.unlink(SITE_L + "/Rome/chtab1.jpg"); os.unlink(SITE_L + "/Rome/chtab2.jpg"); os.unlink(SITE_L + "/Rome/chtab4.jpg"); comes_back()
         b.js("(function(){ var q = document.querySelector('.ch-search'); q.value = ''; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
         # ---- Settings: the signed-in browsers and Prepare media's numbers are asked for again when the window comes back
         b.goto(BL + "/?admin&classic=1&p4=1#site", 3.0); b.js("window.__live.min = 0")

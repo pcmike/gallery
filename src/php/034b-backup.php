@@ -93,7 +93,7 @@ function backup_sqlite_check($path) {
         $p->exec('PRAGMA busy_timeout = 5000');
         $q = $p->query('PRAGMA quick_check')->fetchAll(PDO::FETCH_COLUMN);
         $p = null;
-        if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; return 'is damaged (SQLite found ' . max(1, $n) . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
+        if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; $n = max(1, $n); return 'is damaged (SQLite found ' . $n . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
         return '';
     } catch (Throwable $e) {
         return 'is damaged or can\'t be read (' . substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120) . ')';

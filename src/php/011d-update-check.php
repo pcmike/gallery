@@ -77,6 +77,19 @@ function update_check_due() {
     return time() - (int) update_state()['triedAt'] >= 86400;
 }
 
+/** Takes this look for this request: the time of the try is written BEFORE the releases page is asked (under the file's lock), so a second admin page opened while the first answer is still
+ *  waited for sees that a look is under way and does not ask again. $force (the Check now button) always goes ahead. True when this request should ask. */
+function update_claim_try($force) {
+    if (!$force && !update_check_due()) return false;
+    $got = false;
+    $defaults = ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0];
+    json_file_update(update_state_path(), $defaults, function (&$d) use (&$got, $force) {
+        if (!$force && time() - (int) ($d['triedAt'] ?? 0) < 86400) return;   // (another request took it a moment ago)
+        $d['triedAt'] = time(); $got = true;
+    }, true);
+    return $got || $force;
+}
+
 /** The newest version, when it is newer than this one (from what we last learned; nothing is asked here). Else null. */
 function update_newer() {
     $st = update_state();
@@ -231,7 +244,7 @@ function update_status_html() {
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
 function update_admin_action($action) {
     if ($action === 'update_check') {
-        if (($_POST['force'] ?? '') === '1' || update_check_due()) {
+        if (update_claim_try(($_POST['force'] ?? '') === '1')) {
             if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // (the sign-in is not needed while the releases page is asked: every other admin request from this browser would wait for the answer)
             update_fetch();
         }

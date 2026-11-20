@@ -1237,7 +1237,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'backupdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'tz', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'changes_entry', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'backupdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'tz', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'changes_entry', 'changes_find', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -3853,9 +3853,12 @@ function moved_in_remove_leftovers($dir, $files) {
 /** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
 function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
 
+/** How many folders the look for the old capture-date files goes through at most. */
+function old_dates_ceiling() { return max(10, SCAN_MAX_FOLDERS * 10); }
+
 /** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
 function old_dates_walk($realDir, $rel, array &$out, &$budget) {
-    if ($budget <= 0) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
+    if ($budget <= 0 || microtime(true) > (float) ($GLOBALS['__old_dates_until'] ?? PHP_INT_MAX)) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
     $budget--;
     $out[] = ['real' => $realDir, 'rel' => $rel];
     foreach (@scandir($realDir) ?: [] as $e) {
@@ -3870,19 +3873,20 @@ function old_dates_walk($realDir, $rel, array &$out, &$budget) {
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
-    $GLOBALS['__old_dates_cut'] = false;
+    $GLOBALS['__old_dates_cut'] = false; $GLOBALS['__old_dates_until'] = microtime(true) + 2.5;   // (a look that takes longer than that stops there and says so: a very large tree)
     $found = [];
     // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
     // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.
     $folders = []; $seen = [];
     foreach (moved_in_folders($dir, $files) as $f) { $folders[] = $f; $seen[(string) (realpath($f['real']) ?: $f['real'])] = true; }
-    $budget = SCAN_MAX_FOLDERS; $walked = [];
+    $budget = old_dates_ceiling(); $walked = [];   // (ten times what the gallery shows on one visit: a gallery just over the limit is looked through whole, and only a tree far beyond it is cut short)
     old_dates_walk((string) (realpath($dir) ?: $dir), '', $walked, $budget);
     foreach (gallery_mounts() as $name => $real) {
         $name = (string) $name;
         if ($name === '' || strpbrk($name, "/\\") !== false || !is_dir($real) || is_link($real)) continue;
         old_dates_walk((string) (realpath($real) ?: $real), $name, $walked, $budget);
     }
+    $GLOBALS['__old_dates_looked'] = count($walked);
     foreach ($walked as $w) {
         if (isset($seen[$w['real']])) continue;
         $seen[$w['real']] = true; $folders[] = ['real' => $w['real'], 'rel' => $w['rel'], 'files' => []];
@@ -5171,12 +5175,30 @@ function geo_resolve_ips($host) {
 
 /** The public IPv6 addresses a host stands for (its own address when it is one): the ones a connection may be tied to when the IPv4 address it was tied to can't be reached. A private
  *  or reserved one is left out, never connected to. */
-function geo_public_ipv6($host) {
+function geo_public_ipv6($host, array $v4 = []) {
     $host = strtolower(trim((string) $host, '[]'));
     if ($host === '') return [];
     if (filter_var($host, FILTER_VALIDATE_IP) !== false) return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false && geo_ip_is_public($host) ? [$host] : [];
+    $aaaa = [];
+    if (function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6'])) $aaaa[] = (string) $r['ipv6'];
+    return geo_usable_ipv6($aaaa, $v4);
+}
+
+/** Of the IPv6 addresses a name answered with, the ones a connection may be tied to: public ones, and a translated one (64:ff9b::/96, what a server that reaches IPv4 only through a
+ *  translator is given for a host that has no IPv6 address of its own) only when the IPv4 address inside it is one of $v4, the name's own IPv4 addresses that were already checked as
+ *  public. A translated address that names any other IPv4 address, or a private one, is never used. */
+function geo_usable_ipv6(array $addrs, array $v4 = []) {
     $out = [];
-    if (function_exists('dns_get_record')) foreach ((array) @dns_get_record($host, DNS_AAAA) as $r) if (isset($r['ipv6']) && geo_ip_is_public($r['ipv6'])) $out[] = $r['ipv6'];
+    foreach ($addrs as $a) {
+        if (geo_ip_is_public($a)) { $out[] = $a; continue; }
+        $bin = @inet_pton((string) $a);
+        if ($bin === false || strlen($bin) !== 16) continue;
+        $w = unpack('n8', $bin);
+        if ($w[1] === 0x0064 && $w[2] === 0xFF9B && $w[3] === 0 && $w[4] === 0 && $w[5] === 0 && $w[6] === 0) {
+            $inside = (string) @inet_ntop(substr($bin, 12, 4));
+            if ($inside !== '' && in_array($inside, $v4, true) && geo_ip_is_public($inside)) $out[] = $a;
+        }
+    }
     return array_values(array_unique($out));
 }
 
@@ -5205,7 +5227,7 @@ function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinI
             CURLOPT_WRITEFUNCTION => function ($c, $d) use (&$out, $maxBytes) { $out['body'] .= $d; return strlen($out['body']) > $maxBytes ? 0 : strlen($d); }]);
         curl_exec($ch);
         $out['status'] = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE); $out['headers'] = $hd;
-        if (curl_errno($ch) !== 0 && $out['status'] === 0) { $out['error'] = curl_error($ch); $out['errno'] = curl_errno($ch); }
+        if (curl_errno($ch) !== 0 && $out['status'] === 0) { $out['error'] = curl_error($ch); $out['errno'] = curl_errno($ch); $out['connected'] = (float) curl_getinfo($ch, CURLINFO_CONNECT_TIME) > 0; }   // (connected: the connection was made and then failed, so another address would not help)
         if (PHP_VERSION_ID < 80500) curl_close($ch);   // (deprecated in PHP 8.5, where the handle is closed when it goes out of use)
         return $out;
     }
@@ -5237,20 +5259,26 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     for ($hop = 0; $hop <= 3; $hop++) {
         if (!geo_url_ok($cur, $loopOk)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
         if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
-        $pin = null;
+        $pin = null; $v4s = [];
         if ($hop > 0 && $startsHttps) {   // (a download that began at an https address is never sent on to this machine or a private network, by address or by a name that resolves there)
             $ips = geo_resolve_ips((string) parse_url($cur, PHP_URL_HOST));
             if ($ips === null) $ips = [];   // (no way to look the name up here: it is followed as it always was, with the https and host rules that were already there)
             foreach ($ips as $ip) if (!geo_ip_is_public($ip)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is on this machine or a private network, so it was not followed.'; return $out; }
             if (!$ips && function_exists('gethostbynamel')) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which could not be found.'; return $out; }
-            foreach ($ips as $ip) if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) { $pin = $ip; break; }
+            $v4s = array_values(array_filter($ips, function ($ip) { return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false; }));
+            if ($v4s) $pin = $v4s[0];
             if ($pin === null) foreach ($ips as $ip) { $pin = $ip; break; }   // (a name with no IPv4 address at all: tied to the IPv6 address that was checked)
         }
+        $t0 = microtime(true);
         $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $pin);
-        // The IPv4 address it was tied to could not be reached (curl's "could not connect" or a timeout): a server with no IPv4 route, reaching IPv4 only through a translator, is
-        // like that. The name's own public IPv6 addresses, checked the same way, are tried next; a private one is never used.
-        if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true))
-            foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST)), 0, 2) as $v6) { $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout, $v6); if ($r['status'] !== 0) break; }
+        // The IPv4 address it was tied to could not be reached (curl's "could not connect" or a timeout while connecting): a server with no IPv4 route, reaching IPv4 only through a
+        // translator, is like that. The name's own public IPv6 addresses, checked the same way, are tried next; a private one is never used. A connection that was made and then
+        // stalled or failed is not tried again elsewhere, and all the tries share the one time limit: what is left of it is what a further try gets.
+        if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true) && empty($r['connected']))
+            foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST), $v4s), 0, 2) as $v6) {
+                $left = $timeout - (microtime(true) - $t0); if ($left < 2) break;
+                $r = geo_http_once($cur, $method, $headers, $maxBytes, (int) ceil($left), $v6); if ($r['status'] !== 0) break;
+            }
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
             $next = geo_resolve_url($cur, $r['headers']['location']);
             if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }
@@ -5603,6 +5631,19 @@ function update_check_due() {
     return time() - (int) update_state()['triedAt'] >= 86400;
 }
 
+/** Takes this look for this request: the time of the try is written BEFORE the releases page is asked (under the file's lock), so a second admin page opened while the first answer is still
+ *  waited for sees that a look is under way and does not ask again. $force (the Check now button) always goes ahead. True when this request should ask. */
+function update_claim_try($force) {
+    if (!$force && !update_check_due()) return false;
+    $got = false;
+    $defaults = ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0];
+    json_file_update(update_state_path(), $defaults, function (&$d) use (&$got, $force) {
+        if (!$force && time() - (int) ($d['triedAt'] ?? 0) < 86400) return;   // (another request took it a moment ago)
+        $d['triedAt'] = time(); $got = true;
+    }, true);
+    return $got || $force;
+}
+
 /** The newest version, when it is newer than this one (from what we last learned; nothing is asked here). Else null. */
 function update_newer() {
     $st = update_state();
@@ -5757,7 +5798,7 @@ function update_status_html() {
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
 function update_admin_action($action) {
     if ($action === 'update_check') {
-        if (($_POST['force'] ?? '') === '1' || update_check_due()) {
+        if (update_claim_try(($_POST['force'] ?? '') === '1')) {
             if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // (the sign-in is not needed while the releases page is asked: every other admin request from this browser would wait for the answer)
             update_fetch();
         }
@@ -9649,6 +9690,7 @@ function gc_items_data($dir, $files, &$galleryNotices) {
     // Only ever GC folders that actually have an items store — a gallery
     // that's never touched the admin tool pays nothing for this.
     $candidateFolders = array_unique(array_merge(array_keys($byFolder), [$dir]));
+    $holds = null;
     foreach ($candidateFolders as $folderPath) {
         $path = items_path($folderPath);
         if (!file_exists($path)) continue;
@@ -9663,6 +9705,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         $orphanCount = 0;
         foreach (array_keys($stored['items']) as $bare) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
+        }
+        if ($orphanCount === 0) {   // (nothing of the kind here: a note that this folder's typed data waits for its save is no longer true, e.g. the photos came back; asked once per look)
+            if ($holds === null) $holds = changes_holds();
+            if ($holds) { $rel0 = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2); if (isset($holds['datahold:' . md5($rel0)])) changes_removed_data_done($rel0); }
+            continue;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
         $keptCount = 0; $goneNames = []; $logged = false; $saveRan = false; $firstCount = $orphanCount;
@@ -9679,9 +9726,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
-        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab)
+        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab. What stopped it is said as it is.)
         if ($firstCount > 0 && !$saveRan) {
-            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file can\'t be written by the web server, so nothing was removed and nothing was written in the Changes tab. It is tried again at the next look. The Health check in Settings says more.';
+            $cause = (string) (((array) ($GLOBALS['__data_write_cause'] ?? []))[$path] ?? '');
+            $reason = ['file' => 'the web server may not open it for writing: it has another owner, or is read-only', 'lock' => 'the server would not let the gallery lock it, which it needs to save safely', 'busy' => 'other saves kept changing it for too long', 'dir' => 'it is a folder, not a file'][$cause] ?? 'its folder is not writable by the web server';
+            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (' . $reason . '), so nothing was removed' . (changes_tab_wanted() ? ' and nothing was written in the Changes tab' : '') . '. It is tried again at the next look. The Health check in Settings says more.';
             $orphanCount = 0;
         }
         // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
@@ -10802,7 +10851,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
-        if (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}]/u', (string) substr($target, 0, -3))) {   // (nothing before the "md", or only spaces and invisible characters such as U+200B: a note with no name that can be seen)
+        // (nothing before the "md", or only spaces and invisible characters: controls and format characters such as U+200B, and the letters and marks that show nothing: the Hangul fillers U+115F U+1160 U+3164 U+FFA0,
+        // the Braille blank U+2800, the combining grapheme joiner U+034F, the Khmer inherent vowels U+17B4 U+17B5 and the variation selectors. A note that is ALREADY there under such a name (earlier versions allowed it)
+        // can still be saved: it keeps the name it has.)
+        if (!is_file($adminFolderReal . '/' . $target) && (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}]/u', (string) substr($target, 0, -3)))) {
             return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
@@ -15168,7 +15220,14 @@ function changes_check($dir, $files, $throttle) {
 }
 
 /** One line for what was typed or saved for a photo that is gone: its name, then each thing that was kept for it (caption, web link, place, location, any other setting), exactly. */
+/** A number too large for PHP to hold (a hand-typed 1e999 comes back as infinity) can't be written as JSON or as text: it is written as those words, wherever it sits in the entry. */
+function changes_data_finite($x) {
+    if (is_float($x) && !is_finite($x)) return '(a number too large to keep)';
+    if (is_array($x)) foreach ($x as $k => $v) $x[$k] = changes_data_finite($v);
+    return $x;
+}
 function changes_data_line($bare, $entry) {
+    $entry = changes_data_finite($entry);
     $labels = ['caption' => 'Caption', 'web' => 'Web link', 'name' => 'Name'];
     $empty = function ($x) { return $x === '' || $x === null || $x === false || $x === []; };
     $json = function ($x) { return json_encode($x, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); };
@@ -15216,18 +15275,26 @@ function changes_record_removed_data($folderRel, array $gone) {
     $now = time();
     $note = 'datahold:' . md5((string) $folderRel); $hash = md5(implode("\n", array_column($rows, 0)));
     $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now, $note, $hash) {
+        // (notes older than 30 days go: a folder renamed or emptied while its save was stuck would keep its note for good; a folder that is still stuck after that writes its entry once more)
+        $db->prepare('DELETE FROM meta WHERE k LIKE ? AND CAST(substr(v, 34) AS INTEGER) < ?')->execute(['datahold:%', $now - 30 * 86400]);
         $has = $db->prepare('SELECT v FROM meta WHERE k = ?'); $has->execute([$note]);
-        if ($has->fetchColumn() === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
+        if (explode('@', (string) $has->fetchColumn())[0] === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
             $in = $db->prepare('SELECT 1 FROM changes WHERE kind = ? AND folder = ? AND names = ? LIMIT 1'); $all = true;
             foreach ($rows as [$j]) { $in->execute(['data', (string) $folderRel, $j]); if ($in->fetchColumn() === false) { $all = false; break; } }
             if ($all) return true;
         }
         $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach ($rows as [$j, $n]) $ins->execute([$now, $now, $now, 'data', (string) $folderRel, $n, $j, 0, '[]']);
-        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash]);
+        $db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute([$note, $hash . '@' . $now]);
         return true;
     });
     return $ok === true ? true : false;
+}
+
+/** The folders that have a note of typed data waiting for the folder's own save (the meta keys, 'datahold:' and the md5 of the folder's name): [] when there is none or no log. A page
+ *  view asks this once, so a folder whose photos came back can forget its note (see gc_items_data). */
+function changes_holds() {
+    return changes_read(function ($db) { $o = []; foreach ($db->query("SELECT k FROM meta WHERE k LIKE 'datahold:%'") as $r) $o[(string) $r['k']] = 1; return $o; }, []);
 }
 
 /** The caller has taken the data out of the folder's file: the note that these entries were waiting for that is no longer needed. */
@@ -15481,7 +15548,7 @@ function backup_sqlite_check($path) {
         $p->exec('PRAGMA busy_timeout = 5000');
         $q = $p->query('PRAGMA quick_check')->fetchAll(PDO::FETCH_COLUMN);
         $p = null;
-        if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; return 'is damaged (SQLite found ' . max(1, $n) . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
+        if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; $n = max(1, $n); return 'is damaged (SQLite found ' . $n . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
         return '';
     } catch (Throwable $e) {
         return 'is damaged or can\'t be read (' . substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120) . ')';
@@ -16792,6 +16859,12 @@ function health_checks($dir, $files) {
     $nameOf = function ($folder) use ($dir) { return $folder === rtrim($dir, '/') ? '(top folder)' : substr(scan_path_as_named($folder . '/x'), 0, -2); };
     foreach (array_keys($folders) as $folder) {
         if (!is_writable($folder)) $unwritable[] = $folder;
+        $cacheDir = $folder . '/.gallery-cache';   // (thumbnails and what the gallery knows about the folder's files: a folder or a file there that has another owner, after a restore made as root, can't be written)
+        if (is_dir($cacheDir) && !is_link($cacheDir)) {
+            $cacheLocked = !is_writable($cacheDir);
+            foreach (['meta1.php', 'taken4.php'] as $cacheFile) if (!$cacheLocked && is_file($cacheDir . '/' . $cacheFile) && !is_link($cacheDir . '/' . $cacheFile) && !is_writable($cacheDir . '/' . $cacheFile)) $cacheLocked = true;
+            if ($cacheLocked) $unwritableFiles[] = $nameOf($folder) . ' (its thumbnail folder)';
+        }
         $itemsFile = items_path($folder);
         if (!is_file($itemsFile)) continue;
         if (!is_link($itemsFile) && !is_writable($itemsFile)) $unwritableFiles[] = $nameOf($folder) . ' (the settings file for its photos)';
@@ -16803,13 +16876,13 @@ function health_checks($dir, $files) {
     $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
     $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
     foreach ([[links_path(), 'the share links file'], [collections_path(), 'the collections file']] as [$gf, $gl]) if (is_file($gf) && !is_link($gf) && !is_writable($gf)) $unwritableFiles[] = $gl;
-    if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own file' . (count($unwritableFiles) === 1 ? ' is' : 's are') . ' not writable by the web server',
-        'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
+    if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own files ' . (count($unwritableFiles) === 1 ? 'is' : 'are') . ' not writable by the web server',
+        'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections, thumbnails) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
         'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
-        ['Give it just the gallery\'s own files (the ones named above; your photos and folders stay with their owner), for example:', 'sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chown www-data: {} +'],
-        'Or let the group write to those files only: `sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chmod g+w {} +`, with the web server\'s user in that group. A network share may need its own permissions changed instead. A place from elsewhere that is named above needs the same command with its own path.',
+        ['Give it just the gallery\'s own files and the thumbnail folders (the ones named above; your photos and folders stay with their owner), for example:', 'sudo find /path/to/the/gallery/ \\( -name \'.gallery-*\' -o -path \'*/.gallery-cache/*\' \\) ! -type l -exec chown -h www-data: {} +'],
+        'Or let the group write to those only: `sudo find /path/to/the/gallery/ \\( -name \'.gallery-*.php\' -o -name \'.gallery-cache\' -o -path \'*/.gallery-cache/*\' \\) ! -type l -exec chmod g+w {} +`, with the web server\'s user in that group. A network share may need its own permissions changed instead. A place from elsewhere that is named above needs the same command with its own path.',
         'Then press Check again at the top of this page.']);
-    $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
+    $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders ' . (count($unwritable) === 1 ? 'is' : 'are') . ' not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
         $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
         'The web server\'s user needs to be able to write in those folders. On Debian or Ubuntu that user is usually `www-data`; on other systems it may be `nginx`, `apache` or `http` (the command `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
         ['Give it the folder, for example:', 'sudo chown -R www-data: /path/to/the/folder'],
@@ -16928,7 +17001,7 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
-    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format(SCAN_MAX_FOLDERS) . ' folders (the most the gallery looks at on one visit) were looked through for these, so there may be more further on.';
+    $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format((int) ($GLOBALS['__old_dates_looked'] ?? 0)) . ' folders were looked through for these (a very large tree is not walked to its end: the most is ' . number_format(old_dates_ceiling()) . ' folders or a few seconds), so there may be more further on.';
     if ($odd) {   // (the plain capture-dates files an earlier version made: they hold file names, and no look of the gallery's own reaches them with the cache off and the order by name, or in a place from elsewhere)
         $odN = count($odd); $odElse = count(array_filter($odd, function ($e) { return $e['elsewhere']; }));
         $odWhere = array_values(array_unique(array_map(function ($e) { return $e['folder'] === '' ? 'the main page' : $e['folder']; }, $odd)));
@@ -17031,6 +17104,27 @@ function changes_data_names_html($id) {
     return $o;
 }
 
+/** The ids of the typed-data entries whose text (a photo's name, or any word typed for it) holds $term, newest first. The list does not carry what was typed (it can be megabytes), so the search box asks here. */
+function changes_data_find($term) {
+    $term = trim(substr((string) $term, 0, 200));
+    while ($term !== '' && !preg_match('//u', $term)) $term = substr($term, 0, -1);   // (a cut-off letter at the end of a long term is dropped)
+    if ($term === '') return [];
+    $re = '/' . preg_quote($term, '/') . '/iu';   // (capitals do not matter for any letter, accents included; PCRE does it, so no mbstring is needed)
+    return changes_read(function ($db) use ($term, $re) {
+        $ids = [];
+        $st = $db->query("SELECT id, names FROM changes WHERE kind = 'data' ORDER BY id DESC");
+        while ($r = $st->fetch()) {
+            $names = json_decode((string) $r['names'], true);
+            if (!is_array($names)) continue;
+            $hay = implode("\n", array_map('strval', $names));
+            $hit = preg_match($re, $hay);
+            if ($hit === false) $hit = stripos($hay, $term) !== false ? 1 : 0;   // (text that is not valid UTF-8: the plain look)
+            if ($hit === 1) { $ids[] = (int) $r['id']; if (count($ids) >= 1000) break; }
+        }
+        return $ids;
+    }, []);
+}
+
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
     $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
@@ -17062,7 +17156,7 @@ function changes_entries_html($rows, $seen) {
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
         // A typed-data entry holds every word that was typed for each photo: it can be megabytes, so the list does not carry it. It is fetched when the line is opened (changes_data_names_html),
-        // and the search looks at the photos' names, which is what the box says it searches.
+        // and the search box finds them by what was typed too: it asks the server (changes_data_find), the list holds only the photos' names for the quick look.
         $lazy = $kind === 'data';
         $hayNames = $lazy ? array_map(function ($x) { $q = strpos((string) $x, ' — '); return $q === false ? (string) $x : substr((string) $x, 0, $q); }, $names) : $names;
         $hay = strtolower($where . ' ' . implode(' ', $hayNames) . ' ' . implode(' ', $gone));
@@ -17214,21 +17308,31 @@ function health_database_rows($add, $dir, $files) {
     [$vlOk, $vlWhy] = visitlog_check_quiet();
     $bk = backup_status();
     $logFile = visitlog_find();
+    $logWhy = $heavy['log']['why'] ?? '';
+    if ($logFile !== null && $logWhy !== '' && stripos($logWhy, 'unable to open') !== false && visitlog_driver_ok()) $logWhy = backup_sqlite_check($logFile);   // (a look kept from when the file could not be opened is not believed: the owner may have mended it since)
+    $logCantOpen = $logWhy !== '' && stripos($logWhy, 'unable to open') !== false;   // (the file or its side files can't be opened: another owner's, not damaged)
     $logLocked = function ($canRead) use ($add, $G, $logFile, $uses) {
-        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it' : 'read or write it') . ' (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. The log itself is not damaged. ' . $uses, null, '', [
+        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it (or to the small files SQLite keeps beside it)' : 'read or write it (or the small files SQLite keeps beside it)') . ' (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. This does not mean the log is damaged. ' . $uses, null, '', [
             'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
             ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
+            'If the files already belong to the web server\'s user and only their permissions were changed, this puts them right: `sudo chmod 600 /path/to/the/gallery/.gallery-visits-*`.',
             'Then press Check again at the top of this page.']);
     };
-    if ($logFile !== null && visitlog_driver_ok() && !@is_readable($logFile)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
+    if ($logFile !== null && visitlog_driver_ok() && (!@is_readable($logFile) || $logCantOpen)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
         $logLocked(false);
-    } elseif ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
-        $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
+    } elseif ($logFile !== null && $logWhy !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
+        $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $logWhy . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
         $logLocked(true);
+    } elseif (!$vlOk && visitlog_driver_ok() && $logFile !== null && preg_match('~readonly|read-only|unable to open|permission~i', (string) $vlWhy)) {   // (SQLite is there; the file, or the small files it keeps beside it, belong to another user or are read-only: not a missing SQLite)
+        $logLocked(true);
+    } elseif (!$vlOk && visitlog_driver_ok()) {   // (SQLite is there and the log still can't be kept: its folder or the disk, not a missing SQLite)
+        $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'The visitor log can\'t be written', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
+            'If the disk or the account\'s storage is full, free some room (the Server group below says how much is left). Otherwise the web server must be allowed to write in the gallery\'s folder.',
+            'Then press Check again at the top of this page.']);
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
@@ -17406,8 +17510,9 @@ function health_server_rows($add) {
     $many = count($vols) > 1;
     foreach ($vols as $v) {
         $where = $many ? ' on ' . $v['name'] : '';
-        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'The gallery needs room for itself on this disk too, not only for your photos: captions and settings, thumbnails, view counts, the visitor and change logs and the backup are all kept here. When the disk is full they stop being saved, settings fail to save, the Changes tab can\'t record what is removed (so the captions of deleted photos are kept until there is room), and new photos can\'t be added.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
-        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'This disk holds more than the photos you share: the gallery keeps its captions and settings, thumbnails, view counts, logs and backup here, and they grow over time. If it runs out, saving fails and the logs (the Changes tab included) stop being kept. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
+        $ownDisk = in_array('the gallery folder', (array) ($v['names'] ?? []), true);   // (the logs, the backup and the gallery's own settings are in the gallery's folder: on another disk only each folder's own captions and thumbnails are)
+        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? ($ownDisk ? 'The gallery needs room for itself on this disk too, not only for your photos: captions and settings, thumbnails, view counts, the visitor and change logs and the backup are all kept here. When the disk is full they stop being saved, settings fail to save, the Changes tab can\'t record what is removed (so the captions of deleted photos are kept until there is room), and new photos can\'t be added.' : 'The gallery keeps things on this disk too, not only your photos: each folder\'s captions and settings and its thumbnails are saved inside the folder. When the disk is full they stop being saved, and new photos can\'t be added.') : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
+        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? ($ownDisk ? 'This disk holds more than the photos you share: the gallery keeps its captions and settings, thumbnails, view counts, logs and backup here, and they grow over time. If it runs out, saving fails and the logs (the Changes tab included) stop being kept. The Delete list in Settings shows what the gallery\'s own files take.' : 'This disk holds more than the photos you share: each folder\'s captions and settings and its thumbnails are saved inside the folder and grow over time. If it runs out, saving fails. The Delete list in Settings shows what the gallery\'s own files take.') : 'Little room is left to add photos there. (The gallery only reads it.)');
     }
     if ($vols && !$many && $vols[0]['free'] >= 1073741824) $add($G, 'info', 'Disk space: ' . health_bytes($vols[0]['free']) . ' free (' . $vols[0]['pct'] . '%)');
     if ($many) {
@@ -23620,11 +23725,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     paint(root);
     function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
+    // A typed-data entry's lines are not in the list, so the search box asks the server which entries hold the words (the photos' names are matched here at once).
+    var found = { q: null, ids: {} }, findTimer = 0;
+    function find() {
+      var q = search.value.trim().toLowerCase(); if (findTimer) clearTimeout(findTimer);
+      if (!q) { found = { q: null, ids: {} }; return; }
+      findTimer = setTimeout(function () {
+        fetch('?admin&changes_find=' + encodeURIComponent(q), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+          if (!j || !j.ok || search.value.trim().toLowerCase() !== q) return;
+          var ids = {}; (j.ids || []).forEach(function (i) { ids[String(i)] = 1; }); found = { q: q, ids: ids }; apply();
+        }).catch(function () {});
+      }, 250);
+    }
     function apply() {
       [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
       var q = search.value.trim().toLowerCase(), c = chosen(), shown = 0, last = '';
       [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
-        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0);
+        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0 || (found.q === q && found.ids[e.getAttribute('data-id')] === 1));
         e.hidden = !ok; if (!ok) return;
         shown++;
         var d = dayOf(+e.getAttribute('data-t'));
@@ -23639,12 +23756,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
     // A typed-data entry's lines are not in the list (they can be megabytes): they are fetched when its line is opened.
+    var lazyHtml = {};   // (an entry's lines never change once written: what was fetched is kept, so a list drawn again does not fetch an opened entry again)
     function loadLazy(e) {
       var box = e.querySelector('.ch-lazy'); if (!box || box.getAttribute('data-loaded') || box.getAttribute('data-loading')) return;
+      var id = box.getAttribute('data-id');
+      if (lazyHtml[id] !== undefined) { box.innerHTML = lazyHtml[id]; box.setAttribute('data-loaded', '1'); return; }
       box.setAttribute('data-loading', '1'); box.textContent = 'Loading\u2026';
-      fetch('?admin&changes_entry=' + encodeURIComponent(box.getAttribute('data-id')), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      fetch('?admin&changes_entry=' + encodeURIComponent(id), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
         box.removeAttribute('data-loading');
-        if (j && j.ok) { box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
+        if (j && j.ok) { lazyHtml[id] = j.html; box.innerHTML = j.html; box.setAttribute('data-loaded', '1'); } else box.textContent = 'Could not load this entry. Close it and open it again.';
       }).catch(function () { box.removeAttribute('data-loading'); box.textContent = 'Could not load this entry. Close it and open it again.'; });
     }
     var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
@@ -23660,7 +23780,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
           loadLazy(e);
         });
-        paint(list);
+        paint(list); if (search.value.trim()) find();
         [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
         if (empty) empty.hidden = j.n > 0;
         apply();
@@ -23684,7 +23804,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     root.querySelector('.ch-done').addEventListener('click', closePop);
     document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });
-    search.addEventListener('input', apply);
+    search.addEventListener('input', function () { apply(); find(); });
     list.addEventListener('click', function (ev) {
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
@@ -24116,6 +24236,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         header('Cache-Control: no-store');
         $chHtml = is_string($_GET['changes_entry']) && preg_match('/^\d{1,12}$/D', $_GET['changes_entry']) === 1 ? changes_data_names_html((int) $_GET['changes_entry']) : null;
         admin_json_exit($chHtml === null ? ['ok' => false] : ['ok' => true, 'html' => $chHtml]);
+    }
+    if (isset($_GET['changes_find'])) {   // which typed-data entries hold a word (the list does not carry their lines): the Changes tab's search box asks for it
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true, 'ids' => is_string($_GET['changes_find']) ? changes_data_find($_GET['changes_find']) : []]);
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');

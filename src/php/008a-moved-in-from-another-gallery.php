@@ -79,9 +79,12 @@ function moved_in_remove_leftovers($dir, $files) {
 /** The names the capture dates were kept under before taken4.php (plain JSON, so each can be read by its address where the web server has no rule for .gallery- names). */
 function old_dates_names() { return ['taken.json', 'taken2.json', 'taken3.json', 'taken4.json']; }
 
+/** How many folders the look for the old capture-date files goes through at most. */
+function old_dates_ceiling() { return max(10, SCAN_MAX_FOLDERS * 10); }
+
 /** Every folder under $realDir (and itself) as ['real', 'rel'], not following a link and leaving out dot folders and the ones the scan skips, at most $budget of them. */
 function old_dates_walk($realDir, $rel, array &$out, &$budget) {
-    if ($budget <= 0) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
+    if ($budget <= 0 || microtime(true) > (float) ($GLOBALS['__old_dates_until'] ?? PHP_INT_MAX)) { $GLOBALS['__old_dates_cut'] = true; return; }   // (a folder is left unlooked at: the Health row says the look was cut short)
     $budget--;
     $out[] = ['real' => $realDir, 'rel' => $rel];
     foreach (@scandir($realDir) ?: [] as $e) {
@@ -96,19 +99,20 @@ function old_dates_walk($realDir, $rel, array &$out, &$budget) {
  *  Regular files only: a link by that name is never counted or followed. */
 function old_dates_leftovers($dir, $files) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
-    $GLOBALS['__old_dates_cut'] = false;
+    $GLOBALS['__old_dates_cut'] = false; $GLOBALS['__old_dates_until'] = microtime(true) + 2.5;   // (a look that takes longer than that stops there and says so: a very large tree)
     $found = [];
     // The folders that hold files that are shown, and also the folders that hold none now (emptied, or only things that are no pictures): the old file in one of those
     // is as readable by its address as any other. Folders are walked the way the scan walks them (never a link, never a dot folder), up to the scan's own ceiling.
     $folders = []; $seen = [];
     foreach (moved_in_folders($dir, $files) as $f) { $folders[] = $f; $seen[(string) (realpath($f['real']) ?: $f['real'])] = true; }
-    $budget = SCAN_MAX_FOLDERS; $walked = [];
+    $budget = old_dates_ceiling(); $walked = [];   // (ten times what the gallery shows on one visit: a gallery just over the limit is looked through whole, and only a tree far beyond it is cut short)
     old_dates_walk((string) (realpath($dir) ?: $dir), '', $walked, $budget);
     foreach (gallery_mounts() as $name => $real) {
         $name = (string) $name;
         if ($name === '' || strpbrk($name, "/\\") !== false || !is_dir($real) || is_link($real)) continue;
         old_dates_walk((string) (realpath($real) ?: $real), $name, $walked, $budget);
     }
+    $GLOBALS['__old_dates_looked'] = count($walked);
     foreach ($walked as $w) {
         if (isset($seen[$w['real']])) continue;
         $seen[$w['real']] = true; $folders[] = ['real' => $w['real'], 'rel' => $w['rel'], 'files' => []];

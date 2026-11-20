@@ -54,6 +54,27 @@ function changes_data_names_html($id) {
     return $o;
 }
 
+/** The ids of the typed-data entries whose text (a photo's name, or any word typed for it) holds $term, newest first. The list does not carry what was typed (it can be megabytes), so the search box asks here. */
+function changes_data_find($term) {
+    $term = trim(substr((string) $term, 0, 200));
+    while ($term !== '' && !preg_match('//u', $term)) $term = substr($term, 0, -1);   // (a cut-off letter at the end of a long term is dropped)
+    if ($term === '') return [];
+    $re = '/' . preg_quote($term, '/') . '/iu';   // (capitals do not matter for any letter, accents included; PCRE does it, so no mbstring is needed)
+    return changes_read(function ($db) use ($term, $re) {
+        $ids = [];
+        $st = $db->query("SELECT id, names FROM changes WHERE kind = 'data' ORDER BY id DESC");
+        while ($r = $st->fetch()) {
+            $names = json_decode((string) $r['names'], true);
+            if (!is_array($names)) continue;
+            $hay = implode("\n", array_map('strval', $names));
+            $hit = preg_match($re, $hay);
+            if ($hit === false) $hit = stripos($hay, $term) !== false ? 1 : 0;   // (text that is not valid UTF-8: the plain look)
+            if ($hit === 1) { $ids[] = (int) $r['id']; if (count($ids) >= 1000) break; }
+        }
+        return $ids;
+    }, []);
+}
+
 /** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
 function changes_group_counts($rows) {
     $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder', 'data' => 'data'];
@@ -85,7 +106,7 @@ function changes_entries_html($rows, $seen) {
         elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
         else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
         // A typed-data entry holds every word that was typed for each photo: it can be megabytes, so the list does not carry it. It is fetched when the line is opened (changes_data_names_html),
-        // and the search looks at the photos' names, which is what the box says it searches.
+        // and the search box finds them by what was typed too: it asks the server (changes_data_find), the list holds only the photos' names for the quick look.
         $lazy = $kind === 'data';
         $hayNames = $lazy ? array_map(function ($x) { $q = strpos((string) $x, ' — '); return $q === false ? (string) $x : substr((string) $x, 0, $q); }, $names) : $names;
         $hay = strtolower($where . ' ' . implode(' ', $hayNames) . ' ' . implode(' ', $gone));

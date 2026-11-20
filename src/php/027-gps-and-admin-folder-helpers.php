@@ -67,6 +67,7 @@ function gc_items_data($dir, $files, &$galleryNotices) {
     // Only ever GC folders that actually have an items store — a gallery
     // that's never touched the admin tool pays nothing for this.
     $candidateFolders = array_unique(array_merge(array_keys($byFolder), [$dir]));
+    $holds = null;
     foreach ($candidateFolders as $folderPath) {
         $path = items_path($folderPath);
         if (!file_exists($path)) continue;
@@ -81,6 +82,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         $orphanCount = 0;
         foreach (array_keys($stored['items']) as $bare) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
+        }
+        if ($orphanCount === 0) {   // (nothing of the kind here: a note that this folder's typed data waits for its save is no longer true, e.g. the photos came back; asked once per look)
+            if ($holds === null) $holds = changes_holds();
+            if ($holds) { $rel0 = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2); if (isset($holds['datahold:' . md5($rel0)])) changes_removed_data_done($rel0); }
+            continue;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
         $keptCount = 0; $goneNames = []; $logged = false; $saveRan = false; $firstCount = $orphanCount;
@@ -97,9 +103,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
-        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab)
+        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab. What stopped it is said as it is.)
         if ($firstCount > 0 && !$saveRan) {
-            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file can\'t be written by the web server, so nothing was removed and nothing was written in the Changes tab. It is tried again at the next look. The Health check in Settings says more.';
+            $cause = (string) (((array) ($GLOBALS['__data_write_cause'] ?? []))[$path] ?? '');
+            $reason = ['file' => 'the web server may not open it for writing: it has another owner, or is read-only', 'lock' => 'the server would not let the gallery lock it, which it needs to save safely', 'busy' => 'other saves kept changing it for too long', 'dir' => 'it is a folder, not a file'][$cause] ?? 'its folder is not writable by the web server';
+            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (' . $reason . '), so nothing was removed' . (changes_tab_wanted() ? ' and nothing was written in the Changes tab' : '') . '. It is tried again at the next look. The Health check in Settings says more.';
             $orphanCount = 0;
         }
         // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
@@ -1220,7 +1228,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
-        if (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}]/u', (string) substr($target, 0, -3))) {   // (nothing before the "md", or only spaces and invisible characters such as U+200B: a note with no name that can be seen)
+        // (nothing before the "md", or only spaces and invisible characters: controls and format characters such as U+200B, and the letters and marks that show nothing: the Hangul fillers U+115F U+1160 U+3164 U+FFA0,
+        // the Braille blank U+2800, the combining grapheme joiner U+034F, the Khmer inherent vowels U+17B4 U+17B5 and the variation selectors. A note that is ALREADY there under such a name (earlier versions allowed it)
+        // can still be saved: it keeps the name it has.)
+        if (!is_file($adminFolderReal . '/' . $target) && (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}]/u', (string) substr($target, 0, -3)))) {
             return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
         }
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so

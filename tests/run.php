@@ -1834,7 +1834,7 @@ unlink("$fxVm/Reels/.gallery-items.php");
 @chmod("$fxVm/Reels", 0555);
 [, $vmHealthRo] = http_get("$baseVm/?admin", $vmAuth);
 @chmod("$fxVm/Reels", 0755);
-check('[health] a folder the web server can\'t write to is called out, with what that costs', function_exists('posix_geteuid') && posix_geteuid() === 0 ? true : (str_contains($vmHealthRo, '1 of 2 folders are not writable') && str_contains($vmHealthRo, 'Reels')));
+check('[health] a folder the web server can\'t write to is called out, with what that costs', function_exists('posix_geteuid') && posix_geteuid() === 0 ? true : (str_contains($vmHealthRo, '1 of 2 folders is not writable') && str_contains($vmHealthRo, 'Reels')));
 [, $vmPage] = http_get("$baseVm/");
 check('[video mark] a video in a strip of group thumbnails is wrapped as a video tile with the play mark and opens the viewer; a photo there stays a bare picture', preg_match('#<span class="vthumb vtile"[^>]* onclick="openLightbox\(\d+\)"><img src="\?img=clip\.mp4[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmPage) === 1 && preg_match('#<img src="\?img=photo\.jpg[^>]* onclick="openLightbox#', $vmPage) === 1);
 [, $vmFolder] = http_get("$baseVm/?folder=Reels");
@@ -10529,7 +10529,7 @@ $hwPage = function ($base) { [, , $h] = http_post("$base/?admin", ['access_code'
 [$hwP1, $hwB1] = $hwServe([]);
 $hwPg1 = $hwPage($hwB1);
 $hwRowHow = function ($html, $title) { $i = strpos($html, $title); if ($i === false) return null; $j = strpos($html, 'How to fix', $i); $k = strpos($html, 'class="health-row', $i + 10); return ($j !== false && ($k === false || $j < $k)) ? substr($html, $j, 1500) : ''; };
-if (!is_writable("$hwFx/Locked")) check('[how to fix] a folder the web server can\'t write in has a How to fix fold in its row (who the web server is, chown, and the group way)', str_contains((string) $hwRowHow($hwPg1, 'folders are not writable by the web server'), 'sudo chown -R www-data') && str_contains((string) $hwRowHow($hwPg1, 'folders are not writable by the web server'), 'chmod -R g+w'));
+if (!is_writable("$hwFx/Locked")) check('[how to fix] a folder the web server can\'t write in has a How to fix fold in its row (who the web server is, chown, and the group way)', str_contains((string) $hwRowHow($hwPg1, 'folders is not writable by the web server'), 'sudo chown -R www-data') && str_contains((string) $hwRowHow($hwPg1, 'folders is not writable by the web server'), 'chmod -R g+w'));
 check('[how to fix] a row with nothing for the owner to do on the server has no fold (the passed ones, the plain information)', $hwRowHow($hwPg1, 'Folder data files all read fine') === '' && $hwRowHow($hwPg1, 'Sign-in key') === '');
 proc_terminate($hwP1);
 [$hwP2, $hwB2, $hwDropped] = $hwServe(['pdo_sqlite', 'sqlite3', 'curl']);
@@ -11773,7 +11773,7 @@ $sSnap = function () use ($fxS) {
         if (is_file($f)) $o[basename(dirname($f)) . '/' . basename($f)] = md5_file($f);
     ksort($o); return $o;
 };
-$sGets = ['?admin', '?admin&classic=1', '?admin&shell=1', '?admin&folder=Trip', '?admin&inframe=1', '?admin&csrf=1', '?admin&health=1', '?admin&hidden=1', '?admin&item=pub.jpg', '?admin&changed=1', '?admin&changes_list=1', '?admin&changes_entry=1', '?admin&shelltree=1', '?admin&shellmeta=1', '?admin&shellcounts=1', '?admin&privcounts=1', '?admin&pbcounts=1', '?admin&linkspanel=1', '?admin&linkpreview=0123456789', '?admin&linkphotos=0123456789', '?admin&linkcover=0123456789', '?admin&browserspanel=1', '?admin&browserhist=0123456789ab', '?admin&visits=1&tab=visitors', '?admin&visitsexport=1', '?admin&backupdownload=1', '?admin&filesdownload=1', '?admin&accelcheck=1&prefix=x', '?admin&since=1', '?admin&after=1'];
+$sGets = ['?admin', '?admin&classic=1', '?admin&shell=1', '?admin&folder=Trip', '?admin&inframe=1', '?admin&csrf=1', '?admin&health=1', '?admin&hidden=1', '?admin&item=pub.jpg', '?admin&changed=1', '?admin&changes_list=1', '?admin&changes_entry=1', '?admin&changes_find=x', '?admin&shelltree=1', '?admin&shellmeta=1', '?admin&shellcounts=1', '?admin&privcounts=1', '?admin&pbcounts=1', '?admin&linkspanel=1', '?admin&linkpreview=0123456789', '?admin&linkphotos=0123456789', '?admin&linkcover=0123456789', '?admin&browserspanel=1', '?admin&browserhist=0123456789ab', '?admin&visits=1&tab=visitors', '?admin&visitsexport=1', '?admin&backupdownload=1', '?admin&filesdownload=1', '?admin&accelcheck=1&prefix=x', '?admin&since=1', '?admin&after=1'];
 $sBefore = $sSnap(); $sTok = $sOwner['token'];
 foreach ($sGets as $q) {
     http_get("$baseS/$q", ["Cookie: {$sOwner['both']}", $sUA('10')]);
@@ -13676,10 +13676,14 @@ echo "== chunk 9 follow-up N17 d/i: empty folders in Health, invisible note name
     $deNote = fn (array $f) => json_decode(http_post("$deBase/?admin&folder=Alpha", $f + ['csrf_token' => $deCsrf, 'action' => 'save_notes', 'md_file' => '', 'content' => "{gallery}\nbody\n"], array_merge($deOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
     $deBefore = glob("$deFx/Alpha/*.md") ?: [];
     $deBad = [];
-    foreach (["\u{200B}", "\u{200B}.md", " \u{00A0} ", "\u{FEFF}\u{200D}", '.md', ''] as $nm) { $r = $deNote(['new_name' => $nm]); if (($r['ok'] ?? true) !== false || (glob("$deFx/Alpha/*.md") ?: []) !== $deBefore || (glob("$deFx/Alpha/.*md") ?: []) !== []) $deBad[] = [$nm, $r]; }
+    foreach (["\u{200B}", "\u{200B}.md", " \u{00A0} ", "\u{FEFF}\u{200D}", "\u{3164}", "\u{115F}\u{1160}", "\u{2800}", "\u{034F}", "\u{FE0F}", "\u{FFA0}.md", '.md', ''] as $nm) { $r = $deNote(['new_name' => $nm]); if (($r['ok'] ?? true) !== false || (glob("$deFx/Alpha/*.md") ?: []) !== $deBefore || (glob("$deFx/Alpha/.*md") ?: []) !== []) $deBad[] = [$nm, $r]; }
     check('[N17 i] a new note named with only an invisible character, spaces or nothing before .md is refused, and nothing is written', $deBad === [], json_encode($deBad));
     $deOk = $deNote(['new_name' => "trip\u{200B}"]);
     check('[N17 i] ...and a name with something to see in it still saves', ($deOk['ok'] ?? false) === true && count(glob("$deFx/Alpha/*.md") ?: []) === 1, json_encode($deOk));
+    // a note that is already there under a name with nothing to see (earlier versions allowed it) can still be saved, under the name it has
+    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nold\n");
+    $deKeep = $deNote(['md_file' => "\u{200B}.md", 'new_name' => '', 'content' => "{gallery}\nedited\n"]);
+    check('[N27 f] ...and a note that is already there under such a name can still be saved, keeping the name it has', ($deKeep['ok'] ?? false) === true && str_contains((string) @file_get_contents("$deFx/Alpha/\u{200B}.md"), 'edited'), json_encode($deKeep));
     @proc_terminate($deProc);
 }
 
@@ -13714,6 +13718,11 @@ echo "== chunk 9 follow-up N15: the removed data is completely in the Changes ta
     $tdEid = preg_match('/class="ch-names ch-lazy" data-id="(\d+)"/', $tdLean, $tdEm) ? (int) $tdEm[1] : 0;
     $tdE1 = json_decode((string) http_get("$tdBase/?admin&changes_entry=$tdEid", $tdOwn)[1], true); $tdE2 = json_decode((string) http_get("$tdBase/?admin&changes_entry=99999", $tdOwn)[1], true); $tdE3 = json_decode((string) http_get("$tdBase/?admin&changes_entry=abc", $tdOwn)[1], true);
     check('[N15 lazy] one entry\'s lines come from their own address when the line is opened; an entry that is not there, or an address that is not a number, answers no (and a stranger gets nothing of it)', ($tdE1['ok'] ?? false) === true && str_contains((string) ($tdE1['html'] ?? ''), '<code>gone') && ($tdE2['ok'] ?? true) === false && ($tdE3['ok'] ?? true) === false && !is_array(json_decode(http_get("$tdBase/?admin&changes_entry=$tdEid")[1], true)), json_encode([$tdEid, $tdE2, $tdE3]));
+    // the search box finds a typed-data entry by what was typed (the list does not carry it): the server says which entries hold the words
+    $tdFind = function (string $q) use ($tdBase, $tdOwn) { $j = json_decode((string) http_get("$tdBase/?admin&changes_find=" . rawurlencode($q), $tdOwn)[1], true); return is_array($j) && ($j['ok'] ?? false) === true ? $j['ids'] : null; };
+    $tdByWord = $tdFind('Caption number 205'); $tdByNameUp = $tdFind('GONE205.JPG'); $tdNone = $tdFind('no such words anywhere'); $tdAccent = $tdFind(str_repeat("\u{00C9}", 5)); $tdAccent2 = $tdFind(str_repeat("\u{00E9}", 5));
+    check('[N15 search] a word that was typed for a photo (a caption) finds the entry that holds it, and only that one; capitals do not matter; the photo\'s name finds it too', is_array($tdByWord) && count($tdByWord) === 1 && $tdByNameUp === $tdByWord, json_encode([$tdByWord, $tdByNameUp]));
+    check('[N15 search] words that are nowhere answer an empty list; letters beyond ASCII are found whatever their case; an empty search finds nothing; a stranger gets nothing of it', $tdNone === [] && is_array($tdAccent) && count($tdAccent) >= 1 && $tdAccent === $tdAccent2 && $tdFind('') === [] && !is_array(json_decode(http_get("$tdBase/?admin&changes_find=Caption")[1], true)), json_encode([$tdNone, $tdAccent]));
     check('[N15] a caption of 1,000 emoji is in the log whole (never cut inside a letter), beside the plain one, and the long mixed caption and its 400-letter place are whole too', str_contains($tdTxt, $tdEmoji) && str_contains($tdTxt, 'A short plain caption') && str_contains($tdTxt, $tdMixed) && str_contains($tdTxt, str_repeat("\u{00E9}", 400)) && str_contains($tdTxt, 'https://example.com/e'), strlen($tdTxt));
     // the log is kept but refuses the write (a trigger in the table stands in for a full disk or a broken file): nothing is removed, the owner is told, and the next look does it
     if (!extension_loaded('pdo_sqlite')) {
@@ -13749,7 +13758,7 @@ echo "== chunk 9 follow-up N15: the removed data is completely in the Changes ta
 // chunk-9 follow-up N18: the once-a-day look for a new version lets go of the sign-in while it waits for the releases page, so another admin request is not held up
 echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n";
 {
-    $ugSlow = new_fixture_dir('updslow'); file_put_contents("$ugSlow/router.php", "<?php sleep(4); header('Content-Type: application/json'); echo '{}';\n");
+    $ugSlow = new_fixture_dir('updslow'); file_put_contents("$ugSlow/router.php", "<?php file_put_contents(__DIR__ . '/hits.txt', 'x', FILE_APPEND); sleep(4); header('Content-Type: application/json'); echo '{}';\n");
     $ugSlowPort = find_free_port(); putenv('PHP_CLI_SERVER_WORKERS=2'); $ugSlowProc = start_server($ugSlow, $ugSlowPort, "$ugSlow/router.php"); putenv('PHP_CLI_SERVER_WORKERS');
     $ugFx = new_fixture_dir('updsession'); mkdir("$ugFx/Alpha", 0777, true); make_jpeg("$ugFx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
     file_put_contents("$ugFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ug-admin-pw-1', 'UPDATE_FEED_URL' => "http://127.0.0.1:$ugSlowPort/feed.json", 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
@@ -13764,6 +13773,15 @@ echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n"
     $ugT = microtime(true); $ugOther = http_get("$ugBase/?admin&classic=1", $ugOwn); $ugDt = microtime(true) - $ugT;
     stream_set_timeout($ugSock, 8); $ugAns = stream_get_contents($ugSock); fclose($ugSock);
     check('[N18] while the update check waits for the releases page (4 s here), another admin request from the same browser is answered at once, not after it', $ugOther[0] === 200 && $ugDt < 2.0 && str_contains((string) $ugAns, '200 OK'), json_encode([$ugOther[0], round($ugDt, 2), substr((string) $ugAns, 0, 60)]));
+    // N22 h: the daily look is claimed BEFORE the releases page is asked: admin pages opened while the first answer is still waited for do not ask again (it was one ask per page opened)
+    @unlink("$ugSlow/hits.txt"); @unlink("$ugFx/.gallery-update.php"); foreach (glob("$ugFx/.gallery-update*") ?: [] as $ugOld) @unlink($ugOld);
+    $ugBody2 = http_build_query(['csrf_token' => $ugCsrf, 'action' => 'update_check']);   // (not forced: the daily look, as the Settings page asks for it)
+    $ugSock2 = @stream_socket_client("tcp://127.0.0.1:$ugPort", $e1, $e2, 3);
+    fwrite($ugSock2, "POST /?admin HTTP/1.1\r\nHost: 127.0.0.1:$ugPort\r\nCookie: $ugCookie\r\nX-Requested-With: gallery-fetch\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($ugBody2) . "\r\nConnection: close\r\n\r\n$ugBody2");
+    for ($ugI = 0; $ugI < 3; $ugI++) { usleep(400000); http_post("$ugBase/?admin", ['csrf_token' => $ugCsrf, 'action' => 'update_check'], array_merge($ugOwn, ['X-Requested-With: gallery-fetch'])); }
+    stream_set_timeout($ugSock2, 8); stream_get_contents($ugSock2); fclose($ugSock2);
+    $ugHits = strlen((string) @file_get_contents("$ugSlow/hits.txt"));
+    check('[N22 h] four admin pages ask for the daily look half a second apart while the first answer is still waited for: the releases page is asked once, not four times', $ugHits === 1, 'asked ' . $ugHits);
     foreach ([$ugSlowProc, $ugProc] as $ugP) @proc_terminate($ugP);   // (the suite keeps every server until its end: these are done)
 }
 
@@ -13807,10 +13825,31 @@ echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log o
         skip_note('[Health] the settings file can be written here whatever its mode, so an unwritable one can\'t be made');
     } else {
         $p5Health2 = html_entity_decode((string) http_get("$p5Base/?admin&classic=1", $p5Own)[1]);
-        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}-exec chown www-data~s', $p5Health2) === 1);
+        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own files is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}-exec chown -h www-data~s', $p5Health2) === 1);
     }
     @chmod($p5Itf, 0644);
     proc_terminate($p5Proc);
+    // N27 f, g: a note that typed data waits for the folder's own save (a meta row 'datahold:<md5 of the folder>', its value the entries' hash and the time) is forgotten when the folder has nothing
+    // of the kind any more (the photos came back), and a note older than 30 days goes the next time one is written (a folder renamed while its save was stuck leaves one behind)
+    $p5Log = glob("$p5Fx/.gallery-visits-*.sqlite")[0] ?? null;
+    if (!$p5Log) skip_note('[N27 f] there is no log to hold a note');
+    else {
+        $p5Db = new PDO('sqlite:' . $p5Log); $p5Notes = function () use ($p5Db) { return $p5Db->query("SELECT k, v FROM meta WHERE k LIKE 'datahold:%'")->fetchAll(PDO::FETCH_KEY_PAIR); };
+        file_put_contents($p5Itf, data_file_guard_line_for_tests() . json_encode(['items' => ['a2.jpg' => ['caption' => 'stays']]]) . "\n");   // (nothing in Alpha is gone any more)
+        $p5Db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute(['datahold:' . md5('Alpha'), md5('x') . '@' . time()]);
+        $p5Db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute(['datahold:' . md5('Renamed'), md5('y') . '@' . time()]);
+        $p5Port2 = find_free_port(); $p5Proc2 = start_server($p5Fx, $p5Port2);
+        http_get("http://127.0.0.1:$p5Port2/");
+        $p5N = $p5Notes();
+        check('[N27 f] a folder with nothing of its typed data gone any more forgets its note on the next look (the photos came back); another folder\'s note stays', !isset($p5N['datahold:' . md5('Alpha')]) && isset($p5N['datahold:' . md5('Renamed')]), json_encode(array_keys($p5N)));
+        // an old note (older than 30 days) goes when a new note is written: the folder is made to have something gone, and the log takes it
+        $p5Db->prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)')->execute(['datahold:' . md5('Old'), md5('z') . '@' . (time() - 31 * 86400)]);
+        file_put_contents($p5Itf, data_file_guard_line_for_tests() . json_encode(['items' => ['a2.jpg' => ['caption' => 'stays'], 'a9.jpg' => ['caption' => 'gone now']]]) . "\n");
+        http_get("http://127.0.0.1:$p5Port2/"); http_get("http://127.0.0.1:$p5Port2/");
+        $p5N = $p5Notes();
+        check('[N27 f] a note older than 30 days (a folder renamed while its save was stuck) is dropped when the next note is written; a recent one is kept', !isset($p5N['datahold:' . md5('Old')]) && isset($p5N['datahold:' . md5('Renamed')]) && $p5Rows() >= 1, json_encode(array_keys($p5N)) . ' rows ' . $p5Rows());
+        @proc_terminate($p5Proc2);
+    }
     // N20: the log takes the entry and then the folder's own file can't be saved (the folder's disk is full): the entry is written ONCE however many times the page is looked at.
     // The folder gets a small disk of its own that only this server sees (a user namespace and a tmpfs), filled up.
     $p5Probe = new_fixture_dir('p5probe'); $p5Out = [];
@@ -13865,21 +13904,38 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
     http_get("$o5Base/?admin&classic=1", $o5Own); http_get("$o5Base/");
     [$o5List, $o5Full] = changes_full_html($o5Base, $o5Own); $o5Txt = html_entity_decode(strip_tags($o5Full));
     check('[N22 c] a location with a latitude and no longitude, a location with something besides lat, lng and place, and an entry that is not a list are all written in the Changes tab as they are', str_contains($o5Txt, 'g1.jpg') && str_contains($o5Txt, '12.5') && str_contains($o5Txt, 'Location: 1, 2') && str_contains($o5Txt, 'Place: Paris') && str_contains($o5Txt, '"zoom":9') && str_contains($o5Txt, 'Entry: an odd entry') && !str_contains($o5Txt, 'g1.jpg — (a setting only'), substr($o5Txt, 0, 600));
+    // a number too big for PHP, typed by hand (1e999 is read back as infinity): written as words wherever it sits, nothing else in the entry is lost
+    $o5Big = json_decode((string) $g2Run($g2Fn('changes_data_finite') . $g2Fn('changes_data_line') . 'echo json_encode([changes_data_line("g.jpg", ["caption" => "has a big number", "location" => ["lat" => INF, "lng" => 2.5], "odd" => [INF, "kept?"]]), changes_data_line("h.jpg", ["caption" => "x", "location" => ["lat" => 1.5, "lng" => -INF, "label" => "Rome"]])], JSON_UNESCAPED_UNICODE);'), true) ?: [];
+    check('[N22 e] a number too large for PHP, in a location or inside a list, is written as "(a number too large to keep)" (it was written as nothing), and the rest of the entry is kept', is_array($o5Big) && str_contains($o5Big[0] ?? '', 'Caption: has a big number') && substr_count($o5Big[0] ?? '', '(a number too large to keep)') === 2 && str_contains($o5Big[0] ?? '', 'kept?') && str_contains($o5Big[1] ?? '', 'Place: Rome') && str_contains($o5Big[1] ?? '', '(a number too large to keep)'), json_encode($o5Big));
     proc_terminate($o5Proc);
-    // (e) more folders than the gallery looks at on one visit: the Health row says the look was cut short
+    // (e) a gallery just over the limit of folders it shows is looked through whole (the old files beyond the 2,000th are found too, and nothing says the look was cut short); only a tree far past the limit is cut
     $o5Cut = new_fixture_dir('oddcut'); mkdir("$o5Cut/Alpha", 0777, true); make_jpeg("$o5Cut/Alpha/a1.jpg", 40, 30, 20, 90, 160);
     for ($i = 0; $i < 2100; $i++) mkdir(sprintf('%s/F%04d', $o5Cut, $i), 0755);
-    mkdir("$o5Cut/F0001/.gallery-cache", 0755); file_put_contents("$o5Cut/F0001/.gallery-cache/taken3.json", '{}');
+    foreach (['F0001', 'F2090'] as $o5Fd) { mkdir("$o5Cut/$o5Fd/.gallery-cache", 0755); file_put_contents("$o5Cut/$o5Fd/.gallery-cache/taken3.json", '{}'); }
     file_put_contents("$o5Cut/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'o5-admin-pw-2', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'PHOTO_SORT_ORDER' => 'filename', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
     copy($indexSrc, "$o5Cut/index.php"); @touch("$o5Cut/index.php", time() - 3600);
     $o5Port2 = find_free_port(); $o5Proc2 = start_server($o5Cut, $o5Port2); $o5Base2 = "http://127.0.0.1:$o5Port2";
     [, , $o5H2] = http_post("$o5Base2/?admin", ['access_code' => 'o5-admin-pw-2'], [], false); $o5Own2 = ['Cookie: ' . extract_cookie_header($o5H2)];
     $o5T1 = html_entity_decode(strip_tags((string) http_get("$o5Base2/?admin&classic=1", $o5Own2)[1]));
-    check('[N22 e] with more folders than the gallery looks at, the old-capture-date row says only the first 2,000 were looked through', str_contains($o5T1, '1 old capture-date file from an earlier version') && str_contains($o5T1, 'Only the first 2,000 folders'), '');
+    check('[N27 k] a gallery with 2,100 folders (over the 2,000 it shows) is looked through whole for old capture-date files: both are found, the one beyond the 2,000th too, and no row says the look was cut short', str_contains($o5T1, '2 old capture-date files from an earlier version') && !str_contains($o5T1, 'Only the first') && !str_contains($o5T1, 'the look was cut short'), '');
     $o5R = json_decode(http_post("$o5Base2/?admin", ['csrf_token' => admin_token($o5Base2, $o5Own2), 'action' => 'health_remove_old_dates'], array_merge($o5Own2, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
     $o5T2 = html_entity_decode(strip_tags((string) http_get("$o5Base2/?admin&classic=1", $o5Own2)[1]));
-    check('[N22 e] ...and after they are removed, with none found, there is still a row that says the look was cut short (a quiet look is not mistaken for a clean one)', ($o5R['ok'] ?? false) === true && str_contains($o5T2, 'Old capture-date files: the look was cut short') && !str_contains($o5T2, '1 old capture-date file from'), json_encode($o5R));
+    check('[N27 k] ...and after they are removed no row is left (a clean look is a clean look)', ($o5R['ok'] ?? false) === true && !str_contains($o5T2, 'old capture-date files from an earlier version') && !str_contains($o5T2, 'old capture-date file from an earlier version') && !str_contains($o5T2, 'Old capture-date files: the look was cut short'), '');
     proc_terminate($o5Proc2);
+    // a tree far past the limit (20,050 folders: more than ten times the 2,000 shown) is cut short, and the row says how many were looked through, even when none were found
+    $o5Cut2 = new_fixture_dir('oddcut2'); mkdir("$o5Cut2/Alpha", 0777, true); make_jpeg("$o5Cut2/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    for ($i = 0; $i < 20050; $i++) mkdir(sprintf('%s/F%05d', $o5Cut2, $i), 0755);
+    mkdir("$o5Cut2/F00001/.gallery-cache", 0755); file_put_contents("$o5Cut2/F00001/.gallery-cache/taken3.json", '{}');
+    file_put_contents("$o5Cut2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'o5-admin-pw-3', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'PHOTO_SORT_ORDER' => 'filename', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$o5Cut2/index.php"); @touch("$o5Cut2/index.php", time() - 3600);
+    $o5Port3 = find_free_port(); $o5Proc3 = start_server($o5Cut2, $o5Port3); $o5Base3 = "http://127.0.0.1:$o5Port3";
+    [, , $o5H3] = http_post("$o5Base3/?admin", ['access_code' => 'o5-admin-pw-3'], [], false); $o5Own3 = ['Cookie: ' . extract_cookie_header($o5H3)];
+    $o5T3 = html_entity_decode(strip_tags((string) http_get("$o5Base3/?admin&classic=1", $o5Own3)[1]));
+    check('[N22 e] with a tree far past the limit the old-capture-date row says how many folders were looked through and that there may be more', str_contains($o5T3, '1 old capture-date file from an earlier version') && preg_match('~Only the first [\d,]+ folders were looked through~', $o5T3) === 1, '');
+    $o5R3 = json_decode(http_post("$o5Base3/?admin", ['csrf_token' => admin_token($o5Base3, $o5Own3), 'action' => 'health_remove_old_dates'], array_merge($o5Own3, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $o5T4 = html_entity_decode(strip_tags((string) http_get("$o5Base3/?admin&classic=1", $o5Own3)[1]));
+    check('[N22 e] ...and after they are removed, with none found, there is still a row that says the look was cut short (a quiet look is not mistaken for a clean one)', ($o5R3['ok'] ?? false) === true && str_contains($o5T4, 'Old capture-date files: the look was cut short') && !str_contains($o5T4, '1 old capture-date file'), '');
+    proc_terminate($o5Proc3);
 }
 
 /* --------------------------------------------------------------------- */
@@ -13887,20 +13943,21 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
 // own public IPv6 address is tried, and a name with only IPv6 is tied to it. No PHP here has curl (the tie is made with it), so the choice is tested with a stand-in for the one request.
 echo "== pass 5 N23: a tied download falls back to the name's IPv6 address ==\n";
 {
-    $v6Real = $g2Fn('geo_url_ok') . "\n" . $g2Fn('geo_resolve_url') . "\n" . $g2Fn('geo_host_in') . "\n" . $g2Fn('geo_ip_is_public') . "\n" . $g2Fn('geo_http') . "\n" . $g2Fn('geo_public_ipv6') . "\n";
+    $v6Real = $g2Fn('geo_url_ok') . "\n" . $g2Fn('geo_resolve_url') . "\n" . $g2Fn('geo_host_in') . "\n" . $g2Fn('geo_ip_is_public') . "\n" . $g2Fn('geo_http') . "\n" . $g2Fn('geo_public_ipv6') . "\n" . $g2Fn('geo_usable_ipv6') . "\n";
     // for the choice tests geo_public_ipv6 is a table (a name can't be looked up offline); the real one is tested on written-out addresses below
-    $v6Src = str_replace($g2Fn('geo_public_ipv6'), '', $v6Real) . 'function geo_public_ipv6($host) { return $GLOBALS["sc"]["v6list"]; }' . "\n";
+    $v6Src = str_replace($g2Fn('geo_public_ipv6'), '', $v6Real) . 'function geo_public_ipv6($host, array $v4 = []) { $GLOBALS["v4seen"] = $v4; return $GLOBALS["sc"]["v6list"]; }' . "\n";
     $v6Run = function (array $sc) use ($g2Run, $v6Src) {
         return json_decode($g2Run($v6Src . '$GLOBALS["sc"] = ' . var_export($sc, true) . '; $GLOBALS["pins"] = [];
 function geo_resolve_ips($host) { return $GLOBALS["sc"]["ips"]; }
 function geo_http_once($url, $method, array $headers, $maxBytes, $timeout, $pinIp = null) {
-    $GLOBALS["pins"][] = $pinIp;
+    $GLOBALS["pins"][] = $pinIp; $GLOBALS["timeouts"][] = $timeout;
+    if ($pinIp !== null && strpos($pinIp, ":") === false && !empty($GLOBALS["sc"]["v4sleep"])) usleep($GLOBALS["sc"]["v4sleep"]);
     if ($pinIp === null) return ["status" => 302, "headers" => ["location" => "https://moved.example/file"], "body" => "", "error" => ""];
     $k = strpos($pinIp, ":") === false ? "v4" : "v6";
-    if ($k === "v4") return ["status" => $GLOBALS["sc"]["v4status"], "headers" => [], "body" => $GLOBALS["sc"]["v4status"] === 200 ? "ok" : "", "error" => $GLOBALS["sc"]["v4status"] === 200 ? "" : "Failed to connect", "errno" => $GLOBALS["sc"]["v4errno"]];
+    if ($k === "v4") return ["status" => $GLOBALS["sc"]["v4status"], "headers" => [], "body" => $GLOBALS["sc"]["v4status"] === 200 ? "ok" : "", "error" => $GLOBALS["sc"]["v4status"] === 200 ? "" : "Failed to connect", "errno" => $GLOBALS["sc"]["v4errno"], "connected" => !empty($GLOBALS["sc"]["v4connected"])];
     return ["status" => 200, "headers" => [], "body" => "ok-v6", "error" => ""];
 }
-$r = geo_http("https://8.8.8.8/start"); echo json_encode(["status" => $r["status"], "body" => $r["body"], "pins" => $GLOBALS["pins"]]);'), true) ?: [];
+$r = geo_http("https://8.8.8.8/start", "GET", [], 30000000, $GLOBALS["sc"]["timeout"] ?? 40); echo json_encode(["status" => $r["status"], "body" => $r["body"], "pins" => $GLOBALS["pins"], "v4seen" => $GLOBALS["v4seen"] ?? null, "timeouts" => $GLOBALS["timeouts"] ?? []]);'), true) ?: [];
     };
     $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 7]);
     check('[N23] the tied IPv4 address can\'t be reached (curl error 7): the name\'s public IPv6 address is tried next and the download goes through', ($a['status'] ?? null) === 200 && ($a['body'] ?? '') === 'ok-v6' && ($a['pins'] ?? null) === [null, '8.8.4.4', '2606:4700:4700::1111'], json_encode($a));
@@ -13912,6 +13969,40 @@ $r = geo_http("https://8.8.8.8/start"); echo json_encode(["status" => $r["status
     check('[N23] ...and a failure that is not about reaching the address (a certificate that does not fit, curl error 60) is not tried on another address', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
     $a = $v6Run(['ips' => ['2606:4700:4700::1111'], 'v6list' => [], 'v4status' => 0, 'v4errno' => 0]);
     check('[N23] a name with only an IPv6 address is tied to it (before, it was not tied at all)', ($a['status'] ?? null) === 200 && ($a['pins'] ?? null) === [null, '2606:4700:4700::1111'], json_encode($a));
+    // (a server behind a translator: the retry is told the name's own checked IPv4 addresses, so a translated address can be matched against them)
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['64:ff9b::808:404'], 'v4status' => 0, 'v4errno' => 7]);
+    check('[N23] the retry is handed the name\'s own IPv4 addresses (the ones that were checked), so a translated address can be matched against them', ($a['v4seen'] ?? null) === ['8.8.4.4'] && ($a['status'] ?? null) === 200, json_encode($a));
+    // a connection that was made and then stalled (curl error 28 after connecting) is not tried on another address; and the tries share one time limit
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 28, 'v4connected' => true]);
+    check('[N23] a connection that was made and then went quiet (a timeout after connecting) is not tried again on another address', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 28, 'v4connected' => false]);
+    check('[N23] ...but a timeout while still trying to connect is (the address is not reachable from here)', ($a['status'] ?? null) === 200 && ($a['pins'] ?? null) === [null, '8.8.4.4', '2606:4700:4700::1111'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111', '2606:4700:4700::1001'], 'v4status' => 0, 'v4errno' => 7, 'timeout' => 4, 'v4sleep' => 1200000]);
+    check('[N23] the tries share one time limit: after 1.2 s of a 4 s limit the further try is given what is left (3 s), not a whole new 4 s', ($a['status'] ?? null) === 200 && ($a['timeouts'] ?? null) === [4, 4, 3], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 7, 'timeout' => 2, 'v4sleep' => 1500000]);
+    check('[N23] ...and when almost nothing is left (under 2 s) there is no further try', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    // the real curl branch, where this PHP has curl: a closed port (nothing to connect to) and a listening port that never answers (connected, then silent)
+    $v6Curl = json_decode($g2Run('if (!function_exists("curl_init")) { echo json_encode(["nocurl" => true]); exit; }
+define("GALLERY_VERSION", "test");
+' . $g2Fn('geo_http_once') . '
+$srv = stream_socket_server("tcp://127.0.0.1:0", $en, $es); $port = (int) substr(strrchr(stream_socket_get_name($srv, false), ":"), 1);
+$closed = stream_socket_server("tcp://127.0.0.1:0", $en2, $es2); $cp = (int) substr(strrchr(stream_socket_get_name($closed, false), ":"), 1); fclose($closed);
+$a = geo_http_once("http://127.0.0.1:$cp/", "GET", [], 1000, 3);
+$b = geo_http_once("http://127.0.0.1:$port/", "GET", [], 1000, 2);
+echo json_encode(["closed" => [$a["status"], $a["errno"] ?? null, $a["connected"] ?? null], "silent" => [$b["status"], $b["errno"] ?? null, $b["connected"] ?? null]]);'), true) ?: [];
+    if (!empty($v6Curl['nocurl'])) skip_note('[N23] this PHP has no curl, so the real request can\'t be run here (the static PHP 8.3 and 8.5 builds have it)');
+    else check('[N23] the real curl request tells the two failures apart: a port nothing listens on is "could not connect" (error 7, never connected); a port that accepts and says nothing is a timeout after connecting (error 28, connected)', ($v6Curl['closed'] ?? null) === [0, 7, false] && ($v6Curl['silent'] ?? null) === [0, 28, true], json_encode($v6Curl));
+    // the pure choice: public addresses, and a translated one only when the IPv4 address inside it is one of the name's own checked ones
+    $v6Pick = json_decode($g2Run($v6Real . 'echo json_encode([
+        geo_usable_ipv6(["64:ff9b::808:808", "2606:4700:4700::1111"], ["8.8.8.8"]),
+        geo_usable_ipv6(["64:ff9b::808:808"], ["1.1.1.1"]),
+        geo_usable_ipv6(["64:ff9b::808:808"], []),
+        geo_usable_ipv6(["64:ff9b::7f00:1"], ["127.0.0.1"]),
+        geo_usable_ipv6(["64:ff9b::a00:1"], ["10.0.0.1"]),
+        geo_usable_ipv6(["64:ff9b:1::808:808"], ["8.8.8.8"]),
+        geo_usable_ipv6(["::ffff:0:808:808", "fd00::1", "::1", "2002:808:808::1"], ["8.8.8.8"]),
+        geo_usable_ipv6(["not an address", "64:ff9b::808:808", "64:ff9b::808:808"], ["8.8.8.8"])]);'), true) ?: [];
+    check('[N23] a translated address (64:ff9b::/96) is used only when the IPv4 address inside it is one the name itself answered with and that is public: another one, a private or loopback one inside it, the local-use range, no IPv4 list at all, and the other translation forms are all refused', $v6Pick === [['64:ff9b::808:808', '2606:4700:4700::1111'], [], [], [], [], [], [], ['64:ff9b::808:808']], json_encode($v6Pick));
     // the real geo_public_ipv6, on addresses written out (a name can't be looked up offline)
     $v6Lit = json_decode($g2Run($v6Real . 'echo json_encode([geo_public_ipv6("2606:4700:4700::1111"), geo_public_ipv6("[2606:4700:4700::1111]"), geo_public_ipv6("fd00::1"), geo_public_ipv6("::1"), geo_public_ipv6("8.8.8.8"), geo_public_ipv6("64:ff9b:1::1"), geo_public_ipv6("")]);'), true) ?: [];
     check('[N23] the IPv6 addresses it may use are public ones only: a public literal stands for itself, a private, loopback, translation or IPv4 one is left out', $v6Lit === [['2606:4700:4700::1111'], ['2606:4700:4700::1111'], [], [], [], [], []], json_encode($v6Lit));
@@ -13975,14 +14066,31 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
         $p6Front = html_entity_decode((string) http_get("$p6Base/", $p6Own)[1]);
         $p6Left = json_decode(data_file_strip_guard_for_tests((string) file_get_contents($p6Itf)), true)['items'] ?? [];
         check('[N24] a folder\'s settings file that can\'t be opened for saving: the entry of the gone photo is still in it and nothing is in the Changes tab', isset($p6Left['a1.jpg']) && $p6Rows() === 0, json_encode($p6Left) . ' rows ' . $p6Rows());
-        check('[N24] ...and the owner is told the truth (still in the folder, its settings file can\'t be written, nothing removed and nothing written in the Changes tab), NOT that it was cleaned up', str_contains($p6Front, 'still in the folder "Alpha"') && str_contains($p6Front, 'its settings file can\'t be written by the web server') && str_contains($p6Front, 'nothing was removed and nothing was written in the Changes tab') && !str_contains($p6Front, 'cleaned up'), substr(strip_tags($p6Front), 0, 400));
+        check('[N24] ...and the owner is told the truth (still in the folder, its settings file can\'t be written, nothing removed and nothing written in the Changes tab), NOT that it was cleaned up', str_contains($p6Front, 'still in the folder "Alpha"') && str_contains($p6Front, 'its settings file could not be saved (the web server may not open it for writing: it has another owner, or is read-only), so nothing was removed and nothing was written in the Changes tab') && !str_contains($p6Front, 'cleaned up'), substr(strip_tags($p6Front), 0, 400));
         $p6Health = html_entity_decode((string) http_get("$p6Base/?admin&classic=1", $p6Own)[1]);
-        check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,3500}-name \'\.gallery-\*\' -exec chown www-data: \{\} \+~s', $p6Health) === 1 && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
+        check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', preg_match('~1 of the gallery\'s own files is not writable by the web server.{0,3500}\S{1,3} -name \'\.gallery-\*\' -o -path \'\*/\.gallery-cache/\*\' \S{1,3} ! -type l -exec chown -h www-data: \{\} \+~s', $p6Health) === 1 && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
         @chmod($p6Itf, 0644);
         http_get("$p6Base/");
         $p6Left = json_decode(data_file_strip_guard_for_tests((string) file_get_contents($p6Itf)), true)['items'] ?? [];
         check('[N24] ...and once the file can be written the entry is written in the Changes tab and removed', !isset($p6Left['a1.jpg']) && $p6Rows() === 1, json_encode($p6Left) . ' rows ' . $p6Rows());
     }
+    // N24 on a server with no SQLite: there is no Changes tab, so the sentence must not name it (the older sentences leave it out there too)
+    $p6Ns = new_fixture_dir('p6nosql'); mkdir("$p6Ns/Alpha", 0777, true); make_jpeg("$p6Ns/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$p6Ns/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => 'must stay']]]) . "\n");
+    file_put_contents("$p6Ns/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'p6-admin-pw-3', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    $p6NsSrc = (string) file_get_contents($indexSrc); $p6NsN = substr_count($p6NsSrc, "in_array('sqlite', \\PDO::getAvailableDrivers(), true)");
+    file_put_contents("$p6Ns/index.php", str_replace("in_array('sqlite', \\PDO::getAvailableDrivers(), true)", 'false', $p6NsSrc)); @touch("$p6Ns/index.php", time() - 3600);
+    @chmod("$p6Ns/Alpha/.gallery-items.php", 0444);
+    if ($p6NsN < 1 || is_writable("$p6Ns/Alpha/.gallery-items.php")) skip_note('[N24] the no-SQLite variant can\'t be made here (the driver test was not found in the build, or a file can be written whatever its mode)');
+    else {
+        $p6NsPort = find_free_port(); $p6NsProc = start_server($p6Ns, $p6NsPort); $p6NsBase = "http://127.0.0.1:$p6NsPort";
+        [, , $p6NsH] = http_post("$p6NsBase/?admin", ['access_code' => 'p6-admin-pw-3'], [], false); $p6NsOwn = ['Cookie: ' . extract_cookie_header($p6NsH)];
+        http_get("$p6NsBase/"); http_get("$p6NsBase/?folder=Alpha");   // (as above: a stranger's views do the tidying)
+        $p6NsFront = html_entity_decode((string) http_get("$p6NsBase/", $p6NsOwn)[1]);
+        check('[N24] with no SQLite on the server the sentence says what stopped the save and does not name a Changes tab (there is none)', str_contains($p6NsFront, 'its settings file could not be saved (the web server may not open it for writing') && str_contains($p6NsFront, 'so nothing was removed. It is tried again') && preg_match('~still in the folder "Alpha".{0,400}?The Health check~s', $p6NsFront, $p6NsM) === 1 && !str_contains($p6NsM[0], 'Changes tab'), $p6NsM[0] ?? 'no notice');
+        @proc_terminate($p6NsProc);
+    }
+    @chmod("$p6Ns/Alpha/.gallery-items.php", 0644);
     @chmod($p6Itf, 0644);
     @proc_terminate($p6Proc); usleep(300000);
     // N25: a log file that has another owner and can't even be read (a restore or a copy made as root): a file of root's is put over the log's name, for this one server only
@@ -14006,11 +14114,88 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
                 $p6Base2 = "http://127.0.0.1:$p6Port2";
                 [, , $p6H2] = http_post("$p6Base2/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own2 = ['Cookie: ' . extract_cookie_header($p6H2)];
                 $p6HealthR = html_entity_decode((string) http_get("$p6Base2/?admin&classic=1", $p6Own2)[1]);
-                check('[N25] a log file the web server can\'t read (another owner\'s) is a red row about who owns it, with the chown line, and says the log is not damaged', ($p6I = strpos($p6HealthR, 'The visitor and change log can\'t be read or written')) !== false && str_contains(substr($p6HealthR, $p6I, 3500), 'The log itself is not damaged') && str_contains(substr($p6HealthR, $p6I, 3500), 'sudo chown www-data') && str_contains(substr($p6HealthR, max(0, $p6I - 300), 300), 'health-bad'), substr(strip_tags($p6HealthR), 0, 300));
+                check('[N25] a log file the web server can\'t read (another owner\'s) is a red row about who owns it, with the chown line, and says that does not mean the log is damaged', ($p6I = strpos($p6HealthR, 'The visitor and change log can\'t be read or written')) !== false && str_contains(substr($p6HealthR, $p6I, 3500), 'This does not mean the log is damaged') && str_contains(substr($p6HealthR, $p6I, 3500), 'sudo chown www-data') && str_contains(substr($p6HealthR, max(0, $p6I - 300), 300), 'health-bad'), substr(strip_tags($p6HealthR), 0, 300));
                 check('[N25] ...and it is not called damaged, and no button offers to set the log aside', !str_contains($p6HealthR, 'The visitor log is damaged') && !str_contains($p6HealthR, 'Set it aside and start a new log'));
             }
-            @proc_terminate($p6Proc2);
+            @proc_terminate($p6Proc2); usleep(300000);
+            // N28: the owner mends the file's owner (here: the bind ends with the server). The look kept from when it could not be opened must not be believed: no "damaged", no button to set a sound log aside, without pressing Check again
+            $p6Port3 = find_free_port(); $p6Proc3 = start_server($p6Fx, $p6Port3); $p6Base3 = "http://127.0.0.1:$p6Port3";
+            [, , $p6H3] = http_post("$p6Base3/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own3 = ['Cookie: ' . extract_cookie_header($p6H3)];
+            $p6Health3 = html_entity_decode((string) http_get("$p6Base3/?admin&classic=1", $p6Own3)[1]);
+            check('[N28] once the log can be read again, Health (still holding the look made while it could not be opened) does not call it damaged and offers no button to set it aside', !str_contains($p6Health3, 'The visitor log is damaged') && !str_contains($p6Health3, 'Set it aside and start a new log') && !str_contains($p6Health3, 'can\'t be read or written'), substr(strip_tags($p6Health3), 0, 200));
+            @proc_terminate($p6Proc3); usleep(300000);
+            // N28 (b): the log file itself can be read and written, but the two small files SQLite keeps beside it (another owner's, after someone ran sqlite3 as root on the log) can't be opened
+            @unlink("$p6Fx/.gallery-health-cache.php");
+            foreach (['-wal', '-shm'] as $p6Sfx) { if (!file_exists($p6Log . $p6Sfx)) file_put_contents($p6Log . $p6Sfx, ''); }
+            $p6Port4 = find_free_port();
+            $p6Script4 = 'mount --bind ' . escapeshellarg($p6Root) . ' ' . escapeshellarg($p6Log . '-wal') . ' && mount --bind ' . escapeshellarg($p6Root) . ' ' . escapeshellarg($p6Log . '-shm') . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $p6Port4 . ' -t ' . escapeshellarg($p6Fx);
+            $p6Proc4 = proc_open(['unshare', '-rm', 'sh', '-c', $p6Script4], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p6Pipes4); $cleanupProcs[] = $p6Proc4;
+            $p6Up4 = false; for ($i = 0; $i < 100 && !$p6Up4; $i++) { $c = @fsockopen('127.0.0.1', $p6Port4, $e1, $e2, 0.2); if ($c) { fclose($c); $p6Up4 = true; } else usleep(100000); }
+            if (!$p6Up4) check('[N28] the server with the other owner\'s side files started', false);
+            else {
+                $p6Base4 = "http://127.0.0.1:$p6Port4";
+                [, , $p6H4] = http_post("$p6Base4/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own4 = ['Cookie: ' . extract_cookie_header($p6H4)];
+                $p6Health4 = html_entity_decode((string) http_get("$p6Base4/?admin&classic=1", $p6Own4)[1]);
+                check('[N28] only the log\'s side files can\'t be opened (another owner\'s): Health says who owns them, not that the log is damaged, and offers no button to set it aside', str_contains($p6Health4, 'The visitor and change log can\'t be read or written') && str_contains($p6Health4, 'the small files SQLite keeps beside it') && !str_contains($p6Health4, 'The visitor log is damaged') && !str_contains($p6Health4, 'Set it aside and start a new log'), substr(strip_tags($p6Health4), 0, 200));
+            }
+            @proc_terminate($p6Proc4); usleep(300000);
+            // N27 j: the side files can be read but not written (root's, bound over their names): SQLite is there, so Health must not say it is missing or tell the owner to install it
+            @unlink("$p6Fx/.gallery-health-cache.php");
+            $p6Ro = '/etc/hostname'; $p6Port5 = find_free_port();
+            if (!is_readable($p6Ro)) skip_note('[N27 j] no file of root\'s that can be read here (' . $p6Ro . ')');
+            else {
+                $p6Script5 = 'mount --bind ' . escapeshellarg($p6Ro) . ' ' . escapeshellarg($p6Log . '-wal') . ' && mount --bind ' . escapeshellarg($p6Ro) . ' ' . escapeshellarg($p6Log . '-shm') . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $p6Port5 . ' -t ' . escapeshellarg($p6Fx);
+                $p6Proc5 = proc_open(['unshare', '-rm', 'sh', '-c', $p6Script5], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p6Pipes5); $cleanupProcs[] = $p6Proc5;
+                $p6Up5 = false; for ($i = 0; $i < 100 && !$p6Up5; $i++) { $c = @fsockopen('127.0.0.1', $p6Port5, $e1, $e2, 0.2); if ($c) { fclose($c); $p6Up5 = true; } else usleep(100000); }
+                if (!$p6Up5) check('[N27 j] the server with the unwritable side files started', false);
+                else {
+                    $p6Base5 = "http://127.0.0.1:$p6Port5";
+                    [, , $p6H5] = http_post("$p6Base5/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own5 = ['Cookie: ' . extract_cookie_header($p6H5)];
+                    $p6Health5 = html_entity_decode((string) http_get("$p6Base5/?admin&classic=1", $p6Own5)[1]);
+                    check('[N27 j] the log\'s side files can be read but not written: Health says who owns them (the can\'t-be-written row with the chown line), not that SQLite is missing, and does not tell the owner to install it', str_contains($p6Health5, 'The visitor and change log can\'t be written') && str_contains($p6Health5, 'the small files SQLite keeps beside it') && !str_contains($p6Health5, 'Visitor log: needs SQLite') && !str_contains($p6Health5, 'apt install php-sqlite3'), substr(strip_tags($p6Health5), 0, 200));
+                }
+                @proc_terminate($p6Proc5);
+            }
+            foreach (['-wal', '-shm'] as $p6Sfx) @unlink($p6Log . $p6Sfx);
         }
+    }
+    // N26: the two commands in the red row, run for real on a small tree: they reach the gallery's own files and the thumbnail folders (and what is inside them), never a photo or a folder of photos, and a
+    // link named like one of the gallery's files is left alone (and so is what it points to, outside)
+    $p6Page = html_entity_decode((string) ($p6Health ?? ''));
+    if (preg_match('~sudo (find /path/to/the/gallery/ .{1,200}? -exec chmod g\+w \{\} \+)~', $p6Page, $p6Cm) && preg_match('~sudo (find /path/to/the/gallery/ .{1,200}? -exec chown -h www-data: \{\} \+)~', $p6Page, $p6Co)) {
+        $p6T = new_fixture_dir('p6cmd'); $p6Out2 = new_fixture_dir('p6out'); mkdir("$p6T/Photos/.gallery-cache", 0755, true);
+        foreach (["$p6T/Photos/.gallery-items.php", "$p6T/Photos/.gallery-cache/t1.jpg", "$p6T/Photos/.gallery-cache/meta1.php", "$p6T/Photos/pic.jpg", "$p6Out2/outside.txt"] as $p6F) { file_put_contents($p6F, 'x'); chmod($p6F, 0600); }
+        chmod("$p6T/Photos/.gallery-cache", 0755); chmod("$p6T/Photos", 0755);
+        @symlink("$p6Out2/outside.txt", "$p6T/Photos/.gallery-evil"); @symlink("$p6Out2/outside.txt", "$p6T/Photos/.gallery-cache/evil2"); @symlink('/etc/hostname', "$p6T/Photos/.gallery-toroot");
+        exec('cd / && ' . str_replace('/path/to/the/gallery/', $p6T . '/', $p6Cm[1]) . ' 2>&1', $p6O3, $p6R3);
+        clearstatcache();
+        $p6W = function ($f) { return (bool) (fileperms($f) & 0020); };
+        check('[N26] run for real, the chmod command: the gallery\'s data file, the thumbnail folder and the files in it become group-writable; a photo, the photo folder and what a link named like a gallery file points to (outside) do not', $p6R3 === 0 && $p6W("$p6T/Photos/.gallery-items.php") && $p6W("$p6T/Photos/.gallery-cache") && $p6W("$p6T/Photos/.gallery-cache/t1.jpg") && $p6W("$p6T/Photos/.gallery-cache/meta1.php") && !$p6W("$p6T/Photos/pic.jpg") && !$p6W("$p6T/Photos") && !$p6W("$p6Out2/outside.txt"), decoct(fileperms("$p6Out2/outside.txt") & 0777) . ' ' . implode(' ', $p6O3));
+        $p6Me = function_exists('posix_getpwuid') ? (string) (posix_getpwuid(posix_geteuid())['name'] ?? '') : '';
+        if ($p6Me === '') skip_note('[N26] this PHP has no posix functions, so the chown command can\'t be run here as the current user');
+        else {
+            $p6O4 = []; exec('cd / && ' . str_replace(['/path/to/the/gallery/', 'www-data:'], [$p6T . '/', $p6Me . ':'], $p6Co[1]) . ' 2>&1', $p6O4, $p6R4);
+            check('[N26] run for real, the chown command (with the current user in place of www-data): it goes through without trying to change a link that points to root\'s file (it would fail there), so no link is followed', $p6R4 === 0, implode(' ', $p6O4));
+        }
+    } else check('[N26] the red row\'s chmod and chown commands are found on the page', false);
+    // the thumbnail folder (.gallery-cache) of a folder, with another owner (root's folder bound over it, for this one server): a red row names it; the thumbnails still show
+    @unlink("$p6Fx/.gallery-health-cache.php");
+    if (!is_dir('/usr/share/doc')) skip_note('[N29 f] no folder of root\'s to bind over a thumbnail folder here');
+    else {
+        @mkdir("$p6Fx/Alpha/.gallery-cache", 0755); $p6Port6 = find_free_port();
+        $p6Script6 = 'mount --bind /usr/share/doc ' . escapeshellarg("$p6Fx/Alpha/.gallery-cache") . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $p6Port6 . ' -t ' . escapeshellarg($p6Fx);
+        $p6Proc6 = proc_open(['unshare', '-rm', 'sh', '-c', $p6Script6], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p6Pipes6); $cleanupProcs[] = $p6Proc6;
+        $p6Up6 = false; for ($i = 0; $i < 100 && !$p6Up6; $i++) { $c = @fsockopen('127.0.0.1', $p6Port6, $e1, $e2, 0.2); if ($c) { fclose($c); $p6Up6 = true; } else usleep(100000); }
+        if (!$p6Up6) check('[N29 f] the server with the other owner\'s thumbnail folder started', false);
+        else {
+            $p6Base6 = "http://127.0.0.1:$p6Port6";
+            [, , $p6H6] = http_post("$p6Base6/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own6 = ['Cookie: ' . extract_cookie_header($p6H6)];
+            $p6Health6 = html_entity_decode((string) http_get("$p6Base6/?admin&classic=1", $p6Own6)[1]);
+            [$p6ThSt] = http_get("$p6Base6/?img=" . rawurlencode('Alpha/a2.jpg') . '&size=thumb');
+            check('[N29 f] a thumbnail folder the web server may not write (another owner\'s, after a restore) is named in the red row, with the command that gives the gallery\'s files and thumbnail folders back, and the pictures are still served', preg_match('~of the gallery\'s own files? (is|are) not writable by the web server.{0,900}Alpha \(its thumbnail folder\)~s', $p6Health6) === 1 && str_contains($p6Health6, '.gallery-cache/*') && $p6ThSt === 200, substr(strip_tags($p6Health6), 0, 200) . ' thumb ' . $p6ThSt);
+        }
+        @proc_terminate($p6Proc6);
+        @rmdir("$p6Fx/Alpha/.gallery-cache");
     }
     $p6Cl = (string) @file_get_contents(__DIR__ . '/../CHANGELOG.md');
     check('[N27] the changelog does not say an IPv6-only name is looked up again (it is tied to its checked address) and mentions the IPv6 retry', !str_contains($p6Cl, 'checked and then looked up again') && str_contains($p6Cl, 'public IPv6 addresses'));
