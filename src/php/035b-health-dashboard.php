@@ -122,16 +122,21 @@ function health_database_rows($add, $dir, $files) {
     [$vlOk, $vlWhy] = visitlog_check_quiet();
     $bk = backup_status();
     $logFile = visitlog_find();
-    if ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
+    $logLocked = function ($canRead) use ($add, $G, $logFile, $uses) {
+        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it' : 'read or write it') . ' (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. The log itself is not damaged. ' . $uses, null, '', [
+            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
+            'Then press Check again at the top of this page.']);
+    };
+    if ($logFile !== null && visitlog_driver_ok() && !@is_readable($logFile)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
+        $logLocked(false);
+    } elseif ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
-        $add($G, 'bad', 'The visitor and change log can\'t be written', 'The file ' . basename($logFile) . ' is there, but the web server may not write to it (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. ' . $uses, null, '', [
-            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
-            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
-            'Then press Check again at the top of this page.']);
+        $logLocked(true);
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',

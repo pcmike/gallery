@@ -9665,8 +9665,9 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        $keptCount = 0; $goneNames = []; $logged = false;
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged) {
+        $keptCount = 0; $goneNames = []; $logged = false; $saveRan = false; $firstCount = $orphanCount;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged, &$saveRan) {
+            $saveRan = true;
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
@@ -9678,6 +9679,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
+        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab)
+        if ($firstCount > 0 && !$saveRan) {
+            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file can\'t be written by the web server, so nothing was removed and nothing was written in the Changes tab. It is tried again at the next look. The Health check in Settings says more.';
+            $orphanCount = 0;
+        }
         // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
         if ($goneNames && array_intersect_key(items_read($folderPath)['items'] ?? [], array_flip($goneNames))) {
             $galleryNotices[] = count($goneNames) . ' caption/location/web ' . (count($goneNames) === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . (count($goneNames) === 1 ? 'is' : 'are') . ($logged ? ' written in the Changes tab, but' : '') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (is the disk full, or is the folder not writable by the web server?). It is tried again at the next look. The Health check in Settings says more.';
@@ -16800,8 +16806,8 @@ function health_checks($dir, $files) {
     if ($unwritableFiles) $add('Folders and files', 'bad', count($unwritableFiles) . ' of the gallery\'s own file' . (count($unwritableFiles) === 1 ? ' is' : 's are') . ' not writable by the web server',
         'What is saved in ' . (count($unwritableFiles) === 1 ? 'it' : 'them') . ' (captions, locations, private flags, share links, collections) can\'t be changed, and a deleted photo\'s caption can\'t be tidied away: ' . implode(', ', array_slice($unwritableFiles, 0, 5)) . (count($unwritableFiles) > 5 ? ' and ' . (count($unwritableFiles) - 5) . ' more' : '') . '. This happens when the files belong to another user (a restore, or a copy made as root); the folder being writable is not enough.', null, '', [
         'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
-        ['Give it the files, for example:', 'sudo chown -R www-data: /path/to/the/gallery'],
-        'Or let the group write: `sudo chmod -R g+w /path/to/the/gallery`, with the web server\'s user in that group. A network share may need its own permissions changed instead.',
+        ['Give it just the gallery\'s own files (the ones named above; your photos and folders stay with their owner), for example:', 'sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chown www-data: {} +'],
+        'Or let the group write to those files only: `sudo find /path/to/the/gallery -name \'.gallery-*\' -exec chmod g+w {} +`, with the web server\'s user in that group. A network share may need its own permissions changed instead. A place from elsewhere that is named above needs the same command with its own path.',
         'Then press Check again at the top of this page.']);
     $add('Folders and files', $unwritable ? 'bad' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
         $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
@@ -17208,16 +17214,21 @@ function health_database_rows($add, $dir, $files) {
     [$vlOk, $vlWhy] = visitlog_check_quiet();
     $bk = backup_status();
     $logFile = visitlog_find();
-    if ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
+    $logLocked = function ($canRead) use ($add, $G, $logFile, $uses) {
+        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it' : 'read or write it') . ' (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. The log itself is not damaged. ' . $uses, null, '', [
+            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
+            'Then press Check again at the top of this page.']);
+    };
+    if ($logFile !== null && visitlog_driver_ok() && !@is_readable($logFile)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
+        $logLocked(false);
+    } elseif ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
-        $add($G, 'bad', 'The visitor and change log can\'t be written', 'The file ' . basename($logFile) . ' is there, but the web server may not write to it (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. ' . $uses, null, '', [
-            'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
-            ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
-            'Then press Check again at the top of this page.']);
+        $logLocked(true);
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',

@@ -83,8 +83,9 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $orphanCount++;
         }
         $folderRel = $folderPath === $dir ? '' : (string) substr(scan_path_as_named($folderPath . '/x'), 0, -2);
-        $keptCount = 0; $goneNames = []; $logged = false;
-        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged) {
+        $keptCount = 0; $goneNames = []; $logged = false; $saveRan = false; $firstCount = $orphanCount;
+        if ($orphanCount > 0) items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, $folderRel, &$orphanCount, &$keptCount, &$goneNames, &$logged, &$saveRan) {
+            $saveRan = true;
             $gone = [];
             foreach ($data['items'] as $bare => $entry) {
                 if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) $gone[$bare] = $entry;
@@ -96,6 +97,11 @@ function gc_items_data($dir, $files, &$galleryNotices) {
             foreach (array_keys($gone) as $bare) unset($data['items'][$bare]);
             $orphanCount = count($gone); $goneNames = array_keys($gone);
         });
+        // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab)
+        if ($firstCount > 0 && !$saveRan) {
+            $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file can\'t be written by the web server, so nothing was removed and nothing was written in the Changes tab. It is tried again at the next look. The Health check in Settings says more.';
+            $orphanCount = 0;
+        }
         // (was it saved? the log has the entries by now, but the folder's own file may have refused them: no room, a quota. Then they are still there, and said to be.)
         if ($goneNames && array_intersect_key(items_read($folderPath)['items'] ?? [], array_flip($goneNames))) {
             $galleryNotices[] = count($goneNames) . ' caption/location/web ' . (count($goneNames) === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . (count($goneNames) === 1 ? 'is' : 'are') . ($logged ? ' written in the Changes tab, but' : '') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (is the disk full, or is the folder not writable by the web server?). It is tried again at the next look. The Health check in Settings says more.';

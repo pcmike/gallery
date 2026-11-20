@@ -13807,7 +13807,7 @@ echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log o
         skip_note('[Health] the settings file can be written here whatever its mode, so an unwritable one can\'t be made');
     } else {
         $p5Health2 = html_entity_decode((string) http_get("$p5Base/?admin&classic=1", $p5Own)[1]);
-        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}sudo chown -R www-data~s', $p5Health2) === 1);
+        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}-exec chown www-data~s', $p5Health2) === 1);
     }
     @chmod($p5Itf, 0644);
     proc_terminate($p5Proc);
@@ -13951,6 +13951,69 @@ echo "== a collection's card does not shift the viewer's numbering ==\n";
     [, $cnFrontS] = http_get("$cnBase/");
     check('[collection numbering] ...and for a stranger', $cnCheck((string) $cnFrontS) === 'ok', $cnCheck((string) $cnFrontS));
     @proc_terminate($cnProc);
+}
+
+/* --------------------------------------------------------------------- */
+// pass 6 (the reviewer's N24 to N27): the front-page note must not say "cleaned up" for a save that never began, Health must not call a log that has another owner "damaged",
+// the fix command for the gallery's own files touches only those files, and the changelog no longer says an IPv6-only name is looked up again
+echo "== pass 6: a save that can't begin is said as it is, an unreadable log is not 'damaged', the fix command is narrow ==\n";
+{
+    $p6Fx = new_fixture_dir('p6'); mkdir("$p6Fx/Alpha", 0777, true); make_jpeg("$p6Fx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    $p6Itf = "$p6Fx/Alpha/.gallery-items.php";
+    file_put_contents($p6Itf, data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => 'must stay'], 'a2.jpg' => ['caption' => 'stays']]]) . "\n");
+    file_put_contents("$p6Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'p6-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$p6Fx/index.php"); @touch("$p6Fx/index.php", time() - 3600);
+    $p6Port = find_free_port(); $p6Proc = start_server($p6Fx, $p6Port); $p6Base = "http://127.0.0.1:$p6Port";
+    [, , $p6H] = http_post("$p6Base/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own = ['Cookie: ' . extract_cookie_header($p6H)];
+    http_get("$p6Base/?admin&classic=1", $p6Own);
+    $p6Rows = function () use ($p6Fx) { $f = glob("$p6Fx/.gallery-visits-*.sqlite")[0] ?? null; if (!$f) return -1; $db = new PDO('sqlite:' . $f); return (int) $db->query("SELECT COUNT(*) FROM changes WHERE kind = 'data'")->fetchColumn(); };
+    @chmod($p6Itf, 0444);
+    if (is_writable($p6Itf)) {
+        skip_note('[N24] the settings file can be written here whatever its mode, so one that can\'t be opened for saving can\'t be made');
+    } else {
+        http_get("$p6Base/"); http_get("$p6Base/?folder=Alpha");   // (a stranger's views would clean up the entry of the photo that is not there)
+        $p6Front = html_entity_decode((string) http_get("$p6Base/", $p6Own)[1]);
+        $p6Left = json_decode(data_file_strip_guard_for_tests((string) file_get_contents($p6Itf)), true)['items'] ?? [];
+        check('[N24] a folder\'s settings file that can\'t be opened for saving: the entry of the gone photo is still in it and nothing is in the Changes tab', isset($p6Left['a1.jpg']) && $p6Rows() === 0, json_encode($p6Left) . ' rows ' . $p6Rows());
+        check('[N24] ...and the owner is told the truth (still in the folder, its settings file can\'t be written, nothing removed and nothing written in the Changes tab), NOT that it was cleaned up', str_contains($p6Front, 'still in the folder "Alpha"') && str_contains($p6Front, 'its settings file can\'t be written by the web server') && str_contains($p6Front, 'nothing was removed and nothing was written in the Changes tab') && !str_contains($p6Front, 'cleaned up'), substr(strip_tags($p6Front), 0, 400));
+        $p6Health = html_entity_decode((string) http_get("$p6Base/?admin&classic=1", $p6Own)[1]);
+        check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', preg_match('~1 of the gallery\'s own file is not writable by the web server.{0,3500}-name \'\.gallery-\*\' -exec chown www-data: \{\} \+~s', $p6Health) === 1 && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
+        @chmod($p6Itf, 0644);
+        http_get("$p6Base/");
+        $p6Left = json_decode(data_file_strip_guard_for_tests((string) file_get_contents($p6Itf)), true)['items'] ?? [];
+        check('[N24] ...and once the file can be written the entry is written in the Changes tab and removed', !isset($p6Left['a1.jpg']) && $p6Rows() === 1, json_encode($p6Left) . ' rows ' . $p6Rows());
+    }
+    @chmod($p6Itf, 0644);
+    @proc_terminate($p6Proc); usleep(300000);
+    // N25: a log file that has another owner and can't even be read (a restore or a copy made as root): a file of root's is put over the log's name, for this one server only
+    $p6Log = glob("$p6Fx/.gallery-visits-*.sqlite")[0] ?? null;
+    foreach (glob("$p6Fx/.gallery-visits-*-wal") ?: [] as $p6W) @unlink($p6W);
+    foreach (glob("$p6Fx/.gallery-visits-*-shm") ?: [] as $p6W) @unlink($p6W);
+    @unlink("$p6Fx/.gallery-health-cache.php");   // (the look through the log is kept for an hour: a fresh one sees the file as it is now, as a restore made before the first look would)
+    $p6Root = '/var/log/btmp';
+    if (!extension_loaded('pdo_sqlite') || $p6Log === null) skip_note('[N25] this PHP has no pdo_sqlite, so there is no log');
+    elseif (!file_exists($p6Root) || is_readable($p6Root)) skip_note('[N25] this machine has no file of root\'s that the suite can\'t read (' . $p6Root . '), so a log of another owner can\'t be made');
+    else {
+        $p6Out = []; exec('unshare -rm true 2>&1', $p6Out, $p6Rc);
+        if ($p6Rc !== 0) skip_note('[N25] this machine does not let the suite make a mount of its own (unshare -rm), so a log of another owner can\'t be made');
+        else {
+            $p6Port2 = find_free_port();
+            $p6Script = 'mount --bind ' . escapeshellarg($p6Root) . ' ' . escapeshellarg($p6Log) . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $p6Port2 . ' -t ' . escapeshellarg($p6Fx);
+            $p6Proc2 = proc_open(['unshare', '-rm', 'sh', '-c', $p6Script], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $p6Pipes); $cleanupProcs[] = $p6Proc2;
+            $p6Up = false; for ($i = 0; $i < 100 && !$p6Up; $i++) { $c = @fsockopen('127.0.0.1', $p6Port2, $e1, $e2, 0.2); if ($c) { fclose($c); $p6Up = true; } else usleep(100000); }
+            if (!$p6Up) check('[N25] the server with the other owner\'s log started', false);
+            else {
+                $p6Base2 = "http://127.0.0.1:$p6Port2";
+                [, , $p6H2] = http_post("$p6Base2/?admin", ['access_code' => 'p6-admin-pw-1'], [], false); $p6Own2 = ['Cookie: ' . extract_cookie_header($p6H2)];
+                $p6HealthR = html_entity_decode((string) http_get("$p6Base2/?admin&classic=1", $p6Own2)[1]);
+                check('[N25] a log file the web server can\'t read (another owner\'s) is a red row about who owns it, with the chown line, and says the log is not damaged', ($p6I = strpos($p6HealthR, 'The visitor and change log can\'t be read or written')) !== false && str_contains(substr($p6HealthR, $p6I, 3500), 'The log itself is not damaged') && str_contains(substr($p6HealthR, $p6I, 3500), 'sudo chown www-data') && str_contains(substr($p6HealthR, max(0, $p6I - 300), 300), 'health-bad'), substr(strip_tags($p6HealthR), 0, 300));
+                check('[N25] ...and it is not called damaged, and no button offers to set the log aside', !str_contains($p6HealthR, 'The visitor log is damaged') && !str_contains($p6HealthR, 'Set it aside and start a new log'));
+            }
+            @proc_terminate($p6Proc2);
+        }
+    }
+    $p6Cl = (string) @file_get_contents(__DIR__ . '/../CHANGELOG.md');
+    check('[N27] the changelog does not say an IPv6-only name is looked up again (it is tied to its checked address) and mentions the IPv6 retry', !str_contains($p6Cl, 'checked and then looked up again') && str_contains($p6Cl, 'public IPv6 addresses'));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
