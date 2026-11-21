@@ -106,10 +106,10 @@ function health_stats_afresh_buttons(array $statsKey) {
     return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
 }
 
-function health_backup_buttons($withRestore, $withNew, $withDownload) {
+function health_backup_buttons($withRestore, $withNew, $withDownload, $replaces = 'damaged') {   // ($replaces: what the log from the backup would replace: 'damaged' for a damaged log, 'now in use' for a log that is sound but was found empty)
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $b = '<div class="health-act">';
-    if ($withRestore) { $bk = backup_status(); $b .= '<button type="button" class="secondary" data-backup-act="restore" data-backup-ask="Put the log from the backup (made ' . $esc(health_ago($bk['at'])) . ') in place of the damaged one? The damaged one is kept, renamed with .damaged- and the date.">Restore the log from the backup</button> '; }
+    if ($withRestore) { $bk = backup_status(); $b .= '<button type="button" class="secondary" data-backup-act="restore" data-backup-ask="Put the log from the backup (made ' . $esc(health_ago($bk['at'])) . ') in place of ' . ($replaces === 'damaged' ? 'the damaged one? The damaged one' : 'the log now in use? The one now in use') . ' is kept, renamed with .damaged- and the date.">Restore the log from the backup</button> '; }
     if ($withNew) $b .= '<button type="button" class="secondary" data-backup-act="newlog" data-backup-ask="Set the visitor log aside and start a new, empty one? The old file is kept, renamed with .damaged- and the date, but the Visitors and Changes tabs start from nothing.">Set it aside and start a new log</button> ';
     if ($withDownload) $b .= '<button type="button" class="secondary" data-backup-act="run">Back up now</button> <button type="button" class="secondary" data-backup-act="download">Download</button> ';
     return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
@@ -189,8 +189,8 @@ function health_database_rows($add, $dir, $files) {
     $emptiedAt = ($logFile !== null && visitlog_driver_ok() && !$logBusy && @is_readable($logFile)) ? (int) changes_read(function ($db) { return visitlog_meta_get($db, 'emptied'); }, 0) : 0;   // (written once, inside the new log, when the file was found with no content)
     if ($emptiedAt > 0 && time() - $emptiedAt < 30 * 86400) {
         $bkOlder = $bk['have'] && backup_has_log() && (int) $bk['at'] < $emptiedAt;
-        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $emptiedAt) . ' (UTC) the log\'s file had no content (a copy or a restore that failed leaves that; the gallery does not do it). The log was used as it was and its tables made again, so the Visitors and Changes tabs started from nothing then; what they held before is gone from the log. ' . ($bkOlder ? 'The backup from ' . health_ago($bk['at']) . ' was made before that and holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the log now in use is kept, renamed with .damaged- and the date).' : ($bk['have'] ? 'The backup from ' . health_ago($bk['at']) . ' was made after that, so it holds only the log as it was started again.' : 'There is no backup.')) . ' This row goes away by itself after 30 days.',
-            null, $bkOlder ? health_backup_buttons(true, false, false) : '');
+        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $emptiedAt) . ' (UTC) the log\'s file had no content (a copy or a restore that failed leaves that, and so can a first log that could not be made on a disk with no room). The log was used as it was and its tables made again, so the Visitors and Changes tabs started from nothing then; what they held before is gone from the log. ' . ($bkOlder ? 'The backup from ' . health_ago($bk['at']) . ' was made before that and holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the log now in use is kept, renamed with .damaged- and the date).' : (($bk['have'] && backup_has_log()) ? 'The backup from ' . health_ago($bk['at']) . ' was made after that, so it holds only the log as it was started again.' : ($bk['have'] ? 'The backup from ' . health_ago($bk['at']) . ' holds no copy of the log.' : 'There is no backup.'))) . ' This row goes away by itself after 30 days.',
+            null, $bkOlder ? health_backup_buttons(true, false, false, 'now in use') : '');
     }
     $statsEmpty = $heavy['stats']['empty'] ?? [];
     if ($statsEmpty) {   // (a view-count database of no bytes: its counts are gone and counting has started again from zero)
@@ -282,6 +282,7 @@ function health_volumes($dir, $files) {
     $by = [];
     $homeDev = (string) (@stat($dir)['dev'] ?? '');   // (the disk the gallery's own folder is on: its logs, backup and settings are there)
     foreach ($paths as $p => $label) {
+        if (microtime(true) - $t0 > 2.5) break;   // (the look at the disk, folder by folder, has its own limit: a slow disk or a very big tree cuts it short)
         $st = @stat($p); if (!$st) continue;
         $key = (string) $st['dev'];
         if ($label === null) {   // a folder only the scan found: named by the place it belongs to (a folder inside the gallery that is a disk of its own, a mount, is named by its folder: the gallery's own files are not on it)

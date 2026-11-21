@@ -14519,6 +14519,11 @@ echo "== pass 9 N34 a: a visitor log found empty ==\n";
         }
         check("[N34 a] a log found with $e9Size byte(s) is used as it is: nothing is renamed or removed (the one log file is still the only one) and logging goes on", count(array_filter($e9Files, fn ($f) => !preg_match('/-(wal|shm)$/', $f))) === 1 && strpos(implode(' ', $e9Files), 'damaged') === false && is_file($e9Log) && filesize($e9Log) > 100, json_encode($e9Files));
         check("[N34 a] ...the fact is written once as a note inside the log and Health reports it ($e9Size byte(s)): found empty and started again, nothing about deleting a file, and the log is not called damaged", $e9Note > time() - 600 && str_contains($e9Panel, 'The visitor log was found empty and started again') && !str_contains($e9Panel, 'Files this gallery has made') && !str_contains($e9Panel, 'The visitor log is damaged'), "note $e9Note " . (preg_match('~The visitor[^<]{0,200}~', strip_tags($e9Panel), $e9M) ? $e9M[0] : 'no row'));
+        if ($e9Size === 0) {
+            $e9Db2 = null; try { $e9Db2 = new PDO('sqlite:' . $e9Log); $e9Av = (int) $e9Db2->query('PRAGMA auto_vacuum')->fetchColumn(); } catch (Throwable $e9E2) { $e9Av = -1; } $e9Db2 = null;
+            check('[pass 11 N38] the "found empty" row does not claim the gallery never makes an empty log (a first log on a full disk can be one), and a log restarted in an empty file gets auto_vacuum on, as a new one does (a trim then makes the file smaller)', !str_contains($e9Panel, 'the gallery does not do it') && str_contains($e9Panel, 'a first log that could not be made on a disk with no room') && $e9Av === 1, 'auto_vacuum ' . $e9Av);
+            if (str_contains($e9Panel, 'Restore the log from the backup')) check('[pass 11 N38] the Restore button of that row asks about the log now in use, not "the damaged one" (it is not damaged)', str_contains($e9Panel, 'in place of the log now in use? The one now in use is kept') && !str_contains($e9Panel, 'in place of the damaged one'), '');
+        }
         if ($e9Size === 0) { $e9Older = str_contains($e9Panel, 'was made before that and holds an older copy of the log'); $e9Newer = str_contains($e9Panel, 'was made after that, so it holds only the log as it was started again'); $e9Btn = str_contains($e9Panel, 'Restore the log from the backup');
             check('[N34 a] ...and the row compares dates and never promises an older copy it does not have: a backup made before offers Restore the log from the backup, one made after says it only holds the restarted log and offers none', ($e9Older xor $e9Newer) && ($e9Older === $e9Btn), json_encode([$e9Older, $e9Newer, $e9Btn]) . ' ' . (preg_match('~started again[^<]{0,700}~', strip_tags($e9Panel), $e9M2) ? $e9M2[0] : '')); }
         @proc_terminate($e9Proc2);
@@ -14621,6 +14626,46 @@ echo "== pass 10: a held view-count database, and a disk after many folders ==\n
             check('[pass 10 (6)] a disk that is reached only after more than 300 folders (here the 321st, on its own small disk) still gets its low-space row', preg_match('~Disk space is almost gone on zzz-Last:~', $m9Html) === 1, preg_match('~Disk space[^.]{0,160}~', $m9Html, $m) ? $m[0] : 'no disk row');
         }
         @proc_terminate($m9Pr);
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// pass 11 N37: the two temporary files SQLite keeps beside a view-count database while a request has it open are not parts of the backup and not in the Download ZIP: a weekly backup set off by a visitor's page leaves the Backup row green
+echo "== pass 11 N37: view-count side files in the backup and the download ==\n";
+{
+    if (!extension_loaded('pdo_sqlite')) skip_note('[N37] this PHP has no pdo_sqlite');
+    else {
+        $b9St = new_fixture_dir('b9stage'); mkdir("$b9St/Alpha", 0777, true); make_jpeg("$b9St/Alpha/a2.jpg", 40, 30, 120, 90, 60); make_jpeg("$b9St/Alpha/a3.jpg", 40, 30, 20, 190, 60);
+        file_put_contents("$b9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'b9-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$b9St/index.php"); @touch("$b9St/index.php", time() - 3600);
+        $b9Port = find_free_port(); $b9Proc = start_server($b9St, $b9Port); $b9Base = "http://127.0.0.1:$b9Port";
+        http_get("$b9Base/"); http_get("$b9Base/?folder=Alpha"); http_get("$b9Base/?folder=Alpha");   // (a stranger's pages open the view-count database; the weekly backup is due and is made at the end of such a request: no sign-in first, that opens none)
+        [, , $b9H] = http_post("$b9Base/?admin", ['access_code' => 'b9-admin-pw-1'], [], false); $b9Own = ['Cookie: ' . extract_cookie_header($b9H)];
+        $b9Csrf = admin_token($b9Base, $b9Own); $b9Fetch = array_merge($b9Own, ['X-Requested-With: gallery-fetch']);
+        $b9Panel = html_entity_decode((string) (json_decode(http_post("$b9Base/?admin", ['csrf_token' => $b9Csrf, 'action' => 'health_panel', 'recheck' => '1'], $b9Fetch)[1], true)['html'] ?? ''));
+        check('[N37] a weekly backup set off by a visitor\'s page (view counts on) does not make the Backup row say "N parts could not be read soundly": the view-count databases are in it whole and their two temporary side files are not parts of their own', !str_contains($b9Panel, 'could not be read soundly') && !str_contains($b9Panel, 'gallery-stats.sqlite-shm') && !str_contains($b9Panel, 'gallery-stats.sqlite-wal'), preg_match('~Backup made[^<]{0,300}~', strip_tags($b9Panel), $m) ? $m[0] : (str_contains($b9Panel, 'Backup') ? 'a Backup row, no warning' : 'no Backup row'));
+        // the Download ZIP while another request has a view-count database open (here: this script): neither the list nor the ZIP carries the side files, and the database in the ZIP is whole
+        $b9Db = glob("$b9St/.gallery-stats.sqlite") ?: glob("$b9St/*/.gallery-stats.sqlite") ?: [];
+        if (!$b9Db) check('[N37] the view-count database was made', false);
+        else {
+            $h = new PDO('sqlite:' . $b9Db[0]); $h->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); $h->query("SELECT COUNT(*) FROM sqlite_master")->fetchColumn();   // (open: its -shm and -wal are on disk now)
+            $b9Side = (glob("$b9St/.gallery-stats.sqlite-*") ?: []) + (glob("$b9St/*/.gallery-stats.sqlite-*") ?: []);
+            $b9Acc = function ($f) use ($b9Base, $b9Fetch, $b9Csrf) { return json_decode(http_post("$b9Base/?admin", ['csrf_token' => $b9Csrf] + $f, $b9Fetch)[1], true) ?: []; };
+            $b9List = $b9Acc(['action' => 'files_list']);
+            $b9Zip = $b9Acc(['action' => 'files_zip_prepare', 'password' => 'b9-admin-pw-1', 'thumbs' => '0']);
+            $b9Names = []; $b9Whole = false;
+            if (!empty($b9Zip['url']) && trim((string) shell_exec('command -v unzip')) !== '') {
+                [$b9St2, $b9Body] = http_get("$b9Base/" . $b9Zip['url'], $b9Own); $b9Tmp = tempnam(sys_get_temp_dir(), 'b9z'); file_put_contents($b9Tmp, $b9Body);
+                $b9Names = array_filter(explode("\n", trim((string) shell_exec('unzip -Z1 ' . escapeshellarg($b9Tmp) . ' 2>/dev/null'))));
+                $b9Inner = array_values(array_filter($b9Names, fn ($n) => str_ends_with($n, '.gallery-stats.sqlite')))[0] ?? null;
+                if ($b9Inner) { $b9Cp = $b9Tmp . '.db'; file_put_contents($b9Cp, (string) shell_exec('unzip -p ' . escapeshellarg($b9Tmp) . ' ' . escapeshellarg($b9Inner))); try { $x = new PDO('sqlite:' . $b9Cp); $b9Whole = (int) $x->query('SELECT COUNT(*) FROM sqlite_master')->fetchColumn() > 0 && $x->query('PRAGMA quick_check')->fetchColumn() === 'ok'; $x = null; } catch (Throwable $e) { $b9Whole = false; } @unlink($b9Cp); }
+                @unlink($b9Tmp);
+            }
+            $h = null;
+            check('[N37] with a view-count database open (its two side files on disk), the Download dialog\'s list and the ZIP itself carry no side file, and the database in the ZIP is whole (a consistent copy made through SQLite)', $b9Side !== [] && !preg_grep('/\.sqlite-(wal|shm)$/', (array) ($b9List['zipPaths'] ?? [])) && $b9Names !== [] && !preg_grep('/\.sqlite-(wal|shm)$/', $b9Names) && $b9Whole, json_encode(['side files on disk' => count($b9Side), 'in the list' => array_values(preg_grep('/\.sqlite-(wal|shm)$/', (array) ($b9List['zipPaths'] ?? []))), 'in the zip' => array_values(preg_grep('/\.sqlite-(wal|shm)$/', $b9Names)), 'whole' => $b9Whole]));
+            check('[N37] ...and Delete\'s list still names the side files (Delete removes them with the database)', (bool) preg_grep('/\.sqlite-(wal|shm)$/', (array) ($b9List['paths'] ?? [])) || $b9Side === [], '');
+        }
+        @proc_terminate($b9Proc);
     }
 }
 

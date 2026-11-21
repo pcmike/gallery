@@ -145,7 +145,12 @@ function owned_plan($dir, $files) {
     // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
     $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) if ($e['kind'] !== 'work') $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
+    foreach ($entries as $e) {
+        if ($e['kind'] === 'work') continue;
+        if ($e['kind'] === 'stats' && preg_match('/\.gallery-stats\.sqlite-(?:wal|shm)$/', $e['rel'])) continue;   // (the two temporary files SQLite keeps beside a view-count database come and go with every request that opens it, and while a copy is made through SQLite)
+        $byItself = isset($live[$e['kind']]) || ($e['kind'] === 'stats' && preg_match('/\.gallery-stats\.sqlite$/', $e['rel']));   // (a view-count database changes with every visit, as the log does)
+        $lines[] = $e['kind'] . '|' . $e['rel'] . ($byItself ? '' : '|' . $e['size']);
+    }   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
     $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
     foreach ($entries as $k => $e) {
@@ -175,7 +180,7 @@ function owned_summary($plan) {
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
             'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'shared' => $sh, 'fingerprint' => $plan['fingerprint'],
             'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300),
-            'zipPaths' => array_slice(array_column(array_values(array_filter($plan['entries'], function ($e) { return $e['kind'] !== 'backup' && $e['kind'] !== 'work' && !($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])); })), 'rel'), 0, 300)];   // (what the download holds, a place from elsewhere's shared data included: the same exclusions as owned_zip_entries; Delete's list above still names every file it would remove)
+            'zipPaths' => array_slice(array_column(array_values(array_filter($plan['entries'], function ($e) { return $e['kind'] !== 'backup' && $e['kind'] !== 'work' && !(($e['kind'] === 'visits' || $e['kind'] === 'stats') && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])); })), 'rel'), 0, 300)];   // (what the download holds, a place from elsewhere's shared data included: the same exclusions as owned_zip_entries; Delete's list above still names every file it would remove)
 }
 
 /** The text inside the ZIP that says what each file is and how to put them back. */
@@ -235,10 +240,10 @@ function owned_zip_entries($plan, $withThumbs) {
     foreach ($plan['entries'] as $e) {
         if ($e['kind'] === 'backup') continue;   // (the backup is a ZIP of these same files: it is not packed into another)
         if ($e['kind'] === 'work') continue;   // (a lock holds nothing and the note of where ffmpeg is is looked up again: nothing in them to keep)
-        if ($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (the log goes in as one consistent copy, below; its side files are inside that copy)
+        if (($e['kind'] === 'visits' || $e['kind'] === 'stats') && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (a log or a view-count database goes in as one consistent copy, below; its side files are inside that copy)
         $tmp = null;
-        if ($e['kind'] === 'visits' && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a log being written to can't be copied whole by copying its file)
-            [$tmp] = backup_copy_part(['path' => $e['path'], 'sqlite' => true, 'kind' => 'visits'], sys_get_temp_dir());
+        if (($e['kind'] === 'visits' || $e['kind'] === 'stats') && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a database being written to can't be copied whole by copying its file)
+            [$tmp] = backup_copy_part(['path' => $e['path'], 'sqlite' => true, 'kind' => $e['kind']], sys_get_temp_dir());
             if ($tmp !== null) { $out[] = ['name' => $e['rel'], 'path' => $tmp, 'size' => (int) @filesize($tmp), 'mtime' => $e['mtime'], 'temp' => true]; continue; }
         }
         $tmp = owned_snapshot($e['path']);

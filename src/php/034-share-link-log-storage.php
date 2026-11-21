@@ -70,7 +70,7 @@ function visitlog_open($file, $new) {
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
     $emptied = $wasOld && (int) $pdo->query('SELECT COUNT(*) FROM sqlite_master')->fetchColumn() === 0;   // (an old log file that SQLite sees as having nothing in it at all: no tables)
-    if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
+    if ($new || $emptied) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
     if ($ver < 3) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity, version 3 the count of times a photo was on a visitor's screen)

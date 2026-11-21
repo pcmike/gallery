@@ -68,6 +68,7 @@ function backup_parts($dir, $files) {
     $parts = [];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if (!in_array($e['kind'], $keep, true)) continue;
+        if (preg_match('/\.gallery-stats\.sqlite-(?:wal|shm)$/', $e['rel'])) continue;   // (the two temporary files SQLite keeps beside a view-count database while a request has it open: the database goes in through SQLite, which reads what they hold; as parts of their own they could not be read whole, and the backup made at the end of a visitor's page said so)
         $parts[] = ['rel' => $e['rel'], 'path' => $e['path'], 'kind' => $e['kind'], 'mtime' => (int) $e['mtime'], 'sqlite' => substr($e['path'], -7) === '.sqlite'];
     }
     $live = visitlog_find();

@@ -81,3 +81,20 @@ Let the owner see how many galleries run which version.
 - **Sketch:** write a visit with no wait: append one line to a small private spool file (an append with its own lock, microseconds), and let the next request that finds the log free merge the lines into it in order. Nothing is dropped, nothing waits, and a log that stays stuck shows as "N entries waiting" in Health. Needs: the spool file's name and guard (it holds addresses, as the log does), its place in the backup and in "Files this gallery has made", a size limit, and the merge.
 - **Not an answer:** skipping the entry when the log is busy (a log that drops entries is not a log), or a shorter wait for visitors (the same loss, sooner).
 - **Note:** held back from the third review's round because it changes how every visit is logged and needs its own tests and review.
+
+
+## Download a copy should say when a database could not be copied clean
+*A maybe, not a plan: it needs another program to hold a database to itself.*
+
+- **Today:** Download a copy makes a consistent copy of each view-count database, and of the visitor log, through SQLite. When SQLite can't (the database is damaged, its folder can only be read, or another program holds it to itself), the download quietly packs the file as it is on disk. For a damaged file or a read-only folder that is the right copy to have. For a database another program holds to itself it waits five seconds and the copy can lack the newest counts, which sit in the database's temporary side file (not packed), with no word about it. Nothing in the gallery holds a database like that.
+- **Sketch:** when the clean copy fails, say so in the answer (which database, and why), and pack the side files beside the plain file when they are there, so the counts in them are not left out. Refusing the download would be wrong for a damaged database: that is when a copy is most wanted.
+- **Note:** held back because it only happens while something outside the gallery keeps a database locked, the visitor log has always behaved this way, and nothing in the live gallery is lost.
+
+
+## The look at the disks should say when it was cut short
+*A maybe, not a plan: it needs a very slow disk or a very large tree.*
+
+- **Today:** the Health look at the disks (the room left on each) stops after 2.5 seconds. The gallery's own disk is always looked at first, but on a slow disk or a very large tree the disks it did not reach get no low-space row, and nothing says the look was cut short. (Before the limit existed nothing was skipped, and the page waited.)
+- **Sketch:** when the limit is hit, add one quiet line to the disk rows: "looked at N of M folders; the rest were not looked at", as the look for old capture-date files already does.
+- **Note:** held back because it has no test without a slow disk, and the case is rare.
+

@@ -13641,7 +13641,12 @@ function owned_plan($dir, $files) {
     // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
     $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) if ($e['kind'] !== 'work') $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
+    foreach ($entries as $e) {
+        if ($e['kind'] === 'work') continue;
+        if ($e['kind'] === 'stats' && preg_match('/\.gallery-stats\.sqlite-(?:wal|shm)$/', $e['rel'])) continue;   // (the two temporary files SQLite keeps beside a view-count database come and go with every request that opens it, and while a copy is made through SQLite)
+        $byItself = isset($live[$e['kind']]) || ($e['kind'] === 'stats' && preg_match('/\.gallery-stats\.sqlite$/', $e['rel']));   // (a view-count database changes with every visit, as the log does)
+        $lines[] = $e['kind'] . '|' . $e['rel'] . ($byItself ? '' : '|' . $e['size']);
+    }   // (the locks and the ffmpeg note come and go by themselves, even while a ZIP is being made: they are not part of what the button is checked against)
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
     $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
     foreach ($entries as $k => $e) {
@@ -13671,7 +13676,7 @@ function owned_summary($plan) {
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
             'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'shared' => $sh, 'fingerprint' => $plan['fingerprint'],
             'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300),
-            'zipPaths' => array_slice(array_column(array_values(array_filter($plan['entries'], function ($e) { return $e['kind'] !== 'backup' && $e['kind'] !== 'work' && !($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])); })), 'rel'), 0, 300)];   // (what the download holds, a place from elsewhere's shared data included: the same exclusions as owned_zip_entries; Delete's list above still names every file it would remove)
+            'zipPaths' => array_slice(array_column(array_values(array_filter($plan['entries'], function ($e) { return $e['kind'] !== 'backup' && $e['kind'] !== 'work' && !(($e['kind'] === 'visits' || $e['kind'] === 'stats') && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])); })), 'rel'), 0, 300)];   // (what the download holds, a place from elsewhere's shared data included: the same exclusions as owned_zip_entries; Delete's list above still names every file it would remove)
 }
 
 /** The text inside the ZIP that says what each file is and how to put them back. */
@@ -13731,10 +13736,10 @@ function owned_zip_entries($plan, $withThumbs) {
     foreach ($plan['entries'] as $e) {
         if ($e['kind'] === 'backup') continue;   // (the backup is a ZIP of these same files: it is not packed into another)
         if ($e['kind'] === 'work') continue;   // (a lock holds nothing and the note of where ffmpeg is is looked up again: nothing in them to keep)
-        if ($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (the log goes in as one consistent copy, below; its side files are inside that copy)
+        if (($e['kind'] === 'visits' || $e['kind'] === 'stats') && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (a log or a view-count database goes in as one consistent copy, below; its side files are inside that copy)
         $tmp = null;
-        if ($e['kind'] === 'visits' && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a log being written to can't be copied whole by copying its file)
-            [$tmp] = backup_copy_part(['path' => $e['path'], 'sqlite' => true, 'kind' => 'visits'], sys_get_temp_dir());
+        if (($e['kind'] === 'visits' || $e['kind'] === 'stats') && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a database being written to can't be copied whole by copying its file)
+            [$tmp] = backup_copy_part(['path' => $e['path'], 'sqlite' => true, 'kind' => $e['kind']], sys_get_temp_dir());
             if ($tmp !== null) { $out[] = ['name' => $e['rel'], 'path' => $tmp, 'size' => (int) @filesize($tmp), 'mtime' => $e['mtime'], 'temp' => true]; continue; }
         }
         $tmp = owned_snapshot($e['path']);
@@ -14600,7 +14605,7 @@ function visitlog_open($file, $new) {
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
     $emptied = $wasOld && (int) $pdo->query('SELECT COUNT(*) FROM sqlite_master')->fetchColumn() === 0;   // (an old log file that SQLite sees as having nothing in it at all: no tables)
-    if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
+    if ($new || $emptied) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
     if ($ver < 3) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity, version 3 the count of times a photo was on a visitor's screen)
@@ -15540,6 +15545,7 @@ function backup_parts($dir, $files) {
     $parts = [];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if (!in_array($e['kind'], $keep, true)) continue;
+        if (preg_match('/\.gallery-stats\.sqlite-(?:wal|shm)$/', $e['rel'])) continue;   // (the two temporary files SQLite keeps beside a view-count database while a request has it open: the database goes in through SQLite, which reads what they hold; as parts of their own they could not be read whole, and the backup made at the end of a visitor's page said so)
         $parts[] = ['rel' => $e['rel'], 'path' => $e['path'], 'kind' => $e['kind'], 'mtime' => (int) $e['mtime'], 'sqlite' => substr($e['path'], -7) === '.sqlite'];
     }
     $live = visitlog_find();
@@ -17328,10 +17334,10 @@ function health_stats_afresh_buttons(array $statsKey) {
     return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
 }
 
-function health_backup_buttons($withRestore, $withNew, $withDownload) {
+function health_backup_buttons($withRestore, $withNew, $withDownload, $replaces = 'damaged') {   // ($replaces: what the log from the backup would replace: 'damaged' for a damaged log, 'now in use' for a log that is sound but was found empty)
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $b = '<div class="health-act">';
-    if ($withRestore) { $bk = backup_status(); $b .= '<button type="button" class="secondary" data-backup-act="restore" data-backup-ask="Put the log from the backup (made ' . $esc(health_ago($bk['at'])) . ') in place of the damaged one? The damaged one is kept, renamed with .damaged- and the date.">Restore the log from the backup</button> '; }
+    if ($withRestore) { $bk = backup_status(); $b .= '<button type="button" class="secondary" data-backup-act="restore" data-backup-ask="Put the log from the backup (made ' . $esc(health_ago($bk['at'])) . ') in place of ' . ($replaces === 'damaged' ? 'the damaged one? The damaged one' : 'the log now in use? The one now in use') . ' is kept, renamed with .damaged- and the date.">Restore the log from the backup</button> '; }
     if ($withNew) $b .= '<button type="button" class="secondary" data-backup-act="newlog" data-backup-ask="Set the visitor log aside and start a new, empty one? The old file is kept, renamed with .damaged- and the date, but the Visitors and Changes tabs start from nothing.">Set it aside and start a new log</button> ';
     if ($withDownload) $b .= '<button type="button" class="secondary" data-backup-act="run">Back up now</button> <button type="button" class="secondary" data-backup-act="download">Download</button> ';
     return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
@@ -17411,8 +17417,8 @@ function health_database_rows($add, $dir, $files) {
     $emptiedAt = ($logFile !== null && visitlog_driver_ok() && !$logBusy && @is_readable($logFile)) ? (int) changes_read(function ($db) { return visitlog_meta_get($db, 'emptied'); }, 0) : 0;   // (written once, inside the new log, when the file was found with no content)
     if ($emptiedAt > 0 && time() - $emptiedAt < 30 * 86400) {
         $bkOlder = $bk['have'] && backup_has_log() && (int) $bk['at'] < $emptiedAt;
-        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $emptiedAt) . ' (UTC) the log\'s file had no content (a copy or a restore that failed leaves that; the gallery does not do it). The log was used as it was and its tables made again, so the Visitors and Changes tabs started from nothing then; what they held before is gone from the log. ' . ($bkOlder ? 'The backup from ' . health_ago($bk['at']) . ' was made before that and holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the log now in use is kept, renamed with .damaged- and the date).' : ($bk['have'] ? 'The backup from ' . health_ago($bk['at']) . ' was made after that, so it holds only the log as it was started again.' : 'There is no backup.')) . ' This row goes away by itself after 30 days.',
-            null, $bkOlder ? health_backup_buttons(true, false, false) : '');
+        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $emptiedAt) . ' (UTC) the log\'s file had no content (a copy or a restore that failed leaves that, and so can a first log that could not be made on a disk with no room). The log was used as it was and its tables made again, so the Visitors and Changes tabs started from nothing then; what they held before is gone from the log. ' . ($bkOlder ? 'The backup from ' . health_ago($bk['at']) . ' was made before that and holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the log now in use is kept, renamed with .damaged- and the date).' : (($bk['have'] && backup_has_log()) ? 'The backup from ' . health_ago($bk['at']) . ' was made after that, so it holds only the log as it was started again.' : ($bk['have'] ? 'The backup from ' . health_ago($bk['at']) . ' holds no copy of the log.' : 'There is no backup.'))) . ' This row goes away by itself after 30 days.',
+            null, $bkOlder ? health_backup_buttons(true, false, false, 'now in use') : '');
     }
     $statsEmpty = $heavy['stats']['empty'] ?? [];
     if ($statsEmpty) {   // (a view-count database of no bytes: its counts are gone and counting has started again from zero)
@@ -17504,6 +17510,7 @@ function health_volumes($dir, $files) {
     $by = [];
     $homeDev = (string) (@stat($dir)['dev'] ?? '');   // (the disk the gallery's own folder is on: its logs, backup and settings are there)
     foreach ($paths as $p => $label) {
+        if (microtime(true) - $t0 > 2.5) break;   // (the look at the disk, folder by folder, has its own limit: a slow disk or a very big tree cuts it short)
         $st = @stat($p); if (!$st) continue;
         $key = (string) $st['dev'];
         if ($label === null) {   // a folder only the scan found: named by the place it belongs to (a folder inside the gallery that is a disk of its own, a mount, is named by its folder: the gallery's own files are not on it)
