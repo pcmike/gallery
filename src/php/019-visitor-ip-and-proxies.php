@@ -224,7 +224,7 @@ function link_find_by_alias($data, $token) {
     return $found;
 }
 
-/** True for an address that looks like a name of the owner's own; a random code is 8 letters and digits (16 before 2.6.5) with a capital among them. */
+/** True for an address that looks like a name of the owner's own; a random code is 8 letters and digits (16 before 2.6.6) with a capital among them. */
 function link_address_is_custom($name) {
     $name = (string) $name;
     return !(preg_match('/^(?:[A-Za-z0-9]{8}|[A-Za-z0-9]{16})$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1);
@@ -287,7 +287,7 @@ function link_state($l, $now = null) {
 function link_is_live($l, $now = null) { return in_array(link_state($l, $now), ['active', 'used_up'], true); }
 
 /* The public address's log. It is kept in the visitor log like a link's, under the fixed source id PUBLIC_LOG_ID. It is never a link
- * anyone can use: nothing looks it up by address or by cookie. (Versions before 2.6.5 kept a stand-in record for it in the links file;
+ * anyone can use: nothing looks it up by address or by cookie. (Versions before 2.6.6 kept a stand-in record for it in the links file;
  * Tidy up removes it.) */
 function link_is_public_log($l) { return is_array($l) && ($l['kind'] ?? '') === 'public'; }
 

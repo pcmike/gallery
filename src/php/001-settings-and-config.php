@@ -87,7 +87,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.5');
+define('GALLERY_VERSION', '2.6.6');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -345,20 +345,20 @@ define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY',
 // has the button. Where the gallery doesn't show a photo's location, a visitor who isn't signed in is given the file
 // with the location blanked out (see location_scrub_plan).
 // 2.4.0: the same question a share link answers, minus what does not apply to a stranger (they only ever see public photos, and they get no
-// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.5 both read as off until a folder's own switch is used
+// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.6 both read as off until a folder's own switch is used
 // (then the old line is replaced, see site_settings_save()).
 define('PUBLIC_DOWNLOAD_MODE', (function () {
     $legacy = gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false);
     $mode = gallery_setting('PUBLIC_DOWNLOAD_MODE', 'off', ['off', 'all', 'some']);
     $mode = (!array_key_exists('PUBLIC_DOWNLOAD_MODE', gallery_config_load()['cfg']) && $legacy) ? 'all' : $mode;
-    // 2.6.5: each folder stands on its own (a folder's switch covers the photos directly in it), so there is no "Everything" any more. A settings
+    // 2.6.6: each folder stands on its own (a folder's switch covers the photos directly in it), so there is no "Everything" any more. A settings
     // file that still says so (or has the old on/off line) is read as Off: downloads are never on by accident. The line itself is left as it is until
     // a download switch is used (then it is replaced), so going back to an older version still finds it.
     return $mode === 'all' ? 'off' : $mode;
 })());
 define('PUBLIC_DOWNLOAD_FOLDERS', array_values(array_filter((array) gallery_setting('PUBLIC_DOWNLOAD_FOLDERS', []), 'is_string')));
 define('PUBLIC_DOWNLOAD_ROOT', gallery_setting('PUBLIC_DOWNLOAD_ROOT', false) === true);   // (the photos lying directly on the gallery's main page)
-// 2.6.5: location data is taken out of every original sent to a visitor (the viewer's full-size picture, a download, a video that plays, a Not
+// 2.6.6: location data is taken out of every original sent to a visitor (the viewer's full-size picture, a download, a video that plays, a Not
 // listed photo's own address), not only where the gallery hides the location. On to start with; the owner, the private-view password and a share link
 // set to show every location are always sent the file as it is. See visitor_scrub_plan.
 define('SCRUB_LOCATION_DATA', gallery_setting('SCRUB_LOCATION_DATA', true));

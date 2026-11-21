@@ -145,7 +145,7 @@ function backup_check_file($path, $kind, $rel = '') {
     if ($kind === 'secret') return preg_match('/^[0-9a-f]{64}$/m', $raw) ? '' : 'does not hold the key';
     if ($kind === 'notes') return trim((string) strtok($raw, "\n")) === '{gallery}' ? '' : 'is not a note';
     if ($kind === 'lockouts') return '';
-    if ($kind === 'oldlogs') {   // (what versions before 2.6.5 kept the visitor logs in: guarded JSON, or for the -q file guarded lines)
+    if ($kind === 'oldlogs') {   // (what versions before 2.6.6 kept the visitor logs in: guarded JSON, or for the -q file guarded lines)
         if (strncmp($raw, '<?php', 5) !== 0) return 'does not start the way the gallery writes it';
         return substr($rel, -6) === '-q.php' || is_array(json_decode(data_file_strip_guard($raw), true)) ? '' : 'can\'t be read (it is not whole)';
     }
@@ -247,7 +247,7 @@ function backup_zip_verify($path) {
 
 function backup_readme($manifest) {
     $t = "THE BACKUP\r\n\r\nMade " . gmdate('Y-m-d H:i', $manifest['made']) . " UTC by gallery " . $manifest['version'] . ($manifest['by'] === 'you' ? ' (asked for)' : ' (the weekly one)') . ".\r\n\r\n";
-    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it), the visitor logs that versions before 2.6.5 kept (.gallery-linklog-…) and the notes (.md files that begin with {gallery}).\r\n";
+    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it), the visitor logs that versions before 2.6.6 kept (.gallery-linklog-…) and the notes (.md files that begin with {gallery}).\r\n";
     $t .= "Not in it: your photos and videos (they are your own files), thumbnails and the read-once file data (made again), the country file (downloaded again) and the signed-in browsers (people sign in again).\r\n\r\n";
     $t .= "HOW TO PUT FILES BACK: unzip over the folder index.php is in, so each file lands next to its photos (a folder shown from elsewhere on the server appears under the name it has in the gallery:\r\nput its files in the real folder it comes from). To put back the visitor log only, press Restore in the Health check.\r\n\r\n";
     $t .= "KEEP THIS FILE PRIVATE: it holds password hashes, the install secret, share-link addresses and visitor IP addresses.\r\n\r\nFILES (MANIFEST.json has the checksums):\r\n";

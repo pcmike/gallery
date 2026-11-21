@@ -6,7 +6,7 @@
 <a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
 <a href="docs/guide/getting-started.md"><img src="https://img.shields.io/badge/PHP-8.3%2B-5865f2" alt="PHP 8.3+"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-5865f2" alt="MIT license with the Commons Clause"></a>
-<a href="src"><img src="https://img.shields.io/badge/source-24k%20lines-5865f2" alt="About 24,000 lines of source (PHP, JavaScript and CSS), built into one file"></a>
+<a href="src"><img src="https://img.shields.io/badge/source-31k%20lines-5865f2" alt="About 31,000 lines of source (PHP, JavaScript and CSS), built into one file"></a>
 </p>
 
 <p align="center"><img src="docs/images/gallery-desktop.webp" alt="A trip gallery on a computer: three folder cards with covers, dates and photo counts" width="860"></p>
@@ -42,7 +42,7 @@ More: [Getting started](docs/guide/getting-started.md), with recipes for a plain
 <table>
 <tr>
 <td width="50%"><img src="docs/images/viewer-desktop.webp" alt="The full-screen viewer on a computer, with a caption and a small map of where the photo was taken"><br><sub><b>The viewer:</b> arrow keys and swipe, captions, links, a map when the photo has a place.</sub></td>
-<td width="50%"><img src="docs/images/admin-desktop.webp" alt="The admin shell on a computer: a sidebar with Features, Edited, Shares and Settings, and a folder open with its private photos marked"><br><sub><b>The admin shell:</b> your folders on the left, your gallery on the right; private photos are marked.</sub></td>
+<td width="50%"><img src="docs/images/admin-desktop.webp" alt="The admin shell on a computer: a sidebar with Features, Collections, Edited, Shares, Visitors, Changes and Settings, and a folder open with its private photos marked"><br><sub><b>The admin shell:</b> your folders on the left, your gallery on the right; private photos are marked.</sub></td>
 </tr>
 <tr>
 <td width="50%"><img src="docs/images/features-desktop.webp" alt="The Features page listing each optional feature with an On or Off label"><br><sub><b>Features:</b> everything you can switch on, and where each one stands.</sub></td>
@@ -55,7 +55,7 @@ More: [Getting started](docs/guide/getting-started.md), with recipes for a plain
 <td width="25%"><img src="docs/images/gallery-phone.webp" alt="A folder on a phone"><br><sub><b>On a phone</b></sub></td>
 <td width="25%"><img src="docs/images/viewer-phone.webp" alt="The viewer on a phone"><br><sub><b>The viewer</b></sub></td>
 <td width="25%"><img src="docs/images/admin-phone-gallery.webp" alt="The owner's page on a phone, with edit tools on each photo and a bottom bar"><br><sub><b>Your page, signed in</b></sub></td>
-<td width="25%"><img src="docs/images/admin-phone-menu.webp" alt="The phone Menu listing Features, Edited, Shares, Settings and the folders"><br><sub><b>The Menu</b></sub></td>
+<td width="25%"><img src="docs/images/admin-phone-menu.webp" alt="The phone Menu listing Features, Collections, Edited, Shares, Visitors, Changes, Settings and the folders"><br><sub><b>The Menu</b></sub></td>
 </tr>
 </table>
 

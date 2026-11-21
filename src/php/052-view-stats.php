@@ -46,7 +46,7 @@ function stats_connection($folderPath) {
             // over a hidden item's exact name. The key is a random one kept in a guarded file of this folder's own (.gallery-stats-key.php:
             // fetching it answers 404 whatever the server's rules), so the counts follow the folder wherever it is shown, copied with it,
             // and are not tied to this install's secret. Counts are still kept for every item, hidden or not.
-            $reset = stats_drop_old_counts($pdo);   // (2.6.5: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
+            $reset = stats_drop_old_counts($pdo);   // (2.6.6: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
             $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_k (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
             $conn['key'] = stats_bind_key($folderPath, $pdo, $conn['why']);
             if ($conn['key'] === null) throw new RuntimeException('the folder\'s view-count key: ' . $conn['why']);
@@ -145,7 +145,7 @@ function stats_start_afresh($rel, $dir, $files) {
     return [true, 'Deleted. Counting starts again from 0 in that folder.'];
 }
 
-/** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
+/** The one-time reset (2.6.6): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
  *  which anyone who can fetch the file can test a guessed path against. That table is dropped and the file compacted, so the old hashes don't linger
  *  in free pages: the counts start again, under the folder's own key. True when there was something to drop. */
 function stats_drop_old_counts($pdo) {

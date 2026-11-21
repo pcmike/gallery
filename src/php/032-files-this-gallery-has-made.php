@@ -22,7 +22,7 @@ function owned_kind_of_name($name, $isTop) {
     if ($isTop) {
         $top = owned_top_names();
         if (isset($top[$name])) return $top[$name];
-        if (preg_match('/^\.gallery-linklog-[0-9a-f]{10}(?:-items|-q)?\.php$/D', $name)) return 'oldlogs';   // (what versions before 2.6.5 kept the visitor logs in)
+        if (preg_match('/^\.gallery-linklog-[0-9a-f]{10}(?:-items|-q)?\.php$/D', $name)) return 'oldlogs';   // (what versions before 2.6.6 kept the visitor logs in)
         if (preg_match('/^\.gallery-visits-[0-9a-f]{24}(?:\.damaged-\d{8}-\d{6}(?:-\d+)?)?\.sqlite(?:-wal|-shm)?$/D', $name)) return 'visits';   // (a log set aside because it was damaged keeps its name and gets .damaged-<date>)
         if (preg_match('/^\.gallery-backup-[0-9a-f]{24}\.zip(?:\.tmp)?$/D', $name)) return 'backup';   // (the backup, and the one being made)   // (the visitor log and the side files SQLite keeps beside it)
         if (preg_match('/^\.gallery-geo\.[0-9a-f]{8}\.php$/D', $name)) return 'geo';   // (a download that was cut off)
@@ -50,7 +50,7 @@ function owned_kind_info() {
         'visits' => ['Visitor log', 'beside index.php', 'Who opened the gallery and each share link, what they looked at and when (a SQLite file).', 'The log is gone; it starts again from nothing.'],
         'backup' => ['Backup', 'beside index.php', 'The one backup copy (a ZIP of your settings, share links, collections, captions, view counts, the visitor log and the rest that can\'t be made again) and the note of how the last one went. It holds password hashes, the install secret and visitor IP addresses.', 'The backup is gone; the next one is made within a week (or press Back up now in the Health check).'],
         'leftovers' => ['Left-over temporary files', 'beside index.php or in a folder', 'Half-written copies that a save, a Restore or an update leaves when it is cut off. Nothing reads them.', 'They are gone; nothing else changes.'],
-        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
+        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.6 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
         'secret' => ['Install secret', 'beside index.php', 'The key behind the names of thumbnails, the cookies of people on a share link, every Not listed photo\'s own address and the mark on Tidy up\'s backups. (Sign-ins do not use it.)', 'Every Not listed photo\'s address stops working (a new key is made, and the addresses are different), people on a share link have to open their link again, and thumbnails are made again under new names. The backup keeps the key.'],
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],

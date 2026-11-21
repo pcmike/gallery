@@ -6012,7 +6012,7 @@ check('[downloads] for a link that shows nothing private "everything but private
 $s2Std = ['ADMIN_PASSWORD' => cfg_read("$fxS2/.gallery-config.php")['ADMIN_PASSWORD'], 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true];
 file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + ['PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_ROOT' => true]));
 check('[downloads] the main page\'s switch is for people without a link: with it on a stranger gets a public original, but a person on a link whose downloads say Off does not', $s2Dl(null, 'pub.jpg') === 200 && $s2Dl($ckS, 'pub.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 200 && !str_contains(http_get("$baseS2/", $s2Hdr($ckS))[1], 'id="lightbox-download"'));
-// People without a link: each folder stands on its own (2.6.5). The older Everything, and the old on/off line, are read as Off.
+// People without a link: each folder stands on its own (2.6.6). The older Everything, and the old on/off line, are read as Off.
 $s2Mode = function (array $extra) use ($fxS2, $s2Std) { file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + $extra)); };
 $s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'all']);
 check('[visitor downloads] a settings file that still says Everything is read as Off (downloads are never on by accident): a stranger gets nothing, and there is no button', [$s2Dl(null, 'pub.jpg'), $s2Dl(null, 'Florence/f1.jpg'), $s2Dl(null, 'secret.jpg'), $s2Dl(null, 'Rome/r1.jpg')] === [404, 404, 404, 404] && !str_contains(http_get("$baseS2/")[1], 'id="lightbox-download"'));
@@ -7855,7 +7855,7 @@ $fxE3 = new_fixture_dir('edited-cover'); make_jpeg("$fxE3/a.jpg", 60, 50, 90, 60
 write_data_file("$fxE3/.gallery-items.php", ['items' => [], 'groups' => [], 'cover' => 'a.jpg'] + items_default_for_tests()); write_data_file("$fxE3/Gone/.gallery-items.php", ['items' => [], 'groups' => [], 'cover' => 'vanished.jpg', 'stacks' => [['anchor' => 'g.jpg', 'files' => ['g.jpg', 'h.jpg']]]] + items_default_for_tests());
 file_put_contents("$fxE3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'edited-pw-3', 'AUTO_GROUP_BY_FOLDER' => true])); copy($indexSrc, "$fxE3/index.php");
 [$baseE3, $hdrE3] = $tidyStart($fxE3, 'edited-pw-3'); $edPage3 = http_get("$baseE3/?admin", [$hdrE3[0]])[1];
-check('[edited] a cover at the top level links to ?find= (no folder), a cover whose file is gone is a small "Cover: name (missing)" pill with no picture, and a stack of photos is listed as a setting (since 2.6.5)', str_contains($edPage3, '<a class="ed-cover" href="?find=a.jpg&amp;as=cover"') && str_contains($edPage3, 'Cover: vanished.jpg (missing)') && str_contains(substr($edPage3, strpos($edPage3, 'id="ed-panel"'), 7000), '1 stack of photos'));
+check('[edited] a cover at the top level links to ?find= (no folder), a cover whose file is gone is a small "Cover: name (missing)" pill with no picture, and a stack of photos is listed as a setting (since 2.6.6)', str_contains($edPage3, '<a class="ed-cover" href="?find=a.jpg&amp;as=cover"') && str_contains($edPage3, 'Cover: vanished.jpg (missing)') && str_contains(substr($edPage3, strpos($edPage3, 'id="ed-panel"'), 7000), '1 stack of photos'));
 // With nothing private and nothing set: no tab. With a caption only: the tab, with no private banner and no private list.
 $fxE2 = new_fixture_dir('edited-none'); make_jpeg("$fxE2/a.jpg", 60, 50, 90, 60, 60); file_put_contents("$fxE2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'edited-pw-2'])); copy($indexSrc, "$fxE2/index.php");
 [$baseE2, $hdrE2] = $tidyStart($fxE2, 'edited-pw-2');
@@ -9907,7 +9907,7 @@ check('[keep location] switching it off puts the scrubbing back, and takes the l
 proc_terminate($klProc);
 
 /* --------------------------------------------------------------------- *
- * The Visitors tab (2.6.5): one log (SQLite) for the public address and every share link, the pills (countries, Public, share links), the search,
+ * The Visitors tab (2.6.6): one log (SQLite) for the public address and every share link, the pills (countries, Public, share links), the search,
  * four views, exports, a size warning, the clean-up of the older JSON logs, and what happens where SQLite is missing.
  * --------------------------------------------------------------------- */
 echo "== the Visitors tab: one SQLite log for the public address and every share link ==\n";
@@ -12431,7 +12431,7 @@ echo "== audit group 13: the backup ==\n";
     $g13oR = $g13o['admin'](['action' => 'backup_run']);
     $g13oZip = $g13Zips($g13o['dir'])[0] ?? ''; $g13oIx = $g13Idx($g13oZip) ?: [];
     $g13oSame = true; foreach ($g13oFiles as $n => $c) if (($g13Read($g13oZip, $n) ?? '') !== $c) $g13oSame = false;
-    check('[backup old logs] the visitor logs that versions before 2.6.5 kept are in the backup, whole, and the README says what they are', ($g13oR['ok'] ?? null) === true && ($g13oR['problems'] ?? 1) === 0 && $g13oSame && str_contains((string) $g13Read($g13oZip, 'README.txt'), 'before 2.6.5'), json_encode([$g13oR, array_keys($g13oIx)]));
+    check('[backup old logs] the visitor logs that versions before 2.6.6 kept are in the backup, whole, and the README says what they are', ($g13oR['ok'] ?? null) === true && ($g13oR['problems'] ?? 1) === 0 && $g13oSame && str_contains((string) $g13Read($g13oZip, 'README.txt'), 'before 2.6.6'), json_encode([$g13oR, array_keys($g13oIx)]));
 
     // ---- F9: a save that fails says why ----
     $g10 = $g13Site('g13-causes', []);

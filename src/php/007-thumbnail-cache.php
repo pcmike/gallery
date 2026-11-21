@@ -1,6 +1,6 @@
 function cache_name($file, $variant, $mtime) {
     $secret = install_secret();   // (made at the first sign-in; a gallery nobody has signed in to has nothing private to protect, and a visitor never makes a file but a thumbnail)
-    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made before 2.6.5 had their colour profile stripped and look flat on a wide-gamut photo: they are made again, once)
+    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made before 2.6.6 had their colour profile stripped and look flat on a wide-gamut photo: they are made again, once)
     $text = $file . '|' . $variant . '|' . $mtime;
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }

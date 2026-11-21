@@ -71,7 +71,7 @@ function moved_in_remove_leftovers($dir, $files) {
 
 /* -----------------------------------------------------------------------
  * The plain capture-dates files. Every release up to 2.6.4 kept the dates used for the date order in .gallery-cache/taken3.json (and taken.json and taken2.json before it):
- * plain JSON that holds the name of every file in the folder. 2.6.5 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
+ * plain JSON that holds the name of every file in the folder. 2.6.6 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
  * date, and the thumbnail clean-up when the cache is on, in the gallery's own folders; what those never reach (the cache off with the order by name, and a place from
  * elsewhere on the server, which is never swept) is named in Health, and removed by its button.
  * ----------------------------------------------------------------------- */

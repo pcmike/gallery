@@ -407,7 +407,7 @@ function login_return_query() {
 }
 
 /** The password typed into the sign-in form, or null if this request isn't that form being sent. The box is called
- *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.5) and
+ *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.6) and
  *  login_password (older still) are still read, for scripts, old bookmarks and pages already open. */
 function login_form_password() {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;

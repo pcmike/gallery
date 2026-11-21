@@ -87,7 +87,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.5');
+define('GALLERY_VERSION', '2.6.6');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -345,20 +345,20 @@ define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY',
 // has the button. Where the gallery doesn't show a photo's location, a visitor who isn't signed in is given the file
 // with the location blanked out (see location_scrub_plan).
 // 2.4.0: the same question a share link answers, minus what does not apply to a stranger (they only ever see public photos, and they get no
-// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.5 both read as off until a folder's own switch is used
+// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.6 both read as off until a folder's own switch is used
 // (then the old line is replaced, see site_settings_save()).
 define('PUBLIC_DOWNLOAD_MODE', (function () {
     $legacy = gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false);
     $mode = gallery_setting('PUBLIC_DOWNLOAD_MODE', 'off', ['off', 'all', 'some']);
     $mode = (!array_key_exists('PUBLIC_DOWNLOAD_MODE', gallery_config_load()['cfg']) && $legacy) ? 'all' : $mode;
-    // 2.6.5: each folder stands on its own (a folder's switch covers the photos directly in it), so there is no "Everything" any more. A settings
+    // 2.6.6: each folder stands on its own (a folder's switch covers the photos directly in it), so there is no "Everything" any more. A settings
     // file that still says so (or has the old on/off line) is read as Off: downloads are never on by accident. The line itself is left as it is until
     // a download switch is used (then it is replaced), so going back to an older version still finds it.
     return $mode === 'all' ? 'off' : $mode;
 })());
 define('PUBLIC_DOWNLOAD_FOLDERS', array_values(array_filter((array) gallery_setting('PUBLIC_DOWNLOAD_FOLDERS', []), 'is_string')));
 define('PUBLIC_DOWNLOAD_ROOT', gallery_setting('PUBLIC_DOWNLOAD_ROOT', false) === true);   // (the photos lying directly on the gallery's main page)
-// 2.6.5: location data is taken out of every original sent to a visitor (the viewer's full-size picture, a download, a video that plays, a Not
+// 2.6.6: location data is taken out of every original sent to a visitor (the viewer's full-size picture, a download, a video that plays, a Not
 // listed photo's own address), not only where the gallery hides the location. On to start with; the owner, the private-view password and a share link
 // set to show every location are always sent the file as it is. See visitor_scrub_plan.
 define('SCRUB_LOCATION_DATA', gallery_setting('SCRUB_LOCATION_DATA', true));
@@ -2777,7 +2777,7 @@ function format_duration($seconds) {
  *  renames those files once the secret exists (see gc_image_cache). */
 function cache_name($file, $variant, $mtime) {
     $secret = install_secret();   // (made at the first sign-in; a gallery nobody has signed in to has nothing private to protect, and a visitor never makes a file but a thumbnail)
-    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made before 2.6.5 had their colour profile stripped and look flat on a wide-gamut photo: they are made again, once)
+    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made before 2.6.6 had their colour profile stripped and look flat on a wide-gamut photo: they are made again, once)
     $text = $file . '|' . $variant . '|' . $mtime;
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }
@@ -3845,7 +3845,7 @@ function moved_in_remove_leftovers($dir, $files) {
 
 /* -----------------------------------------------------------------------
  * The plain capture-dates files. Every release up to 2.6.4 kept the dates used for the date order in .gallery-cache/taken3.json (and taken.json and taken2.json before it):
- * plain JSON that holds the name of every file in the folder. 2.6.5 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
+ * plain JSON that holds the name of every file in the folder. 2.6.6 keeps them in the guarded taken4.php. Looking at a folder removes the old file when the order is by
  * date, and the thumbnail clean-up when the cache is on, in the gallery's own folders; what those never reach (the cache off with the order by name, and a place from
  * elsewhere on the server, which is never swept) is named in Health, and removed by its button.
  * ----------------------------------------------------------------------- */
@@ -6220,7 +6220,7 @@ function login_return_query() {
 }
 
 /** The password typed into the sign-in form, or null if this request isn't that form being sent. The box is called
- *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.5) and
+ *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.6) and
  *  login_password (older still) are still read, for scripts, old bookmarks and pages already open. */
 function login_form_password() {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;
@@ -6879,7 +6879,7 @@ function link_find_by_alias($data, $token) {
     return $found;
 }
 
-/** True for an address that looks like a name of the owner's own; a random code is 8 letters and digits (16 before 2.6.5) with a capital among them. */
+/** True for an address that looks like a name of the owner's own; a random code is 8 letters and digits (16 before 2.6.6) with a capital among them. */
 function link_address_is_custom($name) {
     $name = (string) $name;
     return !(preg_match('/^(?:[A-Za-z0-9]{8}|[A-Za-z0-9]{16})$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1);
@@ -6942,7 +6942,7 @@ function link_state($l, $now = null) {
 function link_is_live($l, $now = null) { return in_array(link_state($l, $now), ['active', 'used_up'], true); }
 
 /* The public address's log. It is kept in the visitor log like a link's, under the fixed source id PUBLIC_LOG_ID. It is never a link
- * anyone can use: nothing looks it up by address or by cookie. (Versions before 2.6.5 kept a stand-in record for it in the links file;
+ * anyone can use: nothing looks it up by address or by cookie. (Versions before 2.6.6 kept a stand-in record for it in the links file;
  * Tidy up removes it.) */
 function link_is_public_log($l) { return is_array($l) && ($l['kind'] ?? '') === 'public'; }
 
@@ -9106,7 +9106,7 @@ function media_capture_time($path) {
  *  its modified time. Reading dates out of many files is slow, so with the thumbnail cache on what is found is kept (by file name,
  *  size and modified time) in the folder's .gallery-cache, in a guarded file (it holds file names, so a request for it by its address is answered 404,
  *  like meta1.php); with the cache off the dates are read from the files each time and nothing is written. The plain files earlier versions made
- *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.5) hold the same
+ *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.6) hold the same
  *  names and can be read by their address, so they are taken away whenever a folder of this gallery is looked at, whatever the switch says. */
 function media_taken_times($folderReal, $names) {
     $cacheDir = $folderReal . '/.gallery-cache';
@@ -10326,7 +10326,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
     if ($action === 'stats_afresh') { [$ok, $text] = stats_start_afresh((string) ($_POST['rel'] ?? ''), $dir, $files); admin_json_exit(['ok' => $ok, 'text' => $text]); }
     if (in_array($action, ['backup_run', 'backup_accept', 'backup_restore_log', 'backup_new_log', 'backup_download_prepare'], true)) backup_admin_action($action, $dir, $files);
-    if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.5 (Health > Left behind): the exact files and the stand-in record, nothing else
+    if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.6 (Health > Left behind): the exact files and the stand-in record, nothing else
         $n = visitlog_old_leftovers_remove();
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
@@ -13518,7 +13518,7 @@ function owned_kind_of_name($name, $isTop) {
     if ($isTop) {
         $top = owned_top_names();
         if (isset($top[$name])) return $top[$name];
-        if (preg_match('/^\.gallery-linklog-[0-9a-f]{10}(?:-items|-q)?\.php$/D', $name)) return 'oldlogs';   // (what versions before 2.6.5 kept the visitor logs in)
+        if (preg_match('/^\.gallery-linklog-[0-9a-f]{10}(?:-items|-q)?\.php$/D', $name)) return 'oldlogs';   // (what versions before 2.6.6 kept the visitor logs in)
         if (preg_match('/^\.gallery-visits-[0-9a-f]{24}(?:\.damaged-\d{8}-\d{6}(?:-\d+)?)?\.sqlite(?:-wal|-shm)?$/D', $name)) return 'visits';   // (a log set aside because it was damaged keeps its name and gets .damaged-<date>)
         if (preg_match('/^\.gallery-backup-[0-9a-f]{24}\.zip(?:\.tmp)?$/D', $name)) return 'backup';   // (the backup, and the one being made)   // (the visitor log and the side files SQLite keeps beside it)
         if (preg_match('/^\.gallery-geo\.[0-9a-f]{8}\.php$/D', $name)) return 'geo';   // (a download that was cut off)
@@ -13546,7 +13546,7 @@ function owned_kind_info() {
         'visits' => ['Visitor log', 'beside index.php', 'Who opened the gallery and each share link, what they looked at and when (a SQLite file).', 'The log is gone; it starts again from nothing.'],
         'backup' => ['Backup', 'beside index.php', 'The one backup copy (a ZIP of your settings, share links, collections, captions, view counts, the visitor log and the rest that can\'t be made again) and the note of how the last one went. It holds password hashes, the install secret and visitor IP addresses.', 'The backup is gone; the next one is made within a week (or press Back up now in the Health check).'],
         'leftovers' => ['Left-over temporary files', 'beside index.php or in a folder', 'Half-written copies that a save, a Restore or an update leaves when it is cut off. Nothing reads them.', 'They are gone; nothing else changes.'],
-        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
+        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.6 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
         'secret' => ['Install secret', 'beside index.php', 'The key behind the names of thumbnails, the cookies of people on a share link, every Not listed photo\'s own address and the mark on Tidy up\'s backups. (Sign-ins do not use it.)', 'Every Not listed photo\'s address stops working (a new key is made, and the addresses are different), people on a share link have to open their link again, and thumbnails are made again under new names. The backup keeps the key.'],
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
@@ -15622,7 +15622,7 @@ function backup_check_file($path, $kind, $rel = '') {
     if ($kind === 'secret') return preg_match('/^[0-9a-f]{64}$/m', $raw) ? '' : 'does not hold the key';
     if ($kind === 'notes') return trim((string) strtok($raw, "\n")) === '{gallery}' ? '' : 'is not a note';
     if ($kind === 'lockouts') return '';
-    if ($kind === 'oldlogs') {   // (what versions before 2.6.5 kept the visitor logs in: guarded JSON, or for the -q file guarded lines)
+    if ($kind === 'oldlogs') {   // (what versions before 2.6.6 kept the visitor logs in: guarded JSON, or for the -q file guarded lines)
         if (strncmp($raw, '<?php', 5) !== 0) return 'does not start the way the gallery writes it';
         return substr($rel, -6) === '-q.php' || is_array(json_decode(data_file_strip_guard($raw), true)) ? '' : 'can\'t be read (it is not whole)';
     }
@@ -15724,7 +15724,7 @@ function backup_zip_verify($path) {
 
 function backup_readme($manifest) {
     $t = "THE BACKUP\r\n\r\nMade " . gmdate('Y-m-d H:i', $manifest['made']) . " UTC by gallery " . $manifest['version'] . ($manifest['by'] === 'you' ? ' (asked for)' : ' (the weekly one)') . ".\r\n\r\n";
-    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it), the visitor logs that versions before 2.6.5 kept (.gallery-linklog-…) and the notes (.md files that begin with {gallery}).\r\n";
+    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it), the visitor logs that versions before 2.6.6 kept (.gallery-linklog-…) and the notes (.md files that begin with {gallery}).\r\n";
     $t .= "Not in it: your photos and videos (they are your own files), thumbnails and the read-once file data (made again), the country file (downloaded again) and the signed-in browsers (people sign in again).\r\n\r\n";
     $t .= "HOW TO PUT FILES BACK: unzip over the folder index.php is in, so each file lands next to its photos (a folder shown from elsewhere on the server appears under the name it has in the gallery:\r\nput its files in the real folder it comes from). To put back the visitor log only, press Restore in the Health check.\r\n\r\n";
     $t .= "KEEP THIS FILE PRIVATE: it holds password hashes, the install secret, share-link addresses and visitor IP addresses.\r\n\r\nFILES (MANIFEST.json has the checksums):\r\n";
@@ -16411,7 +16411,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         }
         $out .= '</div>';
         if (!$f['all'] && count($m) > 60) $out .= '<button type="button" class="secondary sl-more" data-more>Show all ' . count($m) . '</button>';
-        return $wrap($bar . $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened, or &ldquo;seen&rdquo; with how many times it came on screen (counted from 2.6.5 on) when it was never opened; hover for all the counts. Press one to open it in the gallery.</p>');
+        return $wrap($bar . $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened, or &ldquo;seen&rdquo; with how many times it came on screen (counted from 2.6.6 on) when it was never opened; hover for all the counts. Press one to open it in the gallery.</p>');
     }
 
     // timeline
@@ -17038,7 +17038,7 @@ function health_checks($dir, $files) {
     [$olFiles, $olBytes, $olRec] = visitlog_old_leftovers();
     if ($olFiles || $olRec) {
         $olText = $olBytes >= 1048576 ? number_format($olBytes / 1048576, 1) . ' MB' : max(1, (int) ceil($olBytes / 1024)) . ' KB';
-        $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
+        $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.6. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
     $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format((int) ($GLOBALS['__old_dates_looked'] ?? 0)) . ' folders were looked through for these (a very large tree is not walked to its end: the most is ' . number_format(old_dates_ceiling()) . ' folders or a few seconds), so there may be more further on.';
@@ -24443,7 +24443,7 @@ function stats_connection($folderPath) {
             // over a hidden item's exact name. The key is a random one kept in a guarded file of this folder's own (.gallery-stats-key.php:
             // fetching it answers 404 whatever the server's rules), so the counts follow the folder wherever it is shown, copied with it,
             // and are not tied to this install's secret. Counts are still kept for every item, hidden or not.
-            $reset = stats_drop_old_counts($pdo);   // (2.6.5: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
+            $reset = stats_drop_old_counts($pdo);   // (2.6.6: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
             $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_k (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
             $conn['key'] = stats_bind_key($folderPath, $pdo, $conn['why']);
             if ($conn['key'] === null) throw new RuntimeException('the folder\'s view-count key: ' . $conn['why']);
@@ -24542,7 +24542,7 @@ function stats_start_afresh($rel, $dir, $files) {
     return [true, 'Deleted. Counting starts again from 0 in that folder.'];
 }
 
-/** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
+/** The one-time reset (2.6.6): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
  *  which anyone who can fetch the file can test a guessed path against. That table is dropped and the file compacted, so the old hashes don't linger
  *  in free pages: the counts start again, under the folder's own key. True when there was something to drop. */
 function stats_drop_old_counts($pdo) {

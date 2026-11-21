@@ -410,7 +410,7 @@ function media_capture_time($path) {
  *  its modified time. Reading dates out of many files is slow, so with the thumbnail cache on what is found is kept (by file name,
  *  size and modified time) in the folder's .gallery-cache, in a guarded file (it holds file names, so a request for it by its address is answered 404,
  *  like meta1.php); with the cache off the dates are read from the files each time and nothing is written. The plain files earlier versions made
- *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.5) hold the same
+ *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.6) hold the same
  *  names and can be read by their address, so they are taken away whenever a folder of this gallery is looked at, whatever the switch says. */
 function media_taken_times($folderReal, $names) {
     $cacheDir = $folderReal . '/.gallery-cache';

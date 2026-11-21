@@ -701,7 +701,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
     if ($action === 'stats_afresh') { [$ok, $text] = stats_start_afresh((string) ($_POST['rel'] ?? ''), $dir, $files); admin_json_exit(['ok' => $ok, 'text' => $text]); }
     if (in_array($action, ['backup_run', 'backup_accept', 'backup_restore_log', 'backup_new_log', 'backup_download_prepare'], true)) backup_admin_action($action, $dir, $files);
-    if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.5 (Health > Left behind): the exact files and the stand-in record, nothing else
+    if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.6 (Health > Left behind): the exact files and the stand-in record, nothing else
         $n = visitlog_old_leftovers_remove();
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }

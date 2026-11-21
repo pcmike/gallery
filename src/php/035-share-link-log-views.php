@@ -420,7 +420,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         }
         $out .= '</div>';
         if (!$f['all'] && count($m) > 60) $out .= '<button type="button" class="secondary sl-more" data-more>Show all ' . count($m) . '</button>';
-        return $wrap($bar . $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened, or &ldquo;seen&rdquo; with how many times it came on screen (counted from 2.6.5 on) when it was never opened; hover for all the counts. Press one to open it in the gallery.</p>');
+        return $wrap($bar . $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened, or &ldquo;seen&rdquo; with how many times it came on screen (counted from 2.6.6 on) when it was never opened; hover for all the counts. Press one to open it in the gallery.</p>');
     }
 
     // timeline
@@ -1047,7 +1047,7 @@ function health_checks($dir, $files) {
     [$olFiles, $olBytes, $olRec] = visitlog_old_leftovers();
     if ($olFiles || $olRec) {
         $olText = $olBytes >= 1048576 ? number_format($olBytes / 1048576, 1) . ' MB' : max(1, (int) ceil($olBytes / 1024)) . ' KB';
-        $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
+        $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.6. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
     $odd = old_dates_leftovers($dir, $files); $odCut = !empty($GLOBALS['__old_dates_cut']); $odCutText = ' Only the first ' . number_format((int) ($GLOBALS['__old_dates_looked'] ?? 0)) . ' folders were looked through for these (a very large tree is not walked to its end: the most is ' . number_format(old_dates_ceiling()) . ' folders or a few seconds), so there may be more further on.';

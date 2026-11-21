@@ -3,7 +3,7 @@
 
     python3 -I tests/tools/browser/health_checks.py
 
-Makes a gallery with older visitor logs left behind (what versions before 2.6.5 kept), then, in Chromium (in the admin's frame, as
+Makes a gallery with older visitor logs left behind (what versions before 2.6.6 kept), then, in Chromium (in the admin's frame, as
 the desktop shows it, and on the plain admin page): the button opens and closes the list again and again; "Remove them" takes the old
 logs away, the page reloads and the list is STILL OPEN, with the row gone. Exit status 0 only if every check passes.
 """
