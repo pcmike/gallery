@@ -33,7 +33,7 @@
         load().then(function (j) {
           var o = overlay('<h3>Download a copy</h3>'
             + '<p>One ZIP of everything the gallery made, laid out like the files are on disk, from the folder index.php lives in. A README inside says what each file is and how to put them back: unzip it over the folder.</p>'
-            + '<pre>README.txt\n' + esc(j.paths.slice(0, 8).join('\n')) + (j.paths.length > 8 ? '\n…' : '') + '</pre>'
+            + '<pre>README.txt\n' + esc((j.zipPaths || j.paths).slice(0, 8).join('\n')) + ((j.zipPaths || j.paths).length > 8 ? '\n…' : '') + '</pre>'
             + (j.thumbs ? '<label class="fm-tick"><input type="checkbox" data-fm-thumbs> <span>Include the thumbnails <span class="muted">(' + size(j.thumbBytes) + ', can be made again)</span></span></label>' : '')
             + '<div class="fm-warn">It holds password hashes, the install secret, link addresses and visitor IP addresses. Keep it private. Your photos, videos and .md files are not in it.</div>'
             + '<input type="password" autocomplete="current-password" placeholder="Admin password" aria-label="Admin password" data-fm-pw><div class="fm-err" role="alert" data-fm-err></div>'

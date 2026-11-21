@@ -59,15 +59,9 @@ function visitlog_schema($pdo) {
 }
 
 function visitlog_open($file, $new) {
-    // A log file with no content (cut to nothing by a copy that failed or a disk that filled, or by hand) would be taken by SQLite for a new database: the tables are made again and the history is gone without a word.
-    // It is set aside as it is (renamed .damaged- and the date, as a log the owner sets aside is: nothing in it to lose), so there is a trace and Health can say so. Not while it is young: a log being made at this moment is empty for an instant.
-    if (!$new && is_file($file) && !is_link($file) && (int) @filesize($file) < 100 && time() - (int) @filemtime($file) > 60) {
-        $stub = preg_replace('~\.sqlite$~', '.damaged-' . gmdate('Ymd-His') . '.sqlite', $file);
-        if (!file_exists($stub) && @rename($file, $stub)) {
-            foreach (['-wal', '-shm'] as $sfx) if (is_file($file . $sfx) && !is_link($file . $sfx)) @rename($file . $sfx, $stub . $sfx);
-            $new = true;
-        }
-    }
+    // A log file with no content (cut to nothing by a copy or a restore that failed, or by hand: SQLite sees no tables in it) is taken by SQLite for a new database: it is used as it is, the tables are made again and the history it had is gone.
+    // Nothing is renamed or removed (an empty file holds nothing to keep): the fact is written once as a note inside the new log ('emptied'), and Health reports it. Not while the file is young: a log being made at this moment is empty for an instant.
+    $wasOld = !$new && is_file($file) && !is_link($file) && time() - (int) @filemtime($file) > 60;
     if ($new) { @touch($file); @chmod($file, 0600); }   // (made private before SQLite makes its side files, which copy the file's permissions)
     $pdo = new PDO('sqlite:' . $file);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -75,6 +69,7 @@ function visitlog_open($file, $new) {
     $pdo->exec('PRAGMA busy_timeout = ' . (int) ($GLOBALS['__visitlog_wait_ms'] ?? 5000));   // (a request that logs waits up to five seconds for a log another process holds; the Health look waits 1 s, so a held log shows as a row in a few seconds, not in fifteen)
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
+    $emptied = $wasOld && (int) $pdo->query('SELECT COUNT(*) FROM sqlite_master')->fetchColumn() === 0;   // (an old log file that SQLite sees as having nothing in it at all: no tables)
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
@@ -85,6 +80,7 @@ function visitlog_open($file, $new) {
         if (!$hasSn) $pdo->exec('ALTER TABLE items ADD COLUMN sn INTEGER NOT NULL DEFAULT 0');   // (rows kept from before count nothing: blank in the views, not a made-up number)
         $pdo->exec('PRAGMA user_version = 3');
     }
+    if ($emptied) { try { $pdo->exec('INSERT OR REPLACE INTO meta (k, v) VALUES (\'emptied\', \'' . time() . '\')'); } catch (Throwable $e) { /* (a disk with no room: Health already says the log can't be written) */ } }
     return $pdo;
 }
 
@@ -107,7 +103,7 @@ function visitlog_db() {
         $db = $pdo;
     } catch (Throwable $e) {
         if ($e->getMessage() === 'newer') $GLOBALS['__visitlog_error'] = 'newer';
-        else { error_log('gallery: the visitor log could not be opened: ' . $e->getMessage()); $GLOBALS['__visitlog_error'] = 'cantwrite'; }
+        else { error_log('gallery: the visitor log could not be opened: ' . $e->getMessage()); $GLOBALS['__visitlog_error'] = 'cantwrite'; $GLOBALS['__visitlog_said'] = $e->getMessage(); }   // (what SQLite said: Health tells "held by another process" from "no permission" by it)
         $db = null;
     }
     return $db;
@@ -120,6 +116,7 @@ function visitlog_check() {
     if (!visitlog_driver_ok()) return $r = [false, 'This server\'s PHP has no SQLite (the pdo_sqlite extension), which the visitor log needs.'];
     $db = visitlog_db();
     if ($db === null && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') return $r = [false, 'The visitor log was made by a newer version of the gallery than this one, so nothing is written into it (it is left exactly as it is). Put the newer index.php back, or set the log aside in the Health check to start a new one with this version.'];
+    if ($db === null && stripos((string) ($GLOBALS['__visitlog_said'] ?? ''), 'is locked') !== false) return $r = [false, 'SQLite is there, but another process has the log open and lets nothing in (database is locked).'];
     if ($db === null) return $r = [false, 'SQLite is there, but the log\'s file can\'t be made or written in the gallery\'s folder. The web server has to be allowed to write there.'];
     try { $db->exec('INSERT OR REPLACE INTO meta (k, v) VALUES (\'checked\', \'' . time() . '\')'); }
     catch (Throwable $e) { return $r = [false, 'SQLite is there, but writing to the log failed (' . $e->getMessage() . ').']; }

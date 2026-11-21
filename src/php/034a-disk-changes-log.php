@@ -65,6 +65,7 @@ function changes_check($dir, $files, $throttle) {
     static $ran = false;
     if ($ran) return;
     $ran = true;
+    if (($_POST['action'] ?? '') === 'health_panel') return;   // (Check again does not look at the disk first: with a log another process holds, that look waits for it, and nothing is lost by leaving it to the next page, which compares the disk with the snapshot again)
     if (!visitlog_driver_ok() || !visitlog_ready()) return;
     try {
         $db = visitlog_db();

@@ -70,9 +70,9 @@ function health_heavy($dir, $files, $force) {
         if (substr($e['path'], -7) === '.sqlite') {
             if (!visitlog_driver_ok()) { $r['stats']['nodriver'][] = $e['rel']; continue; }   // (this PHP can't open it: the counts are in it, not lost)
             if (@filesize($e['path']) === 0) { $r['stats']['empty'][] = $e['rel']; continue; }   // (SQLite takes a file of no bytes for a new database, so the counts began again from nothing without a word)
-            $r['stats']['n']++;
             $w = backup_sqlite_check($e['path'], 1000);
-            if (backup_sqlite_busy($w)) continue;   // (another process has the view counts open right now: it is over in a moment, and nothing is wrong with the file)
+            if (backup_sqlite_busy($w)) { $r['stats']['busy'] = ($r['stats']['busy'] ?? 0) + 1; continue; }   // (another process has the view counts open right now: it is over in a moment, nothing is wrong with the file, and it is not counted as looked through)
+            $r['stats']['n']++;
             if ($w !== '') { $r['stats'][backup_sqlite_trouble($w) ? 'ro' : 'bad'][] = [$e['rel'], $w]; continue; }   // (a file SQLite can't open or write to for the folder's, the disk's or another owner's sake is not a damaged one)
             $w = stats_sqlite_write_check($e['path']);
             if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
@@ -127,7 +127,7 @@ function health_database_rows($add, $dir, $files) {
     if ($logFile !== null && $logWhy !== '' && (stripos($logWhy, 'unable to open') !== false || backup_sqlite_trouble($logWhy) || backup_sqlite_busy($logWhy)) && visitlog_driver_ok()) $logWhy = backup_sqlite_check($logFile, 1000);   // (a look kept from when the file could not be opened is not believed: the owner may have mended it since)
     $logCantOpen = $logWhy !== '' && stripos($logWhy, 'unable to open') !== false;
     $logBusy = backup_sqlite_busy($logWhy) || ($logFile !== null && !$vlOk && stripos((string) $vlWhy, 'is locked') !== false);   // (another process holds the log: stuck, or a network share whose locks misbehave)
-    $logSaid = preg_match('~\((.{1,200})\)$~s', $logWhy, $sm) ? $sm[1] : (stripos((string) $vlWhy, 'is locked') !== false ? trim((string) $vlWhy) : '');   // (what SQLite itself said)
+    $logSaid = preg_match('~\((.{1,200})\)$~s', $logWhy, $sm) ? $sm[1] : (preg_match('~\((.{1,200})\)~s', (string) $vlWhy, $sm2) ? $sm2[1] : '');   // (what SQLite itself said)
     $logTrouble = backup_sqlite_trouble($logWhy);   // (SQLite can't open or write it: another owner's files, a folder the web server can't write in, or no room left; the file itself may be sound)   // (the file or its side files can't be opened: another owner's, not damaged)
     $logLocked = function ($canRead) use ($add, $G, $logFile, $uses, $logSaid) {
         $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it (or to the small files SQLite keeps beside it)' : 'read or write it (or the small files SQLite keeps beside it)') . ' (a restore, or a copy made as root, leaves files with another owner; a gallery folder the web server can\'t write in, or a disk with no room left, stops it the same way). Nothing is being logged.' . ($logSaid !== '' ? ' SQLite said: "' . $logSaid . '".' : '') . ' And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. This does not mean the log is damaged. ' . $uses, null, '', [
@@ -186,17 +186,11 @@ function health_database_rows($add, $dir, $files) {
         $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
             . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again. Or press the button below: it does exactly that deletion for one folder.', null, health_stats_afresh_buttons($statsKey));
     }
-    $logStubs = [];   // (a log file found with no content was set aside as it was, so there is a trace: see visitlog_open)
-    foreach ((array) glob(dirname(visitlog_path()) . '/.gallery-visits-*.damaged-*.sqlite') as $stubFile) {
-        if (is_file($stubFile) && !is_link($stubFile) && (int) @filesize($stubFile) < 100 && preg_match('~\.damaged-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-\d+)?\.sqlite$~', $stubFile, $sm)) {
-            $stubT = gmmktime((int) $sm[4], (int) $sm[5], (int) $sm[6], (int) $sm[2], (int) $sm[3], (int) $sm[1]);
-            if (time() - $stubT < 30 * 86400) $logStubs[$stubT] = basename($stubFile);
-        }
-    }
-    if ($logStubs) {
-        krsort($logStubs); $stubT = array_key_first($logStubs);
-        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $stubT) . ' (UTC) the log\'s file had no content (a copy that failed or a disk that filled leaves that). SQLite takes such a file for a new database, so the Visitors and Changes tabs started again from nothing then; what they held before is gone from the log. The empty file is kept beside it as ' . $logStubs[$stubT] . ' (delete it under Settings, Files this gallery has made, when you have read this: the row goes away with it, or after 30 days). ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the current log is kept, renamed with .damaged- and the date).' : 'There is no copy of the log in a backup.'),
-            null, health_backup_buttons($bk['have'] && backup_has_log(), false, false));
+    $emptiedAt = ($logFile !== null && visitlog_driver_ok() && !$logBusy && @is_readable($logFile)) ? (int) changes_read(function ($db) { return visitlog_meta_get($db, 'emptied'); }, 0) : 0;   // (written once, inside the new log, when the file was found with no content)
+    if ($emptiedAt > 0 && time() - $emptiedAt < 30 * 86400) {
+        $bkOlder = $bk['have'] && backup_has_log() && (int) $bk['at'] < $emptiedAt;
+        $add($G, 'warn', 'The visitor log was found empty and started again', 'On ' . gmdate('j M Y H:i', $emptiedAt) . ' (UTC) the log\'s file had no content (a copy or a restore that failed leaves that; the gallery does not do it). The log was used as it was and its tables made again, so the Visitors and Changes tabs started from nothing then; what they held before is gone from the log. ' . ($bkOlder ? 'The backup from ' . health_ago($bk['at']) . ' was made before that and holds an older copy of the log: restoring it puts that history back (what was logged since is replaced; the log now in use is kept, renamed with .damaged- and the date).' : ($bk['have'] ? 'The backup from ' . health_ago($bk['at']) . ' was made after that, so it holds only the log as it was started again.' : 'There is no backup.')) . ' This row goes away by itself after 30 days.',
+            null, $bkOlder ? health_backup_buttons(true, false, false) : '');
     }
     $statsEmpty = $heavy['stats']['empty'] ?? [];
     if ($statsEmpty) {   // (a view-count database of no bytes: its counts are gone and counting has started again from zero)
@@ -212,7 +206,9 @@ function health_database_rows($add, $dir, $files) {
             $names = implode('; ', array_map(function ($b) { return $b[0]; }, array_slice($bad, 0, 3))) . (count($bad) > 3 ? ' and ' . (count($bad) - 3) . ' more' : '');
             $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced (it is left exactly as it is: nothing is counted beside it). The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged view-count file and counting starts again from nothing.', null,
                 $bk['have'] ? '<div class="health-act"><button type="button" class="secondary" data-backup-act="download">Download the backup</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>' : '');
-        } elseif (!$statsRo && !$statsKey) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
+        } elseif (!$statsRo && !$statsKey) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . (($heavy['stats']['busy'] ?? 0) > 0 ? 'looked through (' : ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (')) . health_ago($heavy['at']) . ').' . (($heavy['stats']['busy'] ?? 0) > 0 ? ' ' . number_format($heavy['stats']['busy']) . ' more ' . ($heavy['stats']['busy'] === 1 ? 'was' : 'were') . ' in use by another process at that moment and not looked through; Check again looks again.' : ''));
+    } elseif (($heavy['stats']['busy'] ?? 0) > 0) {
+        $add($G, 'info', 'View counts: not looked through yet', number_format($heavy['stats']['busy']) . ' view-count database' . ($heavy['stats']['busy'] === 1 ? ' was' : 's were') . ' in use by another process at that moment, so ' . ($heavy['stats']['busy'] === 1 ? 'it was' : 'they were') . ' not looked through. Check again looks again.');
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);
@@ -281,15 +277,21 @@ function health_volumes($dir, $files) {
     $paths = [$dir => 'the gallery folder'];
     foreach ($named as $nm => $pth) if (is_string($pth) && is_dir($pth)) $paths[rtrim((string) (realpath($pth) ?: $pth), '/')] = is_string($nm) && $nm !== '' ? $nm : $pth;
     foreach ((is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : []) as $pth) if (is_string($pth) && is_dir($pth)) { $r = rtrim((string) (realpath($pth) ?: $pth), '/'); if (!isset($paths[$r])) $paths[$r] = $r; }
-    $seen = 0;
-    foreach ((array) $files as $f) { $c = rtrim((string) containing_folder_real_path($dir, $f), '/'); if ($c !== '' && !isset($paths[$c])) { $paths[$c] = null; if (++$seen >= 300) break; } }
+    $seen = 0; $t0 = microtime(true);
+    foreach ((array) $files as $f) { if (microtime(true) - $t0 > 1.5) break; $c = rtrim((string) containing_folder_real_path($dir, $f), '/'); if ($c !== '' && !isset($paths[$c])) { $paths[$c] = null; if (++$seen >= SCAN_MAX_FOLDERS) break; } }   // (up to the gallery's own limit of folders, within a second and a half: a disk reached only after the first few hundred folders still gets its row)
     $by = [];
     $homeDev = (string) (@stat($dir)['dev'] ?? '');   // (the disk the gallery's own folder is on: its logs, backup and settings are there)
     foreach ($paths as $p => $label) {
         $st = @stat($p); if (!$st) continue;
         $key = (string) $st['dev'];
         if ($label === null) {   // a folder only the scan found: named by the place it belongs to (a folder inside the gallery that is a disk of its own, a mount, is named by its folder: the gallery's own files are not on it)
-            $label = strncmp($p . '/', $dir . '/', strlen($dir) + 1) === 0 ? ($key === $homeDev || $homeDev === '' ? 'the gallery folder' : substr($p, strlen($dir) + 1)) : $p;
+            $inside = strncmp($p . '/', $dir . '/', strlen($dir) + 1) === 0;
+            if ($inside && ($key === $homeDev || $homeDev === '')) $label = 'the gallery folder';
+            elseif ($inside) {   // a disk of its own inside the gallery: named by the folder it is mounted at (the top of that disk), not by whichever of its folders came first
+                $top = $p;
+                while (($up = dirname($top)) !== $dir && strncmp($up . '/', $dir . '/', strlen($dir) + 1) === 0 && (string) (@stat($up)['dev'] ?? '') === $key) $top = $up;
+                $label = substr($top, strlen($dir) + 1);
+            } else $label = $p;
             foreach ($named as $nm => $pth) { $np = rtrim((string) (realpath((string) $pth) ?: $pth), '/'); if ($np !== '' && strncmp($p . '/', $np . '/', strlen($np) + 1) === 0) { $label = (string) $nm; break; } }
         }
         if (!isset($by[$key])) {

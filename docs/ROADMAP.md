@@ -66,17 +66,18 @@ Let the owner see how many galleries run which version.
 - **Sketch:** `UPDATE_FEED_URL` can already point at a feed on your own server; a feed there that mirrors the GitHub release and keeps its own access log would show each install's address and version. It would need a plain disclosure in Settings and an off switch.
 
 
-## Test suite: stop each test server when its section is done
-*A maybe, not a plan: the chain runs fine as it is.*
-
-- **Today:** the server suite starts about 200 small web servers (one per test setup) and stops 16 of them as it goes; the rest run until the suite ends. On the static PHP 8.5 build that is about 300 processes and 12.6 GB of a 16 GB machine, so a suite has to run alone.
-- **Sketch:** stop each server when its section is done. Later sections reuse earlier servers, so each reuse has to be found first; a section would start its own server when it needs one.
-- **Note:** held back because it touches the whole suite (about 3,100 checks) for no change in what the gallery does. Worth doing only if the suite keeps growing or the machine gets smaller.
-
-
 ## A held-up change log should not slow every page view
 *A maybe, not a plan: it needs another program to hold the log's file.*
 
 - **Today:** when what was typed for a deleted or renamed photo is written in the Changes tab and another program has the log's file locked (a backup tool copying it, say), each page view waits for the file, up to several seconds for each folder that has such data, and then leaves the data where it is. Nothing is lost; the page is slow while the lock lasts.
 - **Sketch:** give that one write a short wait (a second or less) and try again at a later view, so a held file costs a page almost nothing.
 - **Note:** held back because it only happens while something else keeps the file locked, and the data is never lost.
+
+
+## A visitor's page should never wait on the visitor log
+*A real fix, not a maybe: it needs a design of its own (and no entry may be lost).*
+
+- **Today:** a request that logs waits up to five seconds for the log's file when another process holds it (a stuck PHP process, a network share whose file locks misbehave). Measured with the log held: a stranger's front page and a folder page each took 5.1 seconds, with the default settings. The page still loads; it is late. After the five seconds the entry that could not be written is lost. Health's Check again waits one second and no longer scans the disk first.
+- **Sketch:** write a visit with no wait: append one line to a small private spool file (an append with its own lock, microseconds), and let the next request that finds the log free merge the lines into it in order. Nothing is dropped, nothing waits, and a log that stays stuck shows as "N entries waiting" in Health. Needs: the spool file's name and guard (it holds addresses, as the log does), its place in the backup and in "Files this gallery has made", a size limit, and the merge.
+- **Not an answer:** skipping the entry when the log is busy (a log that drops entries is not a log), or a shorter wait for visitors (the same loss, sooner).
+- **Note:** held back from the third review's round because it changes how every visit is logged and needs its own tests and review.

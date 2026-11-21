@@ -174,7 +174,8 @@ function owned_summary($plan) {
     arsort($sh['where']); $sh['where'] = array_slice($sh['where'], 0, 8, true);
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
             'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'shared' => $sh, 'fingerprint' => $plan['fingerprint'],
-            'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300)];
+            'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300),
+            'zipPaths' => array_slice(array_column(array_values(array_filter($plan['entries'], function ($e) { return $e['kind'] !== 'backup' && $e['kind'] !== 'work' && !($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])); })), 'rel'), 0, 300)];   // (what the download holds, a place from elsewhere's shared data included: the same exclusions as owned_zip_entries; Delete's list above still names every file it would remove)
 }
 
 /** The text inside the ZIP that says what each file is and how to put them back. */
