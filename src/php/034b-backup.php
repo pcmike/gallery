@@ -84,20 +84,21 @@ function backup_parts($dir, $files) {
 }
 
 /** A SQLite file looked through (PRAGMA quick_check): '' when it is sound, else the reason. */
-function backup_sqlite_check($path) {
+function backup_sqlite_check($path, $waitMs = 5000) {
     if (!visitlog_driver_ok()) return 'could not be read (this server has no SQLite)';
     if (!is_file($path)) return 'is not there';
     try {
         $p = new PDO('sqlite:' . $path);
         $p->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $p->exec('PRAGMA busy_timeout = 5000');
+        $p->exec('PRAGMA busy_timeout = ' . (int) $waitMs);
         $q = $p->query('PRAGMA quick_check')->fetchAll(PDO::FETCH_COLUMN);
         $p = null;
         if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; $n = max(1, $n); return 'is damaged (SQLite found ' . $n . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
         return '';
     } catch (Throwable $e) {
         $m = substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120);
-        if (preg_match('~readonly|read-only|disk I/O|unable to open|permission|is locked|or disk is full~i', $m)) return 'could not be opened or written to (' . $m . ')';   // (the file may be sound: the folder, the disk or another owner's files stop SQLite; only what SQLite says about the pages themselves is "damaged")
+        if (preg_match('~is locked~i', $m)) return 'is in use by another process (' . $m . ')';   // (another process has it open and lets nobody in: the file is sound; not an owner, folder or disk trouble either)
+        if (preg_match('~readonly|read-only|disk I/O|unable to open|permission|or disk is full~i', $m)) return 'could not be opened or written to (' . $m . ')';   // (the file may be sound: the folder, the disk or another owner's files stop SQLite; only what SQLite says about the pages themselves is "damaged")
         return 'is damaged or can\'t be read (' . $m . ')';
     }
 }
@@ -105,6 +106,11 @@ function backup_sqlite_check($path) {
 /** Is a reason given by backup_sqlite_check one of trouble in getting at a file (owner, folder, disk room), not of a damaged file? */
 function backup_sqlite_trouble($why) {
     return strncmp((string) $why, 'could not be opened or written to', 33) === 0;
+}
+
+/** Is a reason given by backup_sqlite_check one of another process holding the file (SQLite said it is locked), not of a damaged file or of who owns it? */
+function backup_sqlite_busy($why) {
+    return strncmp((string) $why, 'is in use by another process', 28) === 0;
 }
 
 /** A SQLite file looked at and copied whole: '' when it is sound and $dest now holds a sound copy, else the reason. */
@@ -263,7 +269,9 @@ function backup_run($manual, $dir, $files) {
     $lockPath = __DIR__ . '/.gallery-backup.lock';
     if (is_link($lockPath)) return $fail('.gallery-backup.lock is a link, which the gallery won\'t use. Delete it, then try again.');
     $guard = @fopen($lockPath, 'c');
-    if (!$guard) return $fail('The backup\'s lock file (.gallery-backup.lock) can\'t be made in the gallery\'s folder, so no backup can be made safely. Make the folder writable by the web server.');
+    if (!$guard) return $fail(is_file($lockPath)
+        ? 'The backup\'s lock file (.gallery-backup.lock) is there, but the web server may not open it (it belongs to another user, as after a restore made as root, or its permissions were changed), so no backup can be made safely. Give it to the web server: sudo chown www-data: ' . $lockPath . ' (or whichever user the web server runs as).'
+        : 'The backup\'s lock file (.gallery-backup.lock) can\'t be made in the gallery\'s folder, so no backup can be made safely. Make the folder writable by the web server.');
     @chmod($lockPath, 0600);
     if (!flock($guard, LOCK_EX | LOCK_NB)) { fclose($guard); return $busy; }
     $out = null; $work = '';

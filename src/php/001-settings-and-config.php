@@ -173,7 +173,7 @@ function gallery_config_parse($raw) {
     if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) return ['broken', [], 'bom'];
     $raw = gallery_config_clean(data_file_strip_guard($raw));
     if (trim($raw) === '') return ['ok', []];
-    $decoded = json_decode($raw, true);
+    $decoded = json_decode($raw, true, 512, JSON_BIGINT_AS_STRING);   // (a whole number too big for PHP to hold keeps its digits as text, not rounded to a float that a setting would then take as a number)
     if (json_last_error() !== JSON_ERROR_NONE) return ['broken', [], json_last_error_msg()];
     if (!is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) return ['invalid', []];
     return ['ok', $decoded];

@@ -43,6 +43,7 @@ function health_headsup_row_html($n) {
 /** The health panel at the top of Settings: the server-side rows from health_checks(), then three the browser fills in
  *  (see the script: the web server rules can only be tested by asking for addresses the way a visitor would). */
 function render_admin_health_panel() {
+    $GLOBALS['__visitlog_wait_ms'] = 1000;   // (see visitlog_open: a log held by another process is waited for 1 s here, not 5)
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $notes = array_merge(update_headsups(), health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []));

@@ -1228,10 +1228,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
-        // (nothing before the "md", or only spaces and invisible characters: controls and format characters such as U+200B, and the letters and marks that show nothing: the Hangul fillers U+115F U+1160 U+3164 U+FFA0,
+        // (nothing before the "md", or only spaces and invisible characters: controls and format characters such as U+200B (not every character this PHP does not know yet: a new emoji or a private-use symbol is something to see), and the letters and marks that show nothing: the Hangul fillers U+115F U+1160 U+3164 U+FFA0,
         // the Braille blank U+2800, the combining grapheme joiner U+034F, the Khmer inherent vowels U+17B4 U+17B5, the Mongolian variation selectors, U+1D159, U+16FE4, the object replacement character U+FFFC and the variation selectors.
         // A note that is ALREADY there under such a name (earlier versions allowed it, or it was made by hand) is not saved under it either: it is moved to a name the owner types, so it can be seen in the list.)
-        $noName = function ($n) { return strcasecmp($n, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{180B}-\x{180D}\x{180F}\x{1D159}\x{16FE4}\x{FFFC}]/u', (string) substr($n, 0, -3)); };
+        $noName = function ($n) { return strcasecmp($n, '.md') === 0 || !preg_match('/[^\p{Z}\p{Cc}\p{Cf}\p{Cs}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{180B}-\x{180D}\x{180F}\x{1D159}\x{16FE4}\x{FFFC}]/u', (string) substr($n, 0, -3)); };
         $moveFrom = '';   // (the old note with no name to see, when what is saved goes to a name that has one)
         if ($noName($target)) {
             if (!is_file($adminFolderReal . '/' . $target)) return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
@@ -1256,9 +1256,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // the old text back whole, so it is refused, and what was typed is handed back to the page so it can be copied. (A save with no
         // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
         $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
-        if ($target === $existing && $loadedHash !== null && is_file($targetPath) && !hash_equals(md5((string) @file_get_contents($targetPath)), $loadedHash)) {
+        $watchPath = $target === $existing ? $targetPath : ($moveFrom !== '' ? $adminFolderReal . '/' . $moveFrom : '');   // (the file the editor was opened on: the note itself, or the nameless one that is being moved: its newer text must not be removed unseen)
+        if ($watchPath !== '' && $loadedHash !== null && is_file($watchPath) && !hash_equals(md5((string) @file_get_contents($watchPath)), $loadedHash)) {
             $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => admin_notes_fingerprint($loadedHash)];
-            return ['type' => 'error', 'text' => '"' . $target . '"' . admin_stale_message() . ' What you typed is still in the box below, so you can copy it first.'];
+            return ['type' => 'error', 'text' => '"' . $existing . '"' . admin_stale_message() . ' What you typed is still in the box below, so you can copy it first.'];
         }
         if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
             return ['type' => 'error', 'text' => 'A file named "' . $target . '" is already in this folder, so nothing was saved (it would have been overwritten). Choose another name, or open that file to change it.'];
@@ -1266,10 +1267,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!file_write_whole($targetPath, $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
-        if (!has_gallery_marker($content)) {
-            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . ', but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
-        }
         $moved = $moveFrom !== '' ? (@unlink($adminFolderReal . '/' . $moveFrom) ? ' (the note that had no name to see was moved to it)' : ' (the note that had no name to see is still in the folder as well: it could not be removed; delete it from the list)') : '';
+        if (!has_gallery_marker($content)) {
+            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . $moved . ', but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
+        }
         return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . $moved . '.'];
     }
 

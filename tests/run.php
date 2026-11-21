@@ -543,14 +543,20 @@ function make_minimal_mp4($path, $durationSeconds, $timescale = 1) {
 }
 
 function find_free_port() {
-    $sock = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
-    if (!$sock) {
-        fwrite(STDERR, "Could not find a free port: $errstr\n");
-        exit(1);
+    global $serverLive;
+    for ($try = 0; $try < 50; $try++) {
+        $sock = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        if (!$sock) {
+            fwrite(STDERR, "Could not find a free port: $errstr\n");
+            exit(1);
+        }
+        $name = stream_socket_get_name($sock, false);
+        fclose($sock);
+        $port = (int) substr($name, strrpos($name, ':') + 1);
+        if (!isset($serverLive[$port])) return $port;   // (the port of a server the keeper stopped is free but not new: an earlier test may ask for that server again, and would find another gallery's)
     }
-    $name = stream_socket_get_name($sock, false);
-    fclose($sock);
-    return (int) substr($name, strrpos($name, ':') + 1);
+    fwrite(STDERR, "Could not find a free port that no earlier server had\n");
+    exit(1);
 }
 
 /** The test servers, by port: [process, the number of the last request that went to it, the command that started it, whether it is up]. A full run starts hundreds, and each one grows to ~55 MB once it has
@@ -13744,6 +13750,24 @@ echo "== chunk 9 follow-up N17 d/i: empty folders in Health, invisible note name
     // a note that is not nameless, saved under a new name, stays where it is (a copy, as before): only a note with no name to see is moved
     $deCopy = $deNote(['md_file' => 'trip' . "\u{200B}" . '.md', 'new_name' => 'trip-copy', 'content' => "{gallery}\ncopy\n"]);
     check('[N32 h] ...a note with a name to see that is saved under a new name is not moved: it stays', ($deCopy['ok'] ?? false) === true && is_file("$deFx/Alpha/trip\u{200B}.md") && is_file("$deFx/Alpha/trip-copy.md"), json_encode($deCopy));
+    // N32 h, the three things pass 9 found: (1) text that does not begin with {gallery}: the nameless note is still moved, and the answer says so
+    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nold\n");
+    $deM1 = $deNote(['md_file' => "\u{200B}.md", 'new_name' => 'moved-plain', 'content' => "just words, no marker\n"]);
+    check('[N32 h] a nameless note saved to a name with text that does not begin with {gallery} is still moved (the nameless file is gone) and the answer says it was moved and that the note is not active', ($deM1['ok'] ?? false) === true && is_file("$deFx/Alpha/moved-plain.md") && !file_exists("$deFx/Alpha/\u{200B}.md") && str_contains((string) ($deM1['msg'] ?? $deM1['text'] ?? json_encode($deM1)), 'was moved to it') && str_contains((string) ($deM1['msg'] ?? $deM1['text'] ?? json_encode($deM1)), 'not active'), json_encode($deM1));
+    // (2) a nameless note changed somewhere else after the page was opened is not moved over its newer text: refused like a normal note, what was typed stays in the box
+    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nloaded text\n"); $deLoaded = md5("{gallery}\nloaded text\n");
+    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nNEWER text written in another tab\n");
+    $deM2 = $deNote(['md_file' => "\u{200B}.md", 'new_name' => 'moved-stale', 'content' => "{gallery}\nmy edit\n", 'loaded_hash' => $deLoaded]);
+    check('[N32 h] a nameless note that was changed somewhere else after the page was opened is NOT moved: the save is refused, the newer text is still in the file and no new note is made', ($deM2['ok'] ?? true) === false && str_contains((string) @file_get_contents("$deFx/Alpha/\u{200B}.md"), 'NEWER text') && !file_exists("$deFx/Alpha/moved-stale.md"), json_encode($deM2));
+    $deM3 = $deNote(['md_file' => "\u{200B}.md", 'new_name' => 'moved-fresh', 'content' => "{gallery}\nmy edit\n", 'loaded_hash' => md5("{gallery}\nNEWER text written in another tab\n")]);
+    check('[N32 h] ...and with the page opened on the file as it is now, the move goes through', ($deM3['ok'] ?? false) === true && is_file("$deFx/Alpha/moved-fresh.md") && !file_exists("$deFx/Alpha/\u{200B}.md"), json_encode($deM3));
+    // (3) a name with something to see is not "nameless": a name of only a newer emoji (this PHP may not know it) or a private-use symbol (the Apple logo) saves new, and an existing one saves under its name
+    $deVis = [];
+    foreach (["\u{1FAE8}", "\u{F8FF}", "\u{1FAE9}\u{1FAE8}"] as $deNm) { $r = $deNote(['new_name' => $deNm]); if (($r['ok'] ?? false) !== true || !is_file("$deFx/Alpha/$deNm.md")) $deVis[] = [bin2hex($deNm), $r]; }
+    file_put_contents("$deFx/Alpha/\u{F8FF}\u{F8FF}.md", "{gallery}\nold\n");
+    $deVk = $deNote(['md_file' => "\u{F8FF}\u{F8FF}.md", 'new_name' => '', 'content' => "{gallery}\nedited\n"]);
+    if (($deVk['ok'] ?? false) !== true || !str_contains((string) @file_get_contents("$deFx/Alpha/\u{F8FF}\u{F8FF}.md"), 'edited')) $deVis[] = ['existing', $deVk];
+    check('[N32 h] a note named with only a newer emoji or a private-use symbol is a note with a name to see: it saves new, and one that is already there saves under its name (not "has nothing to see in it")', $deVis === [], json_encode($deVis));
     @proc_terminate($deProc);
 }
 
@@ -14163,7 +14187,7 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
         check('[N24] ...and the owner is told the truth (still in the folder, its settings file can\'t be written, nothing removed and nothing written in the Changes tab), NOT that it was cleaned up', str_contains($p6Front, 'still in the folder "Alpha"') && str_contains($p6Front, 'its settings file could not be saved (the web server may not open it for writing: it has another owner, or is read-only), so nothing was removed and nothing was written in the Changes tab') && !str_contains($p6Front, 'cleaned up'), substr(strip_tags($p6Front), 0, 400));
         $p6Health = html_entity_decode((string) http_get("$p6Base/?admin&classic=1", $p6Own)[1]);
         $p6ChownCmd = <<<'CMD'
-sudo find /path/to/the/gallery/ \( -type f \( -name '.gallery-*.php' -o -name '.gallery-*.lock' -o -name '.gallery-*.sqlite*' -o -name '.gallery-*.zip' -o -name '.gallery-*.tmp' -o -name '.gallery-stats.json' -o -name '.gallery-setup' \) -o -type d -name '.gallery-cache' -o -path '*/.gallery-cache/*' \) ! -type l -execdir chown -h www-data: {} +
+sudo find /path/to/the/gallery/ \( -type f \( -name '.gallery-*.php' -o -name '.gallery-*.lock' -o -name '.gallery-*.sqlite*' -o -name '.gallery-*.zip' -o -name '.gallery-*.tmp' -o -name '.gallery-*.tmp.*' -o -name '.gallery-stats.json' -o -name '.gallery-setup' \) -o -type d -name '.gallery-cache' -o -path '*/.gallery-cache/*' \) ! -type l -execdir chown -h www-data: {} +
 CMD;
         check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', str_contains($p6Health, '1 of the gallery\'s own files is not writable by the web server') && str_contains($p6Health, $p6ChownCmd) && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
         @chmod("$p6Fx/Alpha", 0555);
@@ -14269,7 +14293,7 @@ CMD;
     if (preg_match('~sudo (find /path/to/the/gallery/ .{1,400}? -execdir chmod g\+w \{\} \+)~', $p6Page, $p6Cm) && preg_match('~sudo (find /path/to/the/gallery/ .{1,500}? -execdir chown -h www-data: \{\} \+)~', $p6Page, $p6Co)) {
         $p6T = new_fixture_dir('p6cmd'); $p6Out2 = new_fixture_dir('p6out'); mkdir("$p6T/Photos/.gallery-cache", 0755, true);
         // (every kind of file the gallery makes, so a kind the command forgets shows here; and a folder of the owner's that happens to start with .gallery-, with a file in it: neither is the gallery's)
-        $p6Mine = ['.gallery-items.php', '.gallery-backup.lock', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-wal', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-shm', '.gallery-visits-' . str_repeat('a', 24) . '.damaged-20261120-101500.sqlite', '.gallery-backup-' . str_repeat('b', 24) . '.zip', '.gallery-backup-' . str_repeat('b', 24) . '.zip.tmp', '.gallery-restore-abcd1234.tmp', '.gallery-stats.json', '.gallery-setup', '.gallery-stats.sqlite'];
+        $p6Mine = ['.gallery-items.php', '.gallery-backup.lock', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-wal', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-shm', '.gallery-visits-' . str_repeat('a', 24) . '.damaged-20261120-101500.sqlite', '.gallery-backup-' . str_repeat('b', 24) . '.zip', '.gallery-backup-' . str_repeat('b', 24) . '.zip.tmp', '.gallery-restore-abcd1234.tmp', '.gallery-stats.json', '.gallery-setup', '.gallery-stats.sqlite', '.gallery-config.php.tmp.abcd1234'];
         mkdir("$p6T/Photos/.gallery-anything", 0755); mkdir("$p6T/Photos/.gallery-cache/sub", 0755);
         foreach (array_merge(array_map(fn ($n) => "$p6T/Photos/$n", $p6Mine), ["$p6T/Photos/.gallery-cache/t1.jpg", "$p6T/Photos/.gallery-cache/meta1.php", "$p6T/Photos/pic.jpg", "$p6T/Photos/.gallery-anything/inside.jpg", "$p6Out2/outside.txt"]) as $p6F) { file_put_contents($p6F, 'x'); chmod($p6F, 0600); }
         chmod("$p6T/Photos/.gallery-cache", 0755); chmod("$p6T/Photos", 0755);
@@ -14278,6 +14302,7 @@ CMD;
         clearstatcache();
         $p6W = function ($f) { return (bool) (fileperms($f) & 0020); };
         check('[N32 i] run for real, the chmod command leaves a folder of the owner\'s that starts with .gallery- (and the file in it) alone', $p6R3 === 0 && !$p6W("$p6T/Photos/.gallery-anything") && !$p6W("$p6T/Photos/.gallery-anything/inside.jpg"), decoct(fileperms("$p6T/Photos/.gallery-anything") & 0777));
+        check('[N34 b] run for real, the chmod command also reaches the lock files (a restore made as root leaves the backup\'s lock file with another owner, and the group way did not cover it)', $p6R3 === 0 && $p6W("$p6T/Photos/.gallery-backup.lock"), decoct(fileperms("$p6T/Photos/.gallery-backup.lock") & 0777));
         check('[N26] run for real, the chmod command: the gallery\'s data file, the thumbnail folder and the files in it become group-writable; a photo, the photo folder and what a link named like a gallery file points to (outside) do not', $p6R3 === 0 && $p6W("$p6T/Photos/.gallery-items.php") && $p6W("$p6T/Photos/.gallery-cache") && $p6W("$p6T/Photos/.gallery-cache/t1.jpg") && $p6W("$p6T/Photos/.gallery-cache/meta1.php") && !$p6W("$p6T/Photos/pic.jpg") && !$p6W("$p6T/Photos") && !$p6W("$p6Out2/outside.txt"), decoct(fileperms("$p6Out2/outside.txt") & 0777) . ' ' . implode(' ', $p6O3));
         $p6Me = function_exists('posix_getpwuid') ? (string) (posix_getpwuid(posix_geteuid())['name'] ?? '') : '';
         if ($p6Me === '') skip_note('[N26] this PHP has no posix functions, so the chown command can\'t be run here as the current user');
@@ -14352,6 +14377,7 @@ echo "== pass 8: the own disk's words, a sound log in a folder that can't be wri
                 check('[N27 h] on the gallery\'s own nearly full disk the low-space row says the gallery needs room for itself (settings, logs, the backup, the Changes tab), not the sentence meant for another disk', str_contains($q8Html, 'Disk space is almost gone') && str_contains($q8Html, 'The gallery needs room for itself on this disk too') && !str_contains($q8Html, 'each folder\'s captions and settings and its thumbnails are saved inside the folder. When the disk is full'), substr(strip_tags($q8Html), 0, 300));
             } else {
                 check('[N31 b] a sound log on a disk with no room left is not called damaged: Health says it can\'t be written (the room is named as a cause), with no button to set it aside', str_contains($q8Html, 'The visitor and change log can\'t be') && str_contains($q8Html, 'a disk with no room left') && !str_contains($q8Html, 'The visitor log is damaged') && !str_contains($q8Html, 'Set it aside and start a new log') && !str_contains($q8Html, 'View counts are damaged'), preg_match('~The visitor[^<]{0,200}~', $q8Html, $q8M) ? $q8M[0] : substr(strip_tags($q8Html), 0, 300));
+                check('[N33] the red row also says what SQLite itself said (here that the disk is full), so an owner with another cause has something to go on', str_contains($q8Html, 'SQLite said: "') && (str_contains($q8Html, 'disk is full') || str_contains($q8Html, 'disk I/O')), preg_match('~SQLite said[^<]{0,120}~', $q8Html, $q8Sm) ? $q8Sm[0] : 'no words');
             }
             @proc_terminate($q8Pr); usleep(300000);
         }
@@ -14388,6 +14414,148 @@ echo "== pass 8: the own disk's words, a sound log in a folder that can't be wri
         @proc_terminate($q8Pr3); usleep(300000);
     }
     @chmod("$q8Cx/Alpha/.gallery-cache", 0755);
+}
+
+/* --------------------------------------------------------------------- */
+// pass 9 (the reviewer's N27 h again, N34 g): a folder INSIDE the gallery that is a disk of its own (a mount) is named by its folder in the low-space rows; the gallery's own disk keeps the "needs room for itself" sentence
+echo "== pass 9: a disk inside the gallery is named by its folder, not 'the gallery folder' ==\n";
+{
+    $r9Up = function ($port) { for ($i = 0; $i < 100; $i++) { $c = @fsockopen('127.0.0.1', $port, $e1, $e2, 0.2); if ($c) { fclose($c); return true; } usleep(100000); } return false; };
+    $r9Out = []; exec('unshare -rm sh -c ' . escapeshellarg('mount -t tmpfs -o size=4m tmpfs ' . escapeshellarg(new_fixture_dir('r9probe'))) . ' 2>&1', $r9Out, $r9Rc);
+    if ($r9Rc !== 0) skip_note('[N27 h again] this machine does not let the suite make a small disk of its own (unshare -rm and a tmpfs)');
+    else {
+        $r9St = new_fixture_dir('r9stage'); mkdir("$r9St/Alpha", 0777, true); make_jpeg("$r9St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+        file_put_contents("$r9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'r9-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$r9St/index.php"); @touch("$r9St/index.php", time() - 3600);
+        $r9As = new_fixture_dir('r9asia'); make_jpeg("$r9As/a1.jpg", 40, 30, 20, 90, 160);
+        foreach ([false, true] as $r9SmallHome) {   // the gallery's own disk roomy, then small too
+            $r9Fx = new_fixture_dir($r9SmallHome ? 'r9both' : 'r9inner'); $r9P = find_free_port();
+            $r9Script = ($r9SmallHome ? 'mount -t tmpfs -o size=60m tmpfs ' . escapeshellarg($r9Fx) . ' && ' : '') . 'cp -a ' . escapeshellarg("$r9St/.") . ' ' . escapeshellarg("$r9Fx/") . ' && mkdir -p ' . escapeshellarg("$r9Fx/Asia") . ' && mount -t tmpfs -o size=4m tmpfs ' . escapeshellarg("$r9Fx/Asia") . ' && cp -a ' . escapeshellarg("$r9As/.") . ' ' . escapeshellarg("$r9Fx/Asia/") . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $r9P . ' -t ' . escapeshellarg($r9Fx);
+            $r9Pr = proc_open(['unshare', '-rm', 'sh', '-c', $r9Script], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $r9Pipes); $cleanupProcs[] = $r9Pr;
+            if (!$r9Up($r9P)) { check('[N27 h again] the server with a disk inside the gallery started (' . ($r9SmallHome ? 'both low' : 'only the inner one low') . ')', false); @proc_terminate($r9Pr); continue; }
+            $r9B = "http://127.0.0.1:$r9P";
+            [, , $r9H] = http_post("$r9B/?admin", ['access_code' => 'r9-admin-pw-1'], [], false);
+            $r9Html = html_entity_decode((string) http_get("$r9B/?admin&classic=1", ['Cookie: ' . extract_cookie_header($r9H)])[1]);
+            $r9Txt = strip_tags($r9Html);
+            $r9Rows = preg_match_all('~Disk space is almost gone on ([^:<]{1,60}):~', $r9Txt, $r9M) ? $r9M[1] : [];
+            if (!$r9SmallHome) {
+                check('[N27 h again] a folder that is a disk of its own inside the gallery is named by its folder ("on Asia"), not "The gallery folder", and gets the sentence for another disk (not "the logs and the backup are kept here")', $r9Rows === ['Asia'] && !str_contains($r9Txt, 'Disk space is almost gone on The gallery folder') && str_contains($r9Html, 'each folder\'s captions and settings and its thumbnails are saved inside the folder') && !str_contains($r9Html, 'The gallery needs room for itself on this disk too'), json_encode($r9Rows) . ' ' . substr($r9Txt, 0, 300));
+            } else {
+                check('[N34 g] with both disks low there are two rows with two different names, "The gallery folder" and "Asia": the gallery\'s own disk has the sentence about its logs and backup, the inner one has not', count($r9Rows) === 2 && in_array('The gallery folder', $r9Rows, true) && in_array('Asia', $r9Rows, true) && substr_count($r9Html, 'The gallery needs room for itself on this disk too') === 1, json_encode($r9Rows) . ' ' . substr($r9Txt, 0, 300));
+            }
+            @proc_terminate($r9Pr); usleep(300000);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// pass 9 N33: a log that another process HOLDS is neither "can't be written (owner, folder, disk)" nor "damaged": its own row, with what SQLite said; and a look kept from while it was held is not believed once it lets go
+echo "== pass 9 N33: a visitor log held by another process ==\n";
+{
+    if (!extension_loaded('pdo_sqlite')) skip_note('[N33] this PHP has no pdo_sqlite, so there is no log');
+    else {
+        $h9St = new_fixture_dir('h9stage'); mkdir("$h9St/Alpha", 0777, true); make_jpeg("$h9St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+        file_put_contents("$h9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'h9-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$h9St/index.php"); @touch("$h9St/index.php", time() - 3600);
+        $h9Port = find_free_port(); $h9Proc = start_server($h9St, $h9Port); $h9Base = "http://127.0.0.1:$h9Port";
+        [, , $h9H] = http_post("$h9Base/?admin", ['access_code' => 'h9-admin-pw-1'], [], false); $h9Own = ['Cookie: ' . extract_cookie_header($h9H)];
+        http_get("$h9Base/?admin&classic=1", $h9Own);   // (the first look makes the log)
+        $h9Log = glob("$h9St/.gallery-visits-*.sqlite")[0] ?? null;
+        if ($h9Log === null) check('[N33] the log was made', false);
+        else {
+            $h9Csrf = admin_token($h9Base, $h9Own);
+            $h9Look = function ($recheck) use ($h9Base, $h9Own, $h9Csrf) {   // (the Health panel as the page asks for it: Check again, or the kept look)
+                $f = ['csrf_token' => $h9Csrf, 'action' => 'health_panel']; if ($recheck) $f['recheck'] = '1';
+                $ctx = stream_context_create(['http' => ['method' => 'POST', 'header' => implode("\r\n", array_merge($h9Own, ['X-Requested-With: gallery-fetch', 'Content-Type: application/x-www-form-urlencoded'])), 'content' => http_build_query($f), 'timeout' => 40, 'ignore_errors' => true]]);
+                return html_entity_decode((string) (json_decode((string) @file_get_contents("$h9Base/?admin", false, $ctx), true)['html'] ?? ''));
+            };
+            $h9Look(true);   // (Check again once while the log is free: the kept look says sound)
+            // another process (here: this one) holds the log and lets nobody in
+            $h9Db = new PDO('sqlite:' . $h9Log); $h9Db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $h9Db->exec('PRAGMA locking_mode = EXCLUSIVE'); $h9Db->exec('BEGIN EXCLUSIVE'); $h9Db->exec('CREATE TABLE IF NOT EXISTS zz_hold (x)');
+            $h9T0 = microtime(true); $h9Held = $h9Look(true); $h9Secs = microtime(true) - $h9T0; $h9Txt = strip_tags($h9Held);
+            check('[N33] a log held by another process is its own row "in use by another process": SQLite\'s words are in it, and it does not blame the owner, the folder or the disk, offers no chown, and is not "damaged"', str_contains($h9Held, 'The visitor log is in use by another process') && str_contains($h9Txt, 'database is locked') && !str_contains($h9Held, 'The visitor and change log can\'t be') && !str_contains($h9Held, 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*') && !str_contains($h9Held, 'The visitor log is damaged') && !str_contains($h9Held, 'Set it aside and start a new log'), preg_match('~The visitor[^<]{0,250}~', $h9Txt, $h9M) ? $h9M[0] : substr($h9Txt, 0, 200));
+            check('[N33] ...and the look does not take long (a held log is waited for 1 s, not 5: it was 10 to 15 s)', $h9Secs < 8, round($h9Secs, 1) . ' s');
+            // it lets go: the next look, with no Check again (the kept look is still there), no longer shows the row
+            $h9Db->exec('ROLLBACK'); $h9Db = null; usleep(300000);
+            $h9After = $h9Look(false);
+            check('[N33] once the other process lets go, the next look (the kept one is not believed) no longer shows the row, and does not call the log damaged', !str_contains($h9After, 'in use by another process') && !str_contains($h9After, 'The visitor log is damaged') && !str_contains($h9After, 'The visitor and change log can\'t be'), preg_match('~The visitor[^<]{0,200}~', strip_tags($h9After), $h9M2) ? $h9M2[0] : 'no row');
+        }
+        @proc_terminate($h9Proc);
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// pass 9 N34 a: a log cut to nothing (a copy that failed, a disk that filled) is not silently started again: the empty file is set aside as it is (.damaged- and the date), and Health says so
+echo "== pass 9 N34 a: a visitor log found empty ==\n";
+{
+    if (!extension_loaded('pdo_sqlite')) skip_note('[N34 a] this PHP has no pdo_sqlite, so there is no log');
+    else foreach ([0, 1] as $e9Size) {
+        $e9St = new_fixture_dir('e9stage' . $e9Size); mkdir("$e9St/Alpha", 0777, true); make_jpeg("$e9St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+        file_put_contents("$e9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'e9-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$e9St/index.php"); @touch("$e9St/index.php", time() - 3600);
+        $e9Port = find_free_port(); $e9Proc = start_server($e9St, $e9Port); $e9Base = "http://127.0.0.1:$e9Port";
+        [, , $e9H] = http_post("$e9Base/?admin", ['access_code' => 'e9-admin-pw-1'], [], false); $e9Own = ['Cookie: ' . extract_cookie_header($e9H)];
+        http_get("$e9Base/?admin&classic=1", $e9Own);   // (the first look makes the log)
+        @proc_terminate($e9Proc); usleep(400000);
+        $e9Log = glob("$e9St/.gallery-visits-*.sqlite")[0] ?? null;
+        if ($e9Log === null) { check("[N34 a] the log was made ($e9Size bytes)", false); continue; }
+        foreach (["$e9Log-wal", "$e9Log-shm", "$e9St/.gallery-health-cache.php"] as $e9W) @unlink($e9W);
+        file_put_contents($e9Log, str_repeat('x', $e9Size)); chmod($e9Log, 0600); touch($e9Log, time() - 180);
+        $e9Proc2 = start_server($e9St, $e9Port);
+        [, , $e9H2] = http_post("$e9Base/?admin", ['access_code' => 'e9-admin-pw-1'], [], false); $e9Own2 = ['Cookie: ' . extract_cookie_header($e9H2)];
+        http_get("$e9Base/?admin&classic=1", $e9Own2);   // (the log is opened: it is found with no content)
+        $e9Csrf = admin_token($e9Base, $e9Own2);
+        $e9Panel = html_entity_decode((string) (json_decode(http_post("$e9Base/?admin", ['csrf_token' => $e9Csrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($e9Own2, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? ''));
+        $e9Stubs = glob("$e9St/.gallery-visits-*.damaged-*.sqlite") ?: [];
+        check("[N34 a] a log cut to $e9Size byte(s) is set aside as it is (renamed .damaged- and the date, nothing lost: it held nothing) and a new log is started", count($e9Stubs) === 1 && filesize($e9Stubs[0]) === $e9Size && is_file($e9Log) && filesize($e9Log) > 100, json_encode(array_map('basename', $e9Stubs)) . ' ' . (is_file($e9Log) ? filesize($e9Log) : 'no log'));
+        check("[N34 a] ...and Health says so ($e9Size byte(s)): a row that the log was found empty and started again, with the file's name, and the log is not called damaged", str_contains($e9Panel, 'The visitor log was found empty and started again') && str_contains($e9Panel, basename($e9Stubs[0] ?? 'x')) && !str_contains($e9Panel, 'The visitor log is damaged'), preg_match('~The visitor[^<]{0,160}~', strip_tags($e9Panel), $e9M) ? $e9M[0] : 'no row');
+        @proc_terminate($e9Proc2);
+    }
+    // a log that is being made right now is empty for an instant: a young empty file is left alone
+    if (extension_loaded('pdo_sqlite')) {
+        $y9St = new_fixture_dir('y9stage'); mkdir("$y9St/Alpha", 0777, true); make_jpeg("$y9St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+        file_put_contents("$y9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'e9-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        file_put_contents("$y9St/.gallery-visits-" . str_repeat('c', 24) . '.sqlite', '');   // (made a moment ago: its mtime is now)
+        copy($indexSrc, "$y9St/index.php"); @touch("$y9St/index.php", time() - 3600);
+        $y9Port = find_free_port(); $y9Proc = start_server($y9St, $y9Port); $y9Base = "http://127.0.0.1:$y9Port";
+        [, , $y9H] = http_post("$y9Base/?admin", ['access_code' => 'e9-admin-pw-1'], [], false);
+        http_get("$y9Base/?admin&classic=1", ['Cookie: ' . extract_cookie_header($y9H)]);
+        check('[N34 a] an empty log file that is only a moment old (a log being made) is not set aside', (glob("$y9St/.gallery-visits-*.damaged-*.sqlite") ?: []) === [], json_encode(array_map('basename', glob("$y9St/.gallery-visits-*") ?: [])));
+        @proc_terminate($y9Proc);
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// pass 9 N34 b: the backup's lock FILE can't be opened (another owner's, after a restore made as root): Back up now says that, and Health names the file; the folder is fine
+echo "== pass 9 N34 b: a lock file the web server can't open ==\n";
+{
+    $k9St = new_fixture_dir('k9stage'); mkdir("$k9St/Alpha", 0777, true); make_jpeg("$k9St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$k9St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'k9-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    file_put_contents("$k9St/.gallery-backup.lock", ''); chmod("$k9St/.gallery-backup.lock", 0444);
+    copy($indexSrc, "$k9St/index.php"); @touch("$k9St/index.php", time() - 3600);
+    if (is_writable("$k9St/.gallery-backup.lock")) skip_note('[N34 b] a file can be written whatever its mode here (the suite runs as root?)');
+    else {
+        $k9Port = find_free_port(); $k9Proc = start_server($k9St, $k9Port); $k9Base = "http://127.0.0.1:$k9Port";
+        [, , $k9H] = http_post("$k9Base/?admin", ['access_code' => 'k9-admin-pw-1'], [], false); $k9Own = ['Cookie: ' . extract_cookie_header($k9H)];
+        http_get("$k9Base/?admin&classic=1", $k9Own);
+        $k9Csrf = admin_token($k9Base, $k9Own);
+        $k9Run = json_decode(http_post("$k9Base/?admin", ['csrf_token' => $k9Csrf, 'action' => 'backup_run'], array_merge($k9Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+        $k9Say = (string) ($k9Run['text'] ?? $k9Run['msg'] ?? json_encode($k9Run));
+        check('[N34 b] Back up now with a lock file the web server can\'t open says the FILE can\'t be opened (another user\'s) and how to give it back, not "make the folder writable" (the folder is writable)', str_contains($k9Say, '.gallery-backup.lock') && str_contains($k9Say, 'may not open it') && str_contains($k9Say, 'chown') && !str_contains($k9Say, 'Make the folder writable'), $k9Say);
+        $k9Panel = html_entity_decode((string) (json_decode(http_post("$k9Base/?admin", ['csrf_token' => $k9Csrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($k9Own, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? ''));
+        check('[N34 b] ...and Health has the own-files red row naming the lock file', str_contains($k9Panel, 'of the gallery\'s own files') && str_contains($k9Panel, 'the lock file .gallery-backup.lock'), preg_match('~of the gallery\'s own files[^<]{0,200}~', strip_tags($k9Panel), $k9M) ? $k9M[0] : 'no row');
+        @proc_terminate($k9Proc);
+        @chmod("$k9St/.gallery-backup.lock", 0644);
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// pass 9 N34 d: the main settings file's reader keeps a whole number too big for PHP as the digits that were typed (it used to be a rounded float that an int setting would take as a number)
+echo "== pass 9 N34 d: a big whole number in the settings file ==\n";
+{
+    $c9 = json_decode((string) $g2Run($g2Fn('gallery_config_clean') . $g2Fn('data_file_strip_guard') . $g2Fn('gallery_config_parse') . 'echo json_encode(gallery_config_parse(\'{"BIG": 12345678901234567890123, "SMALL": 7, "FRAC": 1.5, "HUGEFRAC": 123456789012345678901.5}\'));'), true) ?: [];
+    check('[N34 d] a whole number of 23 digits in the settings file is read as those digits (text), not rounded; ordinary numbers are still numbers', ($c9[0] ?? '') === 'ok' && ($c9[1]['BIG'] ?? null) === '12345678901234567890123' && ($c9[1]['SMALL'] ?? null) === 7 && ($c9[1]['FRAC'] ?? null) === 1.5, json_encode($c9));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

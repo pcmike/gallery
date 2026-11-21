@@ -59,11 +59,20 @@ function visitlog_schema($pdo) {
 }
 
 function visitlog_open($file, $new) {
+    // A log file with no content (cut to nothing by a copy that failed or a disk that filled, or by hand) would be taken by SQLite for a new database: the tables are made again and the history is gone without a word.
+    // It is set aside as it is (renamed .damaged- and the date, as a log the owner sets aside is: nothing in it to lose), so there is a trace and Health can say so. Not while it is young: a log being made at this moment is empty for an instant.
+    if (!$new && is_file($file) && !is_link($file) && (int) @filesize($file) < 100 && time() - (int) @filemtime($file) > 60) {
+        $stub = preg_replace('~\.sqlite$~', '.damaged-' . gmdate('Ymd-His') . '.sqlite', $file);
+        if (!file_exists($stub) && @rename($file, $stub)) {
+            foreach (['-wal', '-shm'] as $sfx) if (is_file($file . $sfx) && !is_link($file . $sfx)) @rename($file . $sfx, $stub . $sfx);
+            $new = true;
+        }
+    }
     if ($new) { @touch($file); @chmod($file, 0600); }   // (made private before SQLite makes its side files, which copy the file's permissions)
     $pdo = new PDO('sqlite:' . $file);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('PRAGMA busy_timeout = 5000');
+    $pdo->exec('PRAGMA busy_timeout = ' . (int) ($GLOBALS['__visitlog_wait_ms'] ?? 5000));   // (a request that logs waits up to five seconds for a log another process holds; the Health look waits 1 s, so a held log shows as a row in a few seconds, not in fifteen)
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
