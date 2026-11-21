@@ -72,7 +72,7 @@ function health_heavy($dir, $files, $force) {
             if (@filesize($e['path']) === 0) { $r['stats']['empty'][] = $e['rel']; continue; }   // (SQLite takes a file of no bytes for a new database, so the counts began again from nothing without a word)
             $r['stats']['n']++;
             $w = backup_sqlite_check($e['path']);
-            if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
+            if ($w !== '') { $r['stats'][backup_sqlite_trouble($w) ? 'ro' : 'bad'][] = [$e['rel'], $w]; continue; }   // (a file SQLite can't open or write to for the folder's, the disk's or another owner's sake is not a damaged one)
             $w = stats_sqlite_write_check($e['path']);
             if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
             $w = stats_key_check($e['path']);
@@ -124,16 +124,18 @@ function health_database_rows($add, $dir, $files) {
     $logFile = visitlog_find();
     $logWhy = $heavy['log']['why'] ?? '';
     if ($logFile !== null && $logWhy !== '' && stripos($logWhy, 'unable to open') !== false && visitlog_driver_ok()) $logWhy = backup_sqlite_check($logFile);   // (a look kept from when the file could not be opened is not believed: the owner may have mended it since)
-    $logCantOpen = $logWhy !== '' && stripos($logWhy, 'unable to open') !== false;   // (the file or its side files can't be opened: another owner's, not damaged)
+    $logCantOpen = $logWhy !== '' && stripos($logWhy, 'unable to open') !== false;
+    $logTrouble = backup_sqlite_trouble($logWhy);   // (SQLite can't open or write it: another owner's files, a folder the web server can't write in, or no room left; the file itself may be sound)   // (the file or its side files can't be opened: another owner's, not damaged)
     $logLocked = function ($canRead) use ($add, $G, $logFile, $uses) {
-        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it (or to the small files SQLite keeps beside it)' : 'read or write it (or the small files SQLite keeps beside it)') . ' (a restore, or a copy made as root, leaves files with another owner). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. This does not mean the log is damaged. ' . $uses, null, '', [
+        $add($G, 'bad', 'The visitor and change log can\'t be ' . ($canRead ? 'written' : 'read or written'), 'The file ' . basename($logFile) . ' is there, but the web server may not ' . ($canRead ? 'write to it (or to the small files SQLite keeps beside it)' : 'read or write it (or the small files SQLite keeps beside it)') . ' (a restore, or a copy made as root, leaves files with another owner; a gallery folder the web server can\'t write in, or a disk with no room left, stops it the same way). Nothing is being logged. And because the Changes tab can\'t record it first, the caption, location and web link typed for a deleted or renamed photo are kept in the folder, not removed, until this is fixed. This does not mean the log is damaged. ' . $uses, null, '', [
             'Find the web server\'s user (usually `www-data` on Debian or Ubuntu; `nginx`, `apache` or `http` elsewhere: `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
             ['Give it the log files, for example:', 'sudo chown www-data: /path/to/the/gallery/.gallery-visits-*'],
             'If the files already belong to the web server\'s user and only their permissions were changed, this puts them right: `sudo chmod 600 /path/to/the/gallery/.gallery-visits-*`.',
+            'If the files are the web server\'s own, look at the gallery\'s folder (the Folders and files group says if the web server can\'t write in it: SQLite keeps two small files there beside the log) and at the room on the disk (the Server group).',
             'Then press Check again at the top of this page.']);
     };
-    if ($logFile !== null && visitlog_driver_ok() && (!@is_readable($logFile) || $logCantOpen)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
-        $logLocked(false);
+    if ($logFile !== null && visitlog_driver_ok() && (!@is_readable($logFile) || $logCantOpen || $logTrouble)) {   // (a file the server can't even open can't be looked through: it is not "damaged", it has another owner)
+        $logLocked(@is_readable($logFile) && !$logCantOpen);
     } elseif ($logFile !== null && $logWhy !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $logWhy . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
@@ -141,8 +143,8 @@ function health_database_rows($add, $dir, $files) {
         $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (visitlog_driver_ok() && $logFile !== null && !visitlog_ready()) {   // (the file is there and the web server may not write it: another user's after a restore, or set read-only)
         $logLocked(true);
-    } elseif (!$vlOk && visitlog_driver_ok() && $logFile !== null && preg_match('~readonly|read-only|unable to open|permission~i', (string) $vlWhy)) {   // (SQLite is there; the file, or the small files it keeps beside it, belong to another user or are read-only: not a missing SQLite)
-        $logLocked(true);
+    } elseif (!$vlOk && visitlog_driver_ok() && $logFile !== null) {   // (SQLite is there, the log is there, and it still can't be kept: another owner's files, the folder or the disk, whatever the look kept an hour ago said; never a missing SQLite)
+        $logLocked(@is_readable($logFile));
     } elseif (!$vlOk && visitlog_driver_ok()) {   // (SQLite is there and the log still can't be kept: its folder or the disk, not a missing SQLite)
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'The visitor log can\'t be written', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'If the disk or the account\'s storage is full, free some room (the Server group below says how much is left). Otherwise the web server must be allowed to write in the gallery\'s folder.',
@@ -182,7 +184,7 @@ function health_database_rows($add, $dir, $files) {
         $add($G, 'warn', 'A view-count database is empty in ' . $en . ' folder' . ($en === 1 ? '' : 's'), $statsNames($statsEmpty) . '. ' . ($en === 1 ? 'The file is' : 'The files are') . ' 0 bytes, so ' . ($en === 1 ? 'its' : 'their') . ' counts are gone and counting has started again from zero (a copy that failed, a disk that filled up, or the file was emptied). If you have the file in a backup or an earlier copy, put it back beside its .gallery-stats-key.php; if not, nothing needs doing, and this row goes away once the folder has counted a view.');
     }
     if ($statsRo) {
-        $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
+        $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t open or write to it (another owner\'s file, a folder it can\'t write in, or a disk with no room), so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
     }
     if ($heavy['stats']['n'] > 0 || ($heavy['stats']['bad'] ?? [])) {
         $bad = $heavy['stats']['bad'];
@@ -283,10 +285,10 @@ function health_volumes($dir, $files) {
         if (!$v) continue;
         $isHome = in_array('the gallery folder', $v['names'], true);
         $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
-        $out[] = ['name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
+        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
     }
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
-    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; } else $uniq[$k] = $v; }
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; } else $uniq[$k] = $v; }
     $out = array_values($uniq);
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
@@ -324,7 +326,7 @@ function health_server_rows($add) {
     $many = count($vols) > 1;
     foreach ($vols as $v) {
         $where = $many ? ' on ' . $v['name'] : '';
-        $ownDisk = in_array('the gallery folder', (array) ($v['names'] ?? []), true);   // (the logs, the backup and the gallery's own settings are in the gallery's folder: on another disk only each folder's own captions and thumbnails are)
+        $ownDisk = !empty($v['home']);   // (the logs, the backup and the gallery's own settings are in the gallery's folder: on another disk only each folder's own captions and thumbnails are)
         if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? ($ownDisk ? 'The gallery needs room for itself on this disk too, not only for your photos: captions and settings, thumbnails, view counts, the visitor and change logs and the backup are all kept here. When the disk is full they stop being saved, settings fail to save, the Changes tab can\'t record what is removed (so the captions of deleted photos are kept until there is room), and new photos can\'t be added.' : 'The gallery keeps things on this disk too, not only your photos: each folder\'s captions and settings and its thumbnails are saved inside the folder. When the disk is full they stop being saved, and new photos can\'t be added.') : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
         elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? ($ownDisk ? 'This disk holds more than the photos you share: the gallery keeps its captions and settings, thumbnails, view counts, logs and backup here, and they grow over time. If it runs out, saving fails and the logs (the Changes tab included) stop being kept. The Delete list in Settings shows what the gallery\'s own files take.' : 'This disk holds more than the photos you share: each folder\'s captions and settings and its thumbnails are saved inside the folder and grow over time. If it runs out, saving fails. The Delete list in Settings shows what the gallery\'s own files take.') : 'Little room is left to add photos there. (The gallery only reads it.)');
     }

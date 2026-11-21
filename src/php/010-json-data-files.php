@@ -67,7 +67,7 @@ function json_file_load($path, $defaultData) {
     if (data_file_is_link($path)) return ['broken', $defaultData];   // (never read through a link; for the folder's settings, can't be read means hidden)
     if (!file_exists($path)) return ['missing', $defaultData];
     $raw = @file_get_contents($path);
-    $decoded = $raw === false ? null : json_decode(data_file_strip_guard($raw), true);
+    $decoded = $raw === false ? null : json_decode(data_file_strip_guard($raw), true, 512, JSON_BIGINT_AS_STRING);   // (a whole number too big for PHP to hold, typed by hand, is kept as the digits that were typed, not rounded)
     if (!is_array($decoded)) return ['broken', $defaultData];
     return ['ok', array_merge($defaultData, $decoded)];
 }
@@ -113,7 +113,7 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
         return $data;
     }
     $raw = (string) stream_get_contents($fp);
-    $decoded = json_decode(data_file_strip_guard($raw), true);
+    $decoded = json_decode(data_file_strip_guard($raw), true, 512, JSON_BIGINT_AS_STRING);   // (same: a whole number too big to hold keeps its digits)
     if (is_array($decoded)) $data = array_merge($data, $decoded);
     $saved = false;
     if ($protect && !is_array($decoded) && $existed && !data_file_is_empty($raw)) {

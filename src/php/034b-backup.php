@@ -96,8 +96,15 @@ function backup_sqlite_check($path) {
         if (!$q || $q[0] !== 'ok') { $n = 0; foreach ($q as $line) if (strpos((string) $line, '***') === false && trim((string) $line) !== '') $n++; $n = max(1, $n); return 'is damaged (SQLite found ' . $n . ' problem' . ($n === 1 ? '' : 's') . ' inside it)'; }
         return '';
     } catch (Throwable $e) {
-        return 'is damaged or can\'t be read (' . substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120) . ')';
+        $m = substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120);
+        if (preg_match('~readonly|read-only|disk I/O|unable to open|permission|is locked|or disk is full~i', $m)) return 'could not be opened or written to (' . $m . ')';   // (the file may be sound: the folder, the disk or another owner's files stop SQLite; only what SQLite says about the pages themselves is "damaged")
+        return 'is damaged or can\'t be read (' . $m . ')';
     }
+}
+
+/** Is a reason given by backup_sqlite_check one of trouble in getting at a file (owner, folder, disk room), not of a damaged file? */
+function backup_sqlite_trouble($why) {
+    return strncmp((string) $why, 'could not be opened or written to', 33) === 0;
 }
 
 /** A SQLite file looked at and copied whole: '' when it is sound and $dest now holds a sound copy, else the reason. */

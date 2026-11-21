@@ -203,7 +203,7 @@ function changes_record_removed_data($folderRel, array $gone) {
     $note = 'datahold:' . md5((string) $folderRel); $hash = md5(implode("\n", array_column($rows, 0)));
     $ok = visitlog_tx(function ($db) use ($folderRel, $rows, $now, $note, $hash) {
         // (notes older than 30 days go: a folder renamed or emptied while its save was stuck would keep its note for good; a folder that is still stuck after that writes its entry once more)
-        $db->prepare('DELETE FROM meta WHERE k LIKE ? AND CAST(substr(v, 34) AS INTEGER) < ?')->execute(['datahold:%', $now - 30 * 86400]);
+        $db->prepare('DELETE FROM meta WHERE k LIKE ? AND k <> ? AND instr(v, \'@\') > 0 AND CAST(substr(v, 34) AS INTEGER) < ?')->execute(['datahold:%', $note, $now - 30 * 86400]);   // (not the note of the folder being asked about, and not a note made without a time by an earlier development build: the first is handled just below, the second is replaced when its folder writes again)
         $has = $db->prepare('SELECT v FROM meta WHERE k = ?'); $has->execute([$note]);
         if (explode('@', (string) $has->fetchColumn())[0] === $hash) {   // (asked once before and the caller could not finish: if every entry is still in the log, nothing is written again)
             $in = $db->prepare('SELECT 1 FROM changes WHERE kind = ? AND folder = ? AND names = ? LIMIT 1'); $all = true;

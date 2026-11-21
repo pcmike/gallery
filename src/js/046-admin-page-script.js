@@ -3284,7 +3284,7 @@
       [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
       var q = search.value.trim().toLowerCase(), c = chosen(), shown = 0, last = '';
       [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
-        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0 || (found.q === q && found.ids[e.getAttribute('data-id')] === 1));
+        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').toLowerCase().indexOf(q) >= 0 || (found.q === q && found.ids[e.getAttribute('data-id')] === 1));
         e.hidden = !ok; if (!ok) return;
         shown++;
         var d = dayOf(+e.getAttribute('data-t'));

@@ -3554,6 +3554,14 @@ try:
         b.js("(function () { var q = document.querySelector('.ch-search'); q.value = 'GHOST caption WORDS'; q.dispatchEvent(new Event('input', {bubbles: true})); })()"); b.drain(1.5)
         gl = b.js("(() => { const e = document.querySelector('.ch-e[data-g=data][data-text*=ghost-typed]'); return {shown: !!e && !e.hidden, n: document.querySelectorAll('.ch-e:not([hidden])').length}; })()")
         ok(gl["shown"] and gl["n"] == 1, "[changes tab] typing words that were typed for a photo (a caption, in capitals) shows the entry that holds them, and only that one", str(gl))
+        # a photo's NAME with an accented capital in it (the list's text is lowered by the server, which only knows plain letters): typing it in lower case finds it
+        open(SITE_L + "/Rome/\u00c9cole-new.jpg", "wb").write(open(SITE_L + "/Rome/r1.jpg", "rb").read())
+        comes_back(); b.drain(1.0)
+        b.js("(function () { var q = document.querySelector('.ch-search'); q.value = '\u00e9cole-new'; q.dispatchEvent(new Event('input', {bubbles: true})); })()"); b.drain(1.0)
+        gl = b.js("(() => ({n: document.querySelectorAll('.ch-e:not([hidden])').length, t: [].map.call(document.querySelectorAll('.ch-e:not([hidden])'), e => e.textContent.indexOf('cole-new') >= 0).every(Boolean)}))()")
+        try: os.unlink(SITE_L + "/Rome/\u00c9cole-new.jpg")
+        except OSError: pass
+        ok(gl["n"] >= 1 and gl["t"], "[changes tab] typing a photo's name in lower case finds an entry that holds it with an accented capital (\u00c9cole-new.jpg found by \u00e9cole-new)", str(gl))
         b.js("(function () { var q = document.querySelector('.ch-search'); q.value = 'chtab'; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
         # the kinds list is the Visitors tab's own (a list under the chip: rows with a tick, Done), stays open while ticking, Esc and Done close it
         b.js("document.querySelector('#changes .ch-pill').click()"); b.drain(0.3)

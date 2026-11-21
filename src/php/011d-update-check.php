@@ -83,10 +83,12 @@ function update_claim_try($force) {
     if (!$force && !update_check_due()) return false;
     $got = false;
     $defaults = ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0];
-    json_file_update(update_state_path(), $defaults, function (&$d) use (&$got, $force) {
+    $sp = update_state_path(); unset($GLOBALS['__data_write_cause'][$sp]);
+    json_file_update($sp, $defaults, function (&$d) use (&$got, $force) {
         if (!$force && time() - (int) ($d['triedAt'] ?? 0) < 86400) return;   // (another request took it a moment ago)
-        $d['triedAt'] = time(); $got = true;
+        $d['triedAt'] = time() - 82800; $got = true;   // (held for one hour only: the answer, or the failure, writes the real time and holds for the day; a request that dies while it waits is looked at again within the hour)
     }, true);
+    if (!$got && !$force && isset($GLOBALS['__data_write_cause'][$sp])) return true;   // (the state file can't be written, so nothing can be claimed: it asks as it always did, rather than never)
     return $got || $force;
 }
 

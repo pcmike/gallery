@@ -67,6 +67,8 @@ function changes_data_find($term) {
             $names = json_decode((string) $r['names'], true);
             if (!is_array($names)) continue;
             $hay = implode("\n", array_map('strval', $names));
+            $bare = preg_replace('/(?<= — |^| · )(?:Caption|Web link|Name|Place|Location \(as saved\)|Location|Odd|Entry): /mu', '', $hay);   // (the labels the gallery puts in front of each field are not what was typed: a word like "caption" finds the entries that hold it, not every entry that has one)
+            if (is_string($bare)) $hay = $bare;
             $hit = preg_match($re, $hay);
             if ($hit === false) $hit = stripos($hay, $term) !== false ? 1 : 0;   // (text that is not valid UTF-8: the plain look)
             if ($hit === 1) { $ids[] = (int) $r['id']; if (count($ids) >= 1000) break; }

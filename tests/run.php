@@ -553,6 +553,54 @@ function find_free_port() {
     return (int) substr($name, strrpos($name, ':') + 1);
 }
 
+/** The test servers, by port: [process, the number of the last request that went to it, the command that started it, whether it is up]. A full run starts hundreds, and each one grows to ~55 MB once it has
+ *  served pages: left running they are the biggest thing the run holds in memory (~13 GB of the box's 16), enough to starve the machine. A server holds nothing of its own (its files, sessions and caches are on
+ *  disk), so when more than SERVER_KEEP are up the ones used least recently are stopped, and one that is asked for again through http_get / http_post is started again on the same port with the same command. */
+const SERVER_KEEP = 30;
+$serverLive = [];
+$requestTick = 0;
+function server_start_cmd($cmd) {
+    global $cleanupProcs;
+    $proc = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+    if (!is_resource($proc)) { fwrite(STDERR, "Could not start the PHP built-in server\n"); exit(1); }
+    $cleanupProcs[] = $proc;
+    $port = (int) substr((string) $cmd[4], strrpos((string) $cmd[4], ':') + 1);
+    $deadline = microtime(true) + 15;
+    while (microtime(true) < $deadline) {
+        $conn = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
+        if ($conn) { fclose($conn); return $proc; }
+        usleep(100000);
+    }
+    fwrite(STDERR, "Server on port $port did not start in time\n");
+    exit(1);
+}
+function server_touch($url) {
+    global $serverLive, $requestTick;
+    $requestTick++;
+    if (!preg_match('~^https?://127\.0\.0\.1:(\d+)~', (string) $url, $m) || !isset($serverLive[(int) $m[1]])) return;
+    $port = (int) $m[1];
+    if (!$serverLive[$port][3]) {   // stopped to save memory: started again, as it was
+        $serverLive[$port][0] = server_start_cmd($serverLive[$port][2]);
+        $serverLive[$port][3] = true;
+    }
+    $serverLive[$port][1] = $requestTick;
+    server_reap();
+}
+function server_reap($keep = SERVER_KEEP) {
+    global $serverLive;
+    $up = array_filter($serverLive, function ($e) { return $e[3]; });
+    if (count($up) <= $keep) return;
+    uasort($up, function ($a, $b) { return $a[1] <=> $b[1]; });
+    foreach ($up as $port => $e) {
+        if (count(array_filter($serverLive, function ($x) { return $x[3]; })) <= $keep) break;
+        if (is_resource($e[0])) {   // (the process resource stays valid: a test that stops its server itself later finds it already stopped; the wait is so a server asked for again at once does not connect to the one that is still closing)
+            @proc_terminate($e[0]);
+            for ($w = 0; $w < 40; $w++) { $st = @proc_get_status($e[0]); if (!is_array($st) || !$st['running']) break; usleep(50000); }
+        }
+        $serverLive[$port][3] = false;
+    }
+}
+
 function start_server($docroot, $port, $router = null) {
     global $cleanupProcs;
     // argv-array form (no `sh -c` in between) so proc_terminate() in the
@@ -580,6 +628,9 @@ function start_server($docroot, $port, $router = null) {
         $conn = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
         if ($conn) {
             fclose($conn);
+            global $serverLive, $requestTick;
+            $serverLive[(int) $port] = [$proc, ++$requestTick, $cmd, true];
+            server_reap();
             return $proc;
         }
         usleep(100000);
@@ -601,6 +652,7 @@ function changes_full_html($base, $headers) {
     return [$j, $html];
 }
 function http_get($url, $headers = [], $followRedirects = true) {
+    server_touch($url);
     $opts = ['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 5]];
     if (!$followRedirects) {
         $opts['http']['follow_location'] = 0;
@@ -623,6 +675,7 @@ function http_get($url, $headers = [], $followRedirects = true) {
 /** POST request with a form-urlencoded body. Returns [statusCode, body,
  *  headerLines], same shape as http_get(). */
 function http_post($url, $postData, $headers = [], $followRedirects = true) {
+    server_touch($url);
     $opts = ['http' => [
         'method' => 'POST',
         'header' => implode("\r\n", array_merge(['Content-Type: application/x-www-form-urlencoded'], $headers)),
@@ -13676,14 +13729,21 @@ echo "== chunk 9 follow-up N17 d/i: empty folders in Health, invisible note name
     $deNote = fn (array $f) => json_decode(http_post("$deBase/?admin&folder=Alpha", $f + ['csrf_token' => $deCsrf, 'action' => 'save_notes', 'md_file' => '', 'content' => "{gallery}\nbody\n"], array_merge($deOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
     $deBefore = glob("$deFx/Alpha/*.md") ?: [];
     $deBad = [];
-    foreach (["\u{200B}", "\u{200B}.md", " \u{00A0} ", "\u{FEFF}\u{200D}", "\u{3164}", "\u{115F}\u{1160}", "\u{2800}", "\u{034F}", "\u{FE0F}", "\u{FFA0}.md", '.md', ''] as $nm) { $r = $deNote(['new_name' => $nm]); if (($r['ok'] ?? true) !== false || (glob("$deFx/Alpha/*.md") ?: []) !== $deBefore || (glob("$deFx/Alpha/.*md") ?: []) !== []) $deBad[] = [$nm, $r]; }
+    foreach (["\u{200B}", "\u{200B}.md", " \u{00A0} ", "\u{FEFF}\u{200D}", "\u{3164}", "\u{115F}\u{1160}", "\u{2800}", "\u{034F}", "\u{FE0F}", "\u{FFA0}.md", "\u{1D159}", "\u{16FE4}", "\u{FFFC}", "\u{180B}", "\u{180F}", '.md', ''] as $nm) { $r = $deNote(['new_name' => $nm]); if (($r['ok'] ?? true) !== false || (glob("$deFx/Alpha/*.md") ?: []) !== $deBefore || (glob("$deFx/Alpha/.*md") ?: []) !== []) $deBad[] = [$nm, $r]; }
     check('[N17 i] a new note named with only an invisible character, spaces or nothing before .md is refused, and nothing is written', $deBad === [], json_encode($deBad));
     $deOk = $deNote(['new_name' => "trip\u{200B}"]);
     check('[N17 i] ...and a name with something to see in it still saves', ($deOk['ok'] ?? false) === true && count(glob("$deFx/Alpha/*.md") ?: []) === 1, json_encode($deOk));
-    // a note that is already there under a name with nothing to see (earlier versions allowed it) can still be saved, under the name it has
-    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nold\n");
+    // a note that is already there under a name with nothing to see (earlier versions allowed it, or it was made by hand) is not saved under that name either: it is moved to a name that is typed
+    file_put_contents("$deFx/Alpha/\u{200B}.md", "{gallery}\nold\n"); file_put_contents("$deFx/Alpha/.md", "{gallery}\nhand-made\n");
     $deKeep = $deNote(['md_file' => "\u{200B}.md", 'new_name' => '', 'content' => "{gallery}\nedited\n"]);
-    check('[N27 f] ...and a note that is already there under such a name can still be saved, keeping the name it has', ($deKeep['ok'] ?? false) === true && str_contains((string) @file_get_contents("$deFx/Alpha/\u{200B}.md"), 'edited'), json_encode($deKeep));
+    $deKeep2 = $deNote(['md_file' => '.md', 'new_name' => '', 'content' => "{gallery}\nedited\n"]);
+    check('[N32 h] a note that is already there under a name with nothing to see is refused when saved under that name: the answer says why and what to do, and the file is as it was', ($deKeep['ok'] ?? true) === false && ($deKeep2['ok'] ?? true) === false && str_contains((string) ($deKeep['msg'] ?? $deKeep['text'] ?? json_encode($deKeep)), 'nothing to see') && str_contains((string) @file_get_contents("$deFx/Alpha/\u{200B}.md"), 'old') && str_contains((string) @file_get_contents("$deFx/Alpha/.md"), 'hand-made'), json_encode($deKeep) . json_encode($deKeep2));
+    $deMove = $deNote(['md_file' => "\u{200B}.md", 'new_name' => 'moved-note', 'content' => "{gallery}\nedited\n"]);
+    $deMove2 = $deNote(['md_file' => '.md', 'new_name' => 'moved-two.md', 'content' => "{gallery}\nedited two\n"]);
+    check('[N32 h] ...and with a name typed, the note is moved to it: the new note holds what was typed and the one with no name to see is gone', ($deMove['ok'] ?? false) === true && ($deMove2['ok'] ?? false) === true && str_contains((string) @file_get_contents("$deFx/Alpha/moved-note.md"), 'edited') && str_contains((string) @file_get_contents("$deFx/Alpha/moved-two.md"), 'edited two') && !file_exists("$deFx/Alpha/\u{200B}.md") && !file_exists("$deFx/Alpha/.md"), json_encode([$deMove, $deMove2]));
+    // a note that is not nameless, saved under a new name, stays where it is (a copy, as before): only a note with no name to see is moved
+    $deCopy = $deNote(['md_file' => 'trip' . "\u{200B}" . '.md', 'new_name' => 'trip-copy', 'content' => "{gallery}\ncopy\n"]);
+    check('[N32 h] ...a note with a name to see that is saved under a new name is not moved: it stays', ($deCopy['ok'] ?? false) === true && is_file("$deFx/Alpha/trip\u{200B}.md") && is_file("$deFx/Alpha/trip-copy.md"), json_encode($deCopy));
     @proc_terminate($deProc);
 }
 
@@ -13723,6 +13783,7 @@ echo "== chunk 9 follow-up N15: the removed data is completely in the Changes ta
     $tdByWord = $tdFind('Caption number 205'); $tdByNameUp = $tdFind('GONE205.JPG'); $tdNone = $tdFind('no such words anywhere'); $tdAccent = $tdFind(str_repeat("\u{00C9}", 5)); $tdAccent2 = $tdFind(str_repeat("\u{00E9}", 5));
     check('[N15 search] a word that was typed for a photo (a caption) finds the entry that holds it, and only that one; capitals do not matter; the photo\'s name finds it too', is_array($tdByWord) && count($tdByWord) === 1 && $tdByNameUp === $tdByWord, json_encode([$tdByWord, $tdByNameUp]));
     check('[N15 search] words that are nowhere answer an empty list; letters beyond ASCII are found whatever their case; an empty search finds nothing; a stranger gets nothing of it', $tdNone === [] && is_array($tdAccent) && count($tdAccent) >= 1 && $tdAccent === $tdAccent2 && $tdFind('') === [] && !is_array(json_decode(http_get("$tdBase/?admin&changes_find=Caption")[1], true)), json_encode([$tdNone, $tdAccent]));
+    check('[N32 b] the search finds what was typed, not the labels the gallery puts in front of it: "Web link" finds nothing (the one entry that has a web link is not "every entry with a web link"), while the link itself finds that entry', $tdFind('Web link') === [] && count((array) $tdFind('example.com/e')) === 1, json_encode([$tdFind('Web link'), $tdFind('example.com/e')]));
     check('[N15] a caption of 1,000 emoji is in the log whole (never cut inside a letter), beside the plain one, and the long mixed caption and its 400-letter place are whole too', str_contains($tdTxt, $tdEmoji) && str_contains($tdTxt, 'A short plain caption') && str_contains($tdTxt, $tdMixed) && str_contains($tdTxt, str_repeat("\u{00E9}", 400)) && str_contains($tdTxt, 'https://example.com/e'), strlen($tdTxt));
     // the log is kept but refuses the write (a trigger in the table stands in for a full disk or a broken file): nothing is removed, the owner is told, and the next look does it
     if (!extension_loaded('pdo_sqlite')) {
@@ -13782,6 +13843,27 @@ echo "== chunk 9 follow-up N18: the update check does not hold the sign-in ==\n"
     stream_set_timeout($ugSock2, 8); stream_get_contents($ugSock2); fclose($ugSock2);
     $ugHits = strlen((string) @file_get_contents("$ugSlow/hits.txt"));
     check('[N22 h] four admin pages ask for the daily look half a second apart while the first answer is still waited for: the releases page is asked once, not four times', $ugHits === 1, 'asked ' . $ugHits);
+    // the claim holds the next daily look back for one hour only (the answer or the failure then writes the real time and holds for the day), so a request that dies while it waits is looked at again within the hour
+    foreach (glob("$ugFx/.gallery-update*") ?: [] as $ugOld) @unlink($ugOld);
+    $ugSock3 = @stream_socket_client("tcp://127.0.0.1:$ugPort", $e1, $e2, 3);
+    fwrite($ugSock3, "POST /?admin HTTP/1.1\r\nHost: 127.0.0.1:$ugPort\r\nCookie: $ugCookie\r\nX-Requested-With: gallery-fetch\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($ugBody2) . "\r\nConnection: close\r\n\r\n$ugBody2");
+    usleep(900000);   // (waiting for the releases page: the claim is what is in the file now)
+    $ugSt = glob("$ugFx/.gallery-update*") ?: []; $ugClaim = $ugSt ? (json_decode(data_file_strip_guard_for_tests((string) file_get_contents($ugSt[0])), true)['triedAt'] ?? null) : null;
+    stream_set_timeout($ugSock3, 8); stream_get_contents($ugSock3); fclose($ugSock3);
+    check('[N32 f] while the releases page is waited for, the daily look is held back for one hour (not a whole day): a request that dies there is looked at again within the hour', is_int($ugClaim) && abs((time() - $ugClaim) - 82800) < 300, json_encode([$ugClaim, time()]));
+    // a state file that can't be written: nothing can be claimed, so the look is made as it always was (never silently not made)
+    $ugSt = glob("$ugFx/.gallery-update*") ?: [];
+    if (!$ugSt) skip_note('[N32 f] no update state file to make unwritable');
+    else {
+        file_put_contents($ugSt[0], data_file_guard_line_for_tests() . json_encode(['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0]) . "\n"); @chmod($ugSt[0], 0444);
+        if (is_writable($ugSt[0])) skip_note('[N32 f] the state file can be written whatever its mode here');
+        else {
+            @unlink("$ugSlow/hits.txt");
+            http_post("$ugBase/?admin", ['csrf_token' => $ugCsrf, 'action' => 'update_check'], array_merge($ugOwn, ['X-Requested-With: gallery-fetch']));
+            check('[N32 f] with an update state file that can\'t be written the daily look is still made (it is asked, not silently never)', strlen((string) @file_get_contents("$ugSlow/hits.txt")) >= 1, 'asked ' . strlen((string) @file_get_contents("$ugSlow/hits.txt")));
+            @chmod($ugSt[0], 0644);
+        }
+    }
     foreach ([$ugSlowProc, $ugProc] as $ugP) @proc_terminate($ugP);   // (the suite keeps every server until its end: these are done)
 }
 
@@ -13825,7 +13907,7 @@ echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log o
         skip_note('[Health] the settings file can be written here whatever its mode, so an unwritable one can\'t be made');
     } else {
         $p5Health2 = html_entity_decode((string) http_get("$p5Base/?admin&classic=1", $p5Own)[1]);
-        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own files is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}-exec chown -h www-data~s', $p5Health2) === 1);
+        check('[Health] a settings file of a folder that the web server may not write is named in a loud row (not writable, the folder itself being fine), with how to fix it', preg_match('~1 of the gallery\'s own files is not writable by the web server.{0,900}Alpha \(the settings file for its photos\).{0,2500}-execdir chown -h www-data~s', $p5Health2) === 1);
     }
     @chmod($p5Itf, 0644);
     proc_terminate($p5Proc);
@@ -13879,6 +13961,11 @@ echo "== pass 5: an unwritable log keeps the data, a stuck save writes the log o
             $fzFront = html_entity_decode((string) http_get("$fzBase/", $fzOwn2)[1]);
             check('[N20] ...and the owner is told the truth: written in the Changes tab but still in the folder because its file could not be saved, and NOT that it was cleaned up', str_contains($fzFront, 'written in the Changes tab, but still in the folder "Asia"') && !str_contains($fzFront, 'was cleaned up'), substr(strip_tags($fzFront), 0, 300));
             check('[N20] ...and still one entry after the owner\'s look', $fzRows() === 1, 'entries ' . $fzRows());
+            // a folder that stays stuck for more than 30 days: its own note is not thrown away by the 30-day tidy-up, so its entry is not written a second time
+            $fzLog = glob("$fzFx/.gallery-visits-*.sqlite")[0] ?? null;
+            if ($fzLog) { $fzDb = new PDO('sqlite:' . $fzLog); $fzDb->exec("UPDATE meta SET v = substr(v, 1, 32) || '@' || " . (time() - 40 * 86400) . " WHERE k LIKE 'datahold:%'"); $fzNotes = (int) $fzDb->query("SELECT COUNT(*) FROM meta WHERE k LIKE 'datahold:%'")->fetchColumn(); $fzDb = null; }
+            foreach (['/?folder=Asia', '/'] as $fzPath) http_get($fzBase . $fzPath);
+            check('[N32 c] a folder still stuck after more than 30 days keeps its note and its one entry (the tidy-up of old notes does not remove the note of the folder it is asked about)', ($fzNotes ?? 0) === 1 && $fzRows() === 1, 'notes ' . ($fzNotes ?? 'none') . ' entries ' . $fzRows());
         }
         @proc_terminate($fzProc);
     }
@@ -13896,7 +13983,7 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
     check('[N22 d] the public-address rule also refuses the local-use NAT64 range (64:ff9b:1::/48) and the IPv4-translated form (::ffff:0:a.b.c.d), and still accepts the address next to them', $o5Wrong === [], json_encode($o5Wrong));
     // (c) a photo's data in a shape the gallery never writes (a hand-edited file) is written down as it is, not as "nothing typed"
     $o5Fx = new_fixture_dir('oddlog'); mkdir("$o5Fx/Alpha", 0777, true); make_jpeg("$o5Fx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
-    file_put_contents("$o5Fx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a2.jpg' => ['caption' => 'stays'], 'g1.jpg' => ['location' => ['lat' => 12.5]], 'g2.jpg' => ['location' => ['lat' => 1, 'lng' => 2, 'label' => 'Paris', 'zoom' => 9]], 'g3.jpg' => 'an odd entry', 'g4.jpg' => ['caption' => 'typed']]]) . "\n");
+    file_put_contents("$o5Fx/Alpha/.gallery-items.php", str_replace('"__BIG__"', '12345678901234567890123', data_file_guard_line_for_tests() . json_encode(['items' => ['a2.jpg' => ['caption' => 'stays', 'odd' => '__BIG__'], 'g1.jpg' => ['location' => ['lat' => 12.5]], 'g2.jpg' => ['location' => ['lat' => 1, 'lng' => 2, 'label' => 'Paris', 'zoom' => 9]], 'g3.jpg' => 'an odd entry', 'g4.jpg' => ['caption' => 'typed'], 'g5.jpg' => ['caption' => 'big number', 'odd' => '__BIG__']]]) . "\n"));   // (g5: a whole number of 23 digits typed by hand, which PHP can't hold exactly)
     file_put_contents("$o5Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'o5-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
     copy($indexSrc, "$o5Fx/index.php"); @touch("$o5Fx/index.php", time() - 3600);
     $o5Port = find_free_port(); $o5Proc = start_server($o5Fx, $o5Port); $o5Base = "http://127.0.0.1:$o5Port";
@@ -13907,6 +13994,11 @@ echo "== pass 5 N22: odd data in the log, two more address forms, a cut-short lo
     // a number too big for PHP, typed by hand (1e999 is read back as infinity): written as words wherever it sits, nothing else in the entry is lost
     $o5Big = json_decode((string) $g2Run($g2Fn('changes_data_finite') . $g2Fn('changes_data_line') . 'echo json_encode([changes_data_line("g.jpg", ["caption" => "has a big number", "location" => ["lat" => INF, "lng" => 2.5], "odd" => [INF, "kept?"]]), changes_data_line("h.jpg", ["caption" => "x", "location" => ["lat" => 1.5, "lng" => -INF, "label" => "Rome"]])], JSON_UNESCAPED_UNICODE);'), true) ?: [];
     check('[N22 e] a number too large for PHP, in a location or inside a list, is written as "(a number too large to keep)" (it was written as nothing), and the rest of the entry is kept', is_array($o5Big) && str_contains($o5Big[0] ?? '', 'Caption: has a big number') && substr_count($o5Big[0] ?? '', '(a number too large to keep)') === 2 && str_contains($o5Big[0] ?? '', 'kept?') && str_contains($o5Big[1] ?? '', 'Place: Rome') && str_contains($o5Big[1] ?? '', '(a number too large to keep)'), json_encode($o5Big));
+    // N27 e (the rest of it): a whole number of 23 digits typed by hand into a data file keeps every digit: in the Changes tab, and in the file after the gallery saves something else in it
+    check('[N27 e] a whole number of 23 digits typed by hand is written in the Changes tab with every digit (it was rounded to 1.2345678901235E+22)', str_contains($o5Txt, '12345678901234567890123') && !str_contains($o5Txt, 'E+22'), substr($o5Txt, 0, 500));
+    $o5Sv = item_save("$o5Base/?admin&folder=Alpha", $o5Own, 'a2.jpg', ['caption' => 'stays, saved again']);
+    $o5Raw = (string) @file_get_contents("$o5Fx/Alpha/.gallery-items.php");
+    check('[N27 e] ...and when the gallery saves in that file the digits are still there (as typed, not rounded to 1.2345678901235e+22)', str_contains($o5Raw, 'stays, saved again') && str_contains($o5Raw, '12345678901234567890123') && !preg_match('/e\+22/i', $o5Raw), substr($o5Raw, 0, 400));
     proc_terminate($o5Proc);
     // (e) a gallery just over the limit of folders it shows is looked through whole (the old files beyond the 2,000th are found too, and nothing says the look was cut short); only a tree far past the limit is cut
     $o5Cut = new_fixture_dir('oddcut'); mkdir("$o5Cut/Alpha", 0777, true); make_jpeg("$o5Cut/Alpha/a1.jpg", 40, 30, 20, 90, 160);
@@ -13980,7 +14072,9 @@ $r = geo_http("https://8.8.8.8/start", "GET", [], 30000000, $GLOBALS["sc"]["time
     $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111', '2606:4700:4700::1001'], 'v4status' => 0, 'v4errno' => 7, 'timeout' => 4, 'v4sleep' => 1200000]);
     check('[N23] the tries share one time limit: after 1.2 s of a 4 s limit the further try is given what is left (3 s), not a whole new 4 s', ($a['status'] ?? null) === 200 && ($a['timeouts'] ?? null) === [4, 4, 3], json_encode($a));
     $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 7, 'timeout' => 2, 'v4sleep' => 1500000]);
-    check('[N23] ...and when almost nothing is left (under 2 s) there is no further try', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    check('[N23] ...and when almost nothing is left (under 1 s) there is no further try', ($a['status'] ?? null) === 0 && ($a['pins'] ?? null) === [null, '8.8.4.4'], json_encode($a));
+    $a = $v6Run(['ips' => ['8.8.4.4'], 'v6list' => ['2606:4700:4700::1111'], 'v4status' => 0, 'v4errno' => 7, 'timeout' => 3, 'v4sleep' => 1500000]);
+    check('[N32 e] with 1.5 s of a 3 s limit left the further try is made (2 s is not a floor: a connection that is going to work takes a fraction of that)', ($a['status'] ?? null) === 200 && ($a['pins'] ?? null) === [null, '8.8.4.4', '2606:4700:4700::1111'] && (($a['timeouts'] ?? [])[2] ?? null) === 2, json_encode($a));
     // the real curl branch, where this PHP has curl: a closed port (nothing to connect to) and a listening port that never answers (connected, then silent)
     $v6Curl = json_decode($g2Run('if (!function_exists("curl_init")) { echo json_encode(["nocurl" => true]); exit; }
 define("GALLERY_VERSION", "test");
@@ -14068,7 +14162,17 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
         check('[N24] a folder\'s settings file that can\'t be opened for saving: the entry of the gone photo is still in it and nothing is in the Changes tab', isset($p6Left['a1.jpg']) && $p6Rows() === 0, json_encode($p6Left) . ' rows ' . $p6Rows());
         check('[N24] ...and the owner is told the truth (still in the folder, its settings file can\'t be written, nothing removed and nothing written in the Changes tab), NOT that it was cleaned up', str_contains($p6Front, 'still in the folder "Alpha"') && str_contains($p6Front, 'its settings file could not be saved (the web server may not open it for writing: it has another owner, or is read-only), so nothing was removed and nothing was written in the Changes tab') && !str_contains($p6Front, 'cleaned up'), substr(strip_tags($p6Front), 0, 400));
         $p6Health = html_entity_decode((string) http_get("$p6Base/?admin&classic=1", $p6Own)[1]);
-        check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', preg_match('~1 of the gallery\'s own files is not writable by the web server.{0,3500}\S{1,3} -name \'\.gallery-\*\' -o -path \'\*/\.gallery-cache/\*\' \S{1,3} ! -type l -exec chown -h www-data: \{\} \+~s', $p6Health) === 1 && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
+        $p6ChownCmd = <<<'CMD'
+sudo find /path/to/the/gallery/ \( -type f \( -name '.gallery-*.php' -o -name '.gallery-*.lock' -o -name '.gallery-*.sqlite*' -o -name '.gallery-*.zip' -o -name '.gallery-*.tmp' -o -name '.gallery-stats.json' -o -name '.gallery-setup' \) -o -type d -name '.gallery-cache' -o -path '*/.gallery-cache/*' \) ! -type l -execdir chown -h www-data: {} +
+CMD;
+        check('[N26] the red row for the gallery\'s own files gives a command that touches only the .gallery- files, not the photos and folders', str_contains($p6Health, '1 of the gallery\'s own files is not writable by the web server') && str_contains($p6Health, $p6ChownCmd) && !str_contains($p6Health, 'chown -R www-data: /path/to/the/gallery'));
+        @chmod("$p6Fx/Alpha", 0555);
+        if (is_writable("$p6Fx/Alpha")) skip_note('[N32 g] a folder can be written whatever its mode here');
+        else {
+            $p6Front2 = html_entity_decode((string) http_get("$p6Base/", $p6Own)[1]);
+            check('[N32 g] when the settings file AND its folder can\'t be written the note says both, not only the folder', str_contains($p6Front2, 'neither it nor its folder may be written by the web server') && !str_contains($p6Front2, '(its folder is not writable by the web server)'), substr(strip_tags($p6Front2), 0, 400));
+        }
+        @chmod("$p6Fx/Alpha", 0755);
         @chmod($p6Itf, 0644);
         http_get("$p6Base/");
         $p6Left = json_decode(data_file_strip_guard_for_tests((string) file_get_contents($p6Itf)), true)['items'] ?? [];
@@ -14162,20 +14266,31 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
     // N26: the two commands in the red row, run for real on a small tree: they reach the gallery's own files and the thumbnail folders (and what is inside them), never a photo or a folder of photos, and a
     // link named like one of the gallery's files is left alone (and so is what it points to, outside)
     $p6Page = html_entity_decode((string) ($p6Health ?? ''));
-    if (preg_match('~sudo (find /path/to/the/gallery/ .{1,200}? -exec chmod g\+w \{\} \+)~', $p6Page, $p6Cm) && preg_match('~sudo (find /path/to/the/gallery/ .{1,200}? -exec chown -h www-data: \{\} \+)~', $p6Page, $p6Co)) {
+    if (preg_match('~sudo (find /path/to/the/gallery/ .{1,400}? -execdir chmod g\+w \{\} \+)~', $p6Page, $p6Cm) && preg_match('~sudo (find /path/to/the/gallery/ .{1,500}? -execdir chown -h www-data: \{\} \+)~', $p6Page, $p6Co)) {
         $p6T = new_fixture_dir('p6cmd'); $p6Out2 = new_fixture_dir('p6out'); mkdir("$p6T/Photos/.gallery-cache", 0755, true);
-        foreach (["$p6T/Photos/.gallery-items.php", "$p6T/Photos/.gallery-cache/t1.jpg", "$p6T/Photos/.gallery-cache/meta1.php", "$p6T/Photos/pic.jpg", "$p6Out2/outside.txt"] as $p6F) { file_put_contents($p6F, 'x'); chmod($p6F, 0600); }
+        // (every kind of file the gallery makes, so a kind the command forgets shows here; and a folder of the owner's that happens to start with .gallery-, with a file in it: neither is the gallery's)
+        $p6Mine = ['.gallery-items.php', '.gallery-backup.lock', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-wal', '.gallery-visits-' . str_repeat('a', 24) . '.sqlite-shm', '.gallery-visits-' . str_repeat('a', 24) . '.damaged-20261120-101500.sqlite', '.gallery-backup-' . str_repeat('b', 24) . '.zip', '.gallery-backup-' . str_repeat('b', 24) . '.zip.tmp', '.gallery-restore-abcd1234.tmp', '.gallery-stats.json', '.gallery-setup', '.gallery-stats.sqlite'];
+        mkdir("$p6T/Photos/.gallery-anything", 0755); mkdir("$p6T/Photos/.gallery-cache/sub", 0755);
+        foreach (array_merge(array_map(fn ($n) => "$p6T/Photos/$n", $p6Mine), ["$p6T/Photos/.gallery-cache/t1.jpg", "$p6T/Photos/.gallery-cache/meta1.php", "$p6T/Photos/pic.jpg", "$p6T/Photos/.gallery-anything/inside.jpg", "$p6Out2/outside.txt"]) as $p6F) { file_put_contents($p6F, 'x'); chmod($p6F, 0600); }
         chmod("$p6T/Photos/.gallery-cache", 0755); chmod("$p6T/Photos", 0755);
         @symlink("$p6Out2/outside.txt", "$p6T/Photos/.gallery-evil"); @symlink("$p6Out2/outside.txt", "$p6T/Photos/.gallery-cache/evil2"); @symlink('/etc/hostname', "$p6T/Photos/.gallery-toroot");
         exec('cd / && ' . str_replace('/path/to/the/gallery/', $p6T . '/', $p6Cm[1]) . ' 2>&1', $p6O3, $p6R3);
         clearstatcache();
         $p6W = function ($f) { return (bool) (fileperms($f) & 0020); };
+        check('[N32 i] run for real, the chmod command leaves a folder of the owner\'s that starts with .gallery- (and the file in it) alone', $p6R3 === 0 && !$p6W("$p6T/Photos/.gallery-anything") && !$p6W("$p6T/Photos/.gallery-anything/inside.jpg"), decoct(fileperms("$p6T/Photos/.gallery-anything") & 0777));
         check('[N26] run for real, the chmod command: the gallery\'s data file, the thumbnail folder and the files in it become group-writable; a photo, the photo folder and what a link named like a gallery file points to (outside) do not', $p6R3 === 0 && $p6W("$p6T/Photos/.gallery-items.php") && $p6W("$p6T/Photos/.gallery-cache") && $p6W("$p6T/Photos/.gallery-cache/t1.jpg") && $p6W("$p6T/Photos/.gallery-cache/meta1.php") && !$p6W("$p6T/Photos/pic.jpg") && !$p6W("$p6T/Photos") && !$p6W("$p6Out2/outside.txt"), decoct(fileperms("$p6Out2/outside.txt") & 0777) . ' ' . implode(' ', $p6O3));
         $p6Me = function_exists('posix_getpwuid') ? (string) (posix_getpwuid(posix_geteuid())['name'] ?? '') : '';
         if ($p6Me === '') skip_note('[N26] this PHP has no posix functions, so the chown command can\'t be run here as the current user');
         else {
             $p6O4 = []; exec('cd / && ' . str_replace(['/path/to/the/gallery/', 'www-data:'], [$p6T . '/', $p6Me . ':'], $p6Co[1]) . ' 2>&1', $p6O4, $p6R4);
             check('[N26] run for real, the chown command (with the current user in place of www-data): it goes through without trying to change a link that points to root\'s file (it would fail there), so no link is followed', $p6R4 === 0, implode(' ', $p6O4));
+            // N30: -execdir hands each file to chown as ./name from inside its own folder (not as a path collected at the start of the walk, which a folder swapped for a link in the meantime would lead outside the gallery)
+            $p6Shim = new_fixture_dir('p6shim'); file_put_contents("$p6Shim/chown", "#!/bin/sh\nfor a in \"\$@\"; do echo \"\$a\"; done >> " . escapeshellarg("$p6Shim/log.txt") . "\n"); chmod("$p6Shim/chown", 0755);
+            $p6O5 = []; exec('cd / && PATH=' . escapeshellarg($p6Shim . ':' . getenv('PATH')) . ' ' . str_replace(['/path/to/the/gallery/', 'www-data:'], [$p6T . '/', $p6Me . ':'], $p6Co[1]) . ' 2>&1', $p6O5, $p6R5);
+            $p6Args = array_values(array_filter(array_map('trim', (array) @file($p6Shim . '/log.txt')), fn ($x) => $x !== '' && $x !== '-h' && $x !== $p6Me . ':'));
+            $p6Named = array_map(fn ($x) => substr($x, 2), $p6Args);
+            check('[N32 i] the chown command hands over every kind of file the gallery makes (the log and its side files, the set-aside one, the backup and its half-made copy, locks, the setup note) and the thumbnail folder with what is in it, and NOT the owner\'s own .gallery-anything folder or the file in it', count(array_diff(array_merge($p6Mine, ['.gallery-cache', 't1.jpg', 'meta1.php']), $p6Named)) === 0 && !in_array('.gallery-anything', $p6Named, true) && !in_array('inside.jpg', $p6Named, true) && !in_array('pic.jpg', $p6Named, true), json_encode($p6Named));
+            check('[N30] the chown command hands every file over as ./name from inside its own folder (-execdir), never as a path collected earlier: a folder swapped for a link while the command runs can\'t lead it outside', $p6R5 === 0 && count($p6Args) >= 3 && count(array_filter($p6Args, fn ($x) => strncmp($x, './', 2) !== 0)) === 0, json_encode($p6Args) . ' ' . implode(' ', $p6O5));
         }
     } else check('[N26] the red row\'s chmod and chown commands are found on the page', false);
     // the thumbnail folder (.gallery-cache) of a folder, with another owner (root's folder bound over it, for this one server): a red row names it; the thumbnails still show
@@ -14199,6 +14314,80 @@ echo "== pass 6: a save that can't begin is said as it is, an unreadable log is 
     }
     $p6Cl = (string) @file_get_contents(__DIR__ . '/../CHANGELOG.md');
     check('[N27] the changelog does not say an IPv6-only name is looked up again (it is tied to its checked address) and mentions the IPv6 retry', !str_contains($p6Cl, 'checked and then looked up again') && str_contains($p6Cl, 'public IPv6 addresses'));
+}
+
+/* --------------------------------------------------------------------- */
+// pass 8 (the reviewer's N27 h, N30, N31, N32): the own disk's low-space row says what is true of it, Health does not call a sound log "damaged" when the folder or the disk is the trouble,
+// a thumbnail folder that can't be written is not a problem while the thumbnail cache is off
+echo "== pass 8: the own disk's words, a sound log in a folder that can't be written or on a full disk, the cache switched off ==\n";
+{
+    $q8St = new_fixture_dir('q8stage'); mkdir("$q8St/Alpha", 0777, true); make_jpeg("$q8St/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$q8St/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'q8-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$q8St/index.php"); @touch("$q8St/index.php", time() - 3600);
+    $q8Port = find_free_port(); $q8Proc = start_server($q8St, $q8Port); $q8Base = "http://127.0.0.1:$q8Port";
+    [, , $q8H] = http_post("$q8Base/?admin", ['access_code' => 'q8-admin-pw-1'], [], false); $q8Cookie = extract_cookie_header($q8H); $q8Own = ['Cookie: ' . $q8Cookie];
+    http_get("$q8Base/?admin&classic=1", $q8Own);   // (the first look makes the log)
+    proc_terminate($q8Proc); usleep(400000);
+    $q8Log = glob("$q8St/.gallery-visits-*.sqlite")[0] ?? null;
+    foreach (array_merge(glob("$q8St/.gallery-visits-*-wal") ?: [], glob("$q8St/.gallery-visits-*-shm") ?: []) as $q8W) @unlink($q8W);
+    @unlink("$q8St/.gallery-health-cache.php");
+    $q8Out = []; exec('unshare -rm sh -c ' . escapeshellarg('mount -t tmpfs -o size=60m tmpfs ' . escapeshellarg(new_fixture_dir('q8probe'))) . ' 2>&1', $q8Out, $q8Rc);
+    $q8Up = function ($port) { for ($i = 0; $i < 100; $i++) { $c = @fsockopen('127.0.0.1', $port, $e1, $e2, 0.2); if ($c) { fclose($c); return true; } usleep(100000); } return false; };
+    if (!extension_loaded('pdo_sqlite') || $q8Log === null) skip_note('[N31] this PHP has no pdo_sqlite, so there is no log');
+    elseif ($q8Rc !== 0) skip_note('[N27 h] this machine does not let the suite make a small disk of its own (unshare -rm and a tmpfs)');
+    else {
+        // a small disk of its own for the whole gallery: nearly full, then full
+        foreach ([false, true] as $q8Full) {
+            $q8Fx = new_fixture_dir($q8Full ? 'q8full' : 'q8small'); $q8P = find_free_port();
+            $q8Rt = new_fixture_dir('q8router'); file_put_contents("$q8Rt/router.php", "<?php if (isset(\$_GET['q8fill'])) { \$h = fopen(\$_SERVER['DOCUMENT_ROOT'] . '/fill.bin', 'w'); while (@fwrite(\$h, str_repeat('x', 4096)) === 4096) {} fclose(\$h); echo 'filled'; return true; } return false;\n");
+            $q8Script = 'mount -t tmpfs -o size=60m tmpfs ' . escapeshellarg($q8Fx) . ' && cp -a ' . escapeshellarg("$q8St/.") . ' ' . escapeshellarg("$q8Fx/") . ' && exec ' . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $q8P . ' -t ' . escapeshellarg($q8Fx) . ' ' . escapeshellarg("$q8Rt/router.php");
+            $q8Pr = proc_open(['unshare', '-rm', 'sh', '-c', $q8Script], [1 => ['file', '/dev/null', 'w'], 2 => ['file', "$q8Rt/err.txt", 'w']], $q8Pipes); $cleanupProcs[] = $q8Pr;
+            if (!$q8Up($q8P)) { check('[N31] the small disk\'s server started (' . ($q8Full ? 'full' : 'nearly full') . ')', false, 'port ' . $q8P . ': ' . trim((string) @file_get_contents("$q8Rt/err.txt"))); @proc_terminate($q8Pr); continue; }
+            $q8B = "http://127.0.0.1:$q8P";
+            [, , $q8Hx] = http_post("$q8B/?admin", ['access_code' => 'q8-admin-pw-1'], [], false);
+            $q8Ck = ['Cookie: ' . extract_cookie_header($q8Hx)];
+            if ($q8Full) http_get("$q8B/?q8fill=1");   // (signed in first, then the disk is filled up: nothing more can be written)
+            $q8Html = html_entity_decode((string) http_get("$q8B/?admin&classic=1", $q8Ck)[1]);
+            if (!$q8Full) {
+                check('[N27 h] on the gallery\'s own nearly full disk the low-space row says the gallery needs room for itself (settings, logs, the backup, the Changes tab), not the sentence meant for another disk', str_contains($q8Html, 'Disk space is almost gone') && str_contains($q8Html, 'The gallery needs room for itself on this disk too') && !str_contains($q8Html, 'each folder\'s captions and settings and its thumbnails are saved inside the folder. When the disk is full'), substr(strip_tags($q8Html), 0, 300));
+            } else {
+                check('[N31 b] a sound log on a disk with no room left is not called damaged: Health says it can\'t be written (the room is named as a cause), with no button to set it aside', str_contains($q8Html, 'The visitor and change log can\'t be') && str_contains($q8Html, 'a disk with no room left') && !str_contains($q8Html, 'The visitor log is damaged') && !str_contains($q8Html, 'Set it aside and start a new log') && !str_contains($q8Html, 'View counts are damaged'), preg_match('~The visitor[^<]{0,200}~', $q8Html, $q8M) ? $q8M[0] : substr(strip_tags($q8Html), 0, 300));
+            }
+            @proc_terminate($q8Pr); usleep(300000);
+        }
+    }
+    // N31 a: the gallery's own folder can't be written by the web server (the log has no side files at rest): SQLite can't make them, but the log is sound
+    $q8Ro = new_fixture_dir('q8ro'); exec('cp -a ' . escapeshellarg("$q8St/.") . ' ' . escapeshellarg("$q8Ro/")); @unlink("$q8Ro/.gallery-health-cache.php");
+    @chmod($q8Ro, 0555);
+    if (is_writable($q8Ro)) skip_note('[N31 a] a folder can be written whatever its mode here (the suite runs as root?)');
+    elseif (!extension_loaded('pdo_sqlite') || $q8Log === null) skip_note('[N31 a] no log');
+    else {
+        $q8P2 = find_free_port(); $q8Pr2 = start_server($q8Ro, $q8P2);
+        if (!$q8Up($q8P2)) check('[N31 a] the read-only folder\'s server started', false);
+        else {
+            [, , $q8Hy] = http_post("http://127.0.0.1:$q8P2/?admin", ['access_code' => 'q8-admin-pw-1'], [], false);
+            $q8Html2 = html_entity_decode((string) http_get("http://127.0.0.1:$q8P2/?admin&classic=1", ['Cookie: ' . extract_cookie_header($q8Hy)])[1]);
+            check('[N31 a] a sound log in a gallery folder the web server can\'t write in is not "damaged": Health says the log can\'t be written and names the folder, and offers no button to set it aside', str_contains($q8Html2, 'The visitor and change log can\'t be') && str_contains($q8Html2, 'look at the gallery\'s folder') && !str_contains($q8Html2, 'The visitor log is damaged') && !str_contains($q8Html2, 'Set it aside and start a new log') && !str_contains($q8Html2, 'View counts are damaged'), preg_match('~The visitor[^<]{0,200}~', $q8Html2, $q8M2) ? $q8M2[0] : substr(strip_tags($q8Html2), 0, 300));
+        }
+        @proc_terminate($q8Pr2); usleep(300000);
+    }
+    @chmod($q8Ro, 0755);
+    // N32 d: with the thumbnail cache switched off nothing is kept in a folder's .gallery-cache: one that can't be written is no red row; with it on, it is
+    $q8Cx = new_fixture_dir('q8cache'); mkdir("$q8Cx/Alpha/.gallery-cache", 0755, true); make_jpeg("$q8Cx/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$q8Cx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'q8-admin-pw-2', 'ENABLE_THUMBNAIL_CACHE' => false, 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$q8Cx/index.php"); @touch("$q8Cx/index.php", time() - 3600);
+    @chmod("$q8Cx/Alpha/.gallery-cache", 0555);
+    if (is_writable("$q8Cx/Alpha/.gallery-cache")) skip_note('[N32 d] a folder can be written whatever its mode here');
+    else {
+        $q8P3 = find_free_port(); $q8Pr3 = start_server($q8Cx, $q8P3); $q8B3 = "http://127.0.0.1:$q8P3";
+        [, , $q8H3] = http_post("$q8B3/?admin", ['access_code' => 'q8-admin-pw-2'], [], false); $q8Own3 = ['Cookie: ' . extract_cookie_header($q8H3)];
+        $q8Off = html_entity_decode((string) http_get("$q8B3/?admin&classic=1", $q8Own3)[1]);
+        $q8Cfg = cfg_read("$q8Cx/.gallery-config.php"); $q8Cfg['ENABLE_THUMBNAIL_CACHE'] = true; file_put_contents("$q8Cx/.gallery-config.php", cfg_text($q8Cfg));   // (the setting only: the sign-in is tied to the stored password)
+        $q8On = html_entity_decode((string) http_get("$q8B3/?admin&classic=1", $q8Own3)[1]);
+        check('[N32 d] a thumbnail folder that can\'t be written is a red row while the thumbnail cache is on, and none while it is switched off (nothing is kept there)', !str_contains($q8Off, '(its thumbnail folder)') && str_contains($q8On, '(its thumbnail folder)'), json_encode([str_contains($q8Off, '(its thumbnail folder)'), str_contains($q8On, '(its thumbnail folder)')]));
+        @proc_terminate($q8Pr3); usleep(300000);
+    }
+    @chmod("$q8Cx/Alpha/.gallery-cache", 0755);
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

@@ -191,7 +191,7 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
         // stalled or failed is not tried again elsewhere, and all the tries share the one time limit: what is left of it is what a further try gets.
         if ($pin !== null && strpos($pin, ':') === false && $r['status'] === 0 && in_array((int) ($r['errno'] ?? 0), [7, 28], true) && empty($r['connected']))
             foreach (array_slice(geo_public_ipv6((string) parse_url($cur, PHP_URL_HOST), $v4s), 0, 2) as $v6) {
-                $left = $timeout - (microtime(true) - $t0); if ($left < 2) break;
+                $left = $timeout - (microtime(true) - $t0); if ($left < 1) break;
                 $r = geo_http_once($cur, $method, $headers, $maxBytes, (int) ceil($left), $v6); if ($r['status'] !== 0) break;
             }
         if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {

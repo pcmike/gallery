@@ -106,7 +106,7 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         // (a save that never began: the folder's file can't be opened for writing, so nothing was removed and nothing was written in the Changes tab. What stopped it is said as it is.)
         if ($firstCount > 0 && !$saveRan) {
             $cause = (string) (((array) ($GLOBALS['__data_write_cause'] ?? []))[$path] ?? '');
-            $reason = ['file' => 'the web server may not open it for writing: it has another owner, or is read-only', 'lock' => 'the server would not let the gallery lock it, which it needs to save safely', 'busy' => 'other saves kept changing it for too long', 'dir' => 'it is a folder, not a file'][$cause] ?? 'its folder is not writable by the web server';
+            $reason = ['file' => 'the web server may not open it for writing: it has another owner, or is read-only', 'lock' => 'the server would not let the gallery lock it, which it needs to save safely', 'busy' => 'other saves kept changing it for too long', 'dir' => 'it is a folder, not a file'][$cause] ?? (is_file($path) && !@is_writable($path) ? 'neither it nor its folder may be written by the web server' : 'its folder is not writable by the web server');
             $galleryNotices[] = $firstCount . ' caption/location/web ' . ($firstCount === 1 ? 'entry' : 'entries') . ' for deleted or renamed photos ' . ($firstCount === 1 ? 'is' : 'are') . ' still in ' . ($folderPath === $dir ? 'the top folder' : 'the folder "' . basename($folderPath) . '"') . ': its settings file could not be saved (' . $reason . '), so nothing was removed' . (changes_tab_wanted() ? ' and nothing was written in the Changes tab' : '') . '. It is tried again at the next look. The Health check in Settings says more.';
             $orphanCount = 0;
         }
@@ -1229,11 +1229,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         // (nothing before the "md", or only spaces and invisible characters: controls and format characters such as U+200B, and the letters and marks that show nothing: the Hangul fillers U+115F U+1160 U+3164 U+FFA0,
-        // the Braille blank U+2800, the combining grapheme joiner U+034F, the Khmer inherent vowels U+17B4 U+17B5 and the variation selectors. A note that is ALREADY there under such a name (earlier versions allowed it)
-        // can still be saved: it keeps the name it has.)
-        if (!is_file($adminFolderReal . '/' . $target) && (strcasecmp($target, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}]/u', (string) substr($target, 0, -3)))) {
-            return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
+        // the Braille blank U+2800, the combining grapheme joiner U+034F, the Khmer inherent vowels U+17B4 U+17B5, the Mongolian variation selectors, U+1D159, U+16FE4, the object replacement character U+FFFC and the variation selectors.
+        // A note that is ALREADY there under such a name (earlier versions allowed it, or it was made by hand) is not saved under it either: it is moved to a name the owner types, so it can be seen in the list.)
+        $noName = function ($n) { return strcasecmp($n, '.md') === 0 || !preg_match('/[^\p{Z}\p{C}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}\x{034F}\x{17B4}\x{17B5}\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{180B}-\x{180D}\x{180F}\x{1D159}\x{16FE4}\x{FFFC}]/u', (string) substr($n, 0, -3)); };
+        $moveFrom = '';   // (the old note with no name to see, when what is saved goes to a name that has one)
+        if ($noName($target)) {
+            if (!is_file($adminFolderReal . '/' . $target)) return ['type' => 'error', 'text' => 'A note needs a name before .md, for example notes.md. Nothing was saved.'];
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => admin_notes_fingerprint($_POST['loaded_hash'] ?? '')];   // (what was typed goes back into the box, so nothing is lost)
+            return ['type' => 'error', 'text' => 'This note\'s name has nothing to see in it (nothing before .md), so it can\'t be saved as it is. Type a name in the New name box (for example notes.md) and save again: the note moves to that name. Nothing was saved this time; what you typed is still in the box.'];
         }
+        if ($existing !== '' && $existing !== $target && strtolower(pathinfo($existing, PATHINFO_EXTENSION)) === 'md' && $noName($existing) && is_file($adminFolderReal . '/' . $existing)) $moveFrom = $existing;
         // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
         // shell.php.md would run what was typed in it. The dots become _ (and the answer says so). A note that is already there keeps the name it has.
         $renamedFrom = '';
@@ -1264,7 +1269,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!has_gallery_marker($content)) {
             return ['type' => 'ok', 'text' => 'Saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . ', but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
         }
-        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . '.'];
+        $moved = $moveFrom !== '' ? (@unlink($adminFolderReal . '/' . $moveFrom) ? ' (the note that had no name to see was moved to it)' : ' (the note that had no name to see is still in the folder as well: it could not be removed; delete it from the list)') : '';
+        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . $moved . '.'];
     }
 
     if ($action === 'delete_notes') {
