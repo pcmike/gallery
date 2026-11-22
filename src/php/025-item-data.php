@@ -24,9 +24,10 @@ function items_path($folderPath) {
  *  from EXIF, since that would publish when the owner was away) and
  *  sortOrder (an explicit position among sibling folders).
  *  locationEnabled is this folder's own
- *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
+ *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show photo info" switch: true, false, or null when it
+ *  has made no choice and takes the one from the folder above it (see folder_flag_resolve). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
 }
 
 function items_read($folderPath) {
@@ -82,7 +83,7 @@ function items_get_all_for_files($dir, $files) {
             // each of its own files' entries so callers (the location
             // badge/pin, specifically) don't need a second lookup
             // structure just to find out which folder a file lives in.
-            $entry['_folderLocationEnabled'] = !empty($data['locationEnabled']);
+            $entry['_folderLocationEnabled'] = folder_location_on($dir, ($fr = dirname($folderFiles[0])) === '.' ? '' : $fr);   // (the folder's own choice, or the one it takes from the folder above)
             $entry['_folderKeepLocation'] = ($data['keepLocation'] ?? null) === true;   // (the folder's own "keep the location in files visitors get")
             $result[$file] = $entry;
         }

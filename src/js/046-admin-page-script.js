@@ -1991,6 +1991,19 @@
     }
     paint();
   });
+  // "Use the folder above's choice": the folder drops its own choice for a switch it can take from the folder above it. The screen is drawn again, because
+  // the switch's state, and the words under it, now come from somewhere else.
+  [].forEach.call(document.querySelectorAll('[data-flag-inherit]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var body = new URLSearchParams();
+      body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
+      btn.disabled = true;
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+        .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
+    });
+  });
   // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
   // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
   (function () {
@@ -2464,17 +2477,20 @@
           var title = norm((g.querySelector('summary') || { textContent: '' }).textContent);
           return {
             el: g, title: title,
-            rows: [].slice.call(g.children).filter(function (r) { return r.tagName !== 'SUMMARY'; }).map(function (r) {   // (every block in the group: the settings, and also the server rules and the Prepare media panel)
-              var c = r.cloneNode(true), key = (r.id || '').replace(/^setting-/, '');
-              [].forEach.call(c.querySelectorAll('.src, script, style, .rowstate'), function (n) { n.parentNode.removeChild(n); });
-              return { el: r, text: norm(title + ' ' + c.textContent + ' ' + key + ' ' + key.replace(/_/g, ' ')) };
-            })
+            rows: [].concat.apply([], [].slice.call(g.children).filter(function (r) { return r.tagName !== 'SUMMARY'; }).map(function (r) {   // (every block in the group: the settings, and also the server rules and the Prepare media panel; a folded "More" part gives its rows)
+              var inner = r.classList && r.classList.contains('site-more') ? [].slice.call(r.children).filter(function (x) { return x.tagName !== 'SUMMARY'; }) : [r];
+              return inner.map(function (x) {
+                var c = x.cloneNode(true), key = (x.id || '').replace(/^setting-/, '');
+                [].forEach.call(c.querySelectorAll('.src, script, style, .rowstate'), function (n) { n.parentNode.removeChild(n); });
+                return { el: x, more: inner[0] === r ? null : r, text: norm(title + ' ' + c.textContent + ' ' + key + ' ' + key.replace(/_/g, ' ')) };
+              });
+            }))
           };
         });
       }
       function clear() {
         if (!saved) return;
-        index.forEach(function (g, i) { g.el.classList.remove('find-miss'); g.rows.forEach(function (r) { r.el.classList.remove('find-miss'); }); g.el.open = saved[i]; });
+        index.forEach(function (g, i) { g.el.classList.remove('find-miss'); g.rows.forEach(function (r) { r.el.classList.remove('find-miss'); if (r.more && r.moreWas !== undefined) { r.more.open = r.moreWas; r.moreWas = undefined; } }); g.el.open = saved[i]; });
         saved = null; note.hidden = true;
       }
       function apply() {
@@ -2490,7 +2506,7 @@
             var ok = has(r.text);
             if (ok && r.el.hidden) { later++; ok = false; }   // (a setting that only shows while another is on: counted, not shown)
             r.el.classList.toggle('find-miss', !ok);
-            if (ok) any++;
+            if (ok) { any++; if (r.more) { if (r.moreWas === undefined) r.moreWas = r.more.open; r.more.open = true; } }   // (a match inside the fold opens it; clearing the search puts it back)
           });
           var own = !g.rows.length && has(g.title);   // (a group with nothing in it yet matches by its title)
           g.el.classList.toggle('find-miss', !(any || own));

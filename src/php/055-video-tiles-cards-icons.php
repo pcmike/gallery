@@ -191,6 +191,7 @@ function ui_icon_paths() {
         'warn'    => '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>',
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'video'   => '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M8 5v14M16 5v14M3.5 9.5H8M3.5 14.5H8M16 9.5h4.5M16 14.5h4.5"/>',
+        'info'    => '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.2"/>',
         'stop'    => '<rect x="6.5" y="6.5" width="11" height="11" rx="1.8"/>',
         'shuffle' => '<path d="M16 3.5h4.5V8M4 20.5 20.5 4M20.5 16v4.5H16M15 15l5.5 5.5M4 4l5 5"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',

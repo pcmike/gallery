@@ -459,7 +459,10 @@ function render_admin_site_settings($csrfToken) {
             $hidAll = array_filter($group['items'], function ($i) { return empty($i['in']) && !empty($i['hidden_when']); });   // (settings that are out of the way while another is on: counted, and said, with the reason on hover)
             if ($hidAll): $nHid = gallery_is_closed() ? count($hidAll) : 0; ?><span class="site-hid" data-hid-group<?= $nHid ? '' : ' hidden' ?> title="<?= $esc(implode(' ', array_map(function ($i) { return $i['label'] . ': ' . ($i['hidden_why'] ?? 'Not needed with the current settings.'); }, $hidAll))) ?>"> (<span data-hid-n><?= $nHid ?></span> hidden)</span><?php endif; ?></span></summary>
           <?php if ($group['title'] === 'Signing in and passwords'): render_admin_password_rows($fromFile); endif; ?>
-          <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
+          <?php $moreOpen = false; foreach ($group['items'] as $d): if (!empty($d['in'])) continue;
+            if (!empty($d['more']) && !$moreOpen) { $moreOpen = true; echo '<details class="site-more"><summary>More media information <span class="muted">(all off to start with)</span></summary>'; }
+            elseif (empty($d['more']) && $moreOpen) { $moreOpen = false; echo '</details>'; }
+            $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
             if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
             // "default: …" is part of the tag beside the name ("your setting · default: off"), shown only while the value differs from the default
             $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true) && ($d['check'] ?? '') !== 'ranges';
@@ -543,7 +546,7 @@ function render_admin_site_settings($csrfToken) {
               </div>
             </div>
             <?php if ($name === 'ENABLE_THUMBNAIL_CACHE'): ?><div id="media-slot"><?php render_admin_thumbnails_panel($csrfToken); ?></div><?php endif; ?>
-          <?php endforeach; ?>
+          <?php endforeach; if ($moreOpen) echo '</details>'; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
             <?= render_web_server_rules() ?>
           <?php endif; ?>

@@ -256,7 +256,7 @@ function edited_record_keys() {
     return [
         'folder' => [
             'displayName' => 'shown', 'description' => 'shown', 'dates' => 'shown', 'sortOrder' => 'shown', 'restriction' => 'shown', 'unlisted' => 'shown',
-            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown',
+            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown',
             'mapEnabled' => 'shown', 'mapRadius' => 'shown', 'photoSort' => 'shown', 'groups' => 'shown', 'stacks' => 'shown', 'cover' => 'shown', 'coverFollow' => 'shown',
             'folderId' => 'internal', 'pageviews' => 'internal', 'items' => 'internal',
         ],
@@ -311,6 +311,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
         if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
         if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
+        if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Photo info ' . ($d['mediaInfo'] ? 'on' : 'off')];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
         if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
@@ -675,23 +676,45 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
 <?php
 }
 
+/** Under a switch a folder takes from the folder above it: where its setting comes from (this folder's own choice, or the folder it is taken from), and
+ *  a link back to taking the one above's when the folder has made its own. */
+function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if ($isRoot) return;
+    if ($flag['own'] !== null) {
+        $text = 'This folder\'s own choice.';
+    } elseif ($flag['from'] === null) {
+        $text = 'No folder above has chosen, so this is off.';
+    } else {
+        $text = 'Taken from ' . ($flag['from'] === '' ? 'the gallery\'s own folder' : $esc($flag['from'])) . ' (a folder with nothing chosen takes the choice of the folder above it).';
+    }
+?>
+    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php endif; ?></p>
+<?php
+}
+
 /** The "Locations" section, last on a folder's (or the gallery's) settings: whether photo locations show, and, under that because it
  *  only shows photos whose location is public, the map. */
-function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '') {
+function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '', $dir = null) {
     $isRoot = $adminFolderPath === null;
-    $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
+    $locFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'locationEnabled');   // (this folder's own choice, or the one it takes from the folder above)
+    $infoFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'mediaInfo');
+    $locOn = $locFlag['on'] && ENABLE_PHOTO_LOCATION;
 ?>
-    <h3 class="subhead">Locations</h3>
+    <h3 class="subhead">Locations and media information</h3>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
-          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump); ?>
+          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump);
+          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir); ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
-    <div class="loc-keep"<?= !empty($itemsHere['locationEnabled']) ? '' : ' hidden' ?>>
+    <div class="loc-keep"<?= $locFlag['on'] ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
     </div>
     <?php endif; ?>
     <?php if ($locStatus !== ''): ?>
     <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show photo info to visitors at the root' : 'Show photo info to visitors for this folder', '', ''); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
+    <p class="hint">The viewer gets an info panel for each photo here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Locations and media information). A position or a time zone shows only where the photo's location does.</p>
     <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
       <?php if (!ENABLE_PHOTO_LOCATION): ?>
       <p class="warn-note map-loc-note">Locations are off for the whole gallery, so nothing shows on a map yet. Turn on <strong>Allow photo locations</strong> in <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_PHOTO_LOCATION');">Settings</a>; each folder and photo still has its own switch.</p>

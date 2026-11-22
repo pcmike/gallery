@@ -476,6 +476,74 @@ function make_dated_jpeg($path, $dateText) {
     file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($jpeg, 2));
 }
 
+/** A JPEG whose EXIF holds the tags given: ['ifd0' => [tag => [type, value]], 'exif' => [...], 'gps' => [...]]. Types: 2 ascii (a string), 3 short (an int), 4 long (an int),
+ *  5 rational ([n, d], or a list of pairs), 7 undefined (the raw string). A little-endian TIFF inside an APP1 segment, assembled by hand (PHP has no EXIF writer). */
+function make_exif_jpeg($path, $ifds) {
+    $im = imagecreatetruecolor(48, 36); imagefill($im, 0, 0, imagecolorallocate($im, 120, 60, 160));
+    ob_start(); imagejpeg($im); $jpeg = ob_get_clean(); unset($im);
+    $build = function ($entries, $base, &$extra) {
+        ksort($entries);
+        $n = count($entries); $head = pack('v', $n); $body = ''; $tail = pack('V', 0);
+        $dataBase = $base + 2 + 12 * $n + 4; $blob = '';
+        foreach ($entries as $tag => [$type, $val]) {
+            if ($type === 2) { $raw = $val . "\0"; $count = strlen($raw); }
+            elseif ($type === 3) { $raw = pack('v', $val); $count = 1; }
+            elseif ($type === 4) { $raw = pack('V', $val); $count = 1; }
+            elseif ($type === 5) { $pairs = is_array($val[0]) ? $val : [$val]; $raw = ''; foreach ($pairs as [$nn, $dd]) $raw .= pack('VV', $nn, $dd); $count = count($pairs); }
+            else { $raw = $val; $count = strlen($raw); }
+            if (strlen($raw) <= 4) { $field = str_pad($raw, 4, "\0"); }
+            else { $field = pack('V', $dataBase + strlen($blob)); $blob .= $raw . (strlen($raw) % 2 ? "\0" : ''); }
+            $body .= pack('vvV', $tag, $type, $count) . $field;
+        }
+        $extra = $blob;
+        return $head . $body . $tail;
+    };
+    $ifd0 = $ifds['ifd0'] ?? []; $exif = $ifds['exif'] ?? []; $gps = $ifds['gps'] ?? [];
+    $size = function ($entries) { $b = 0; foreach ($entries as [$type, $val]) { $len = $type === 2 ? strlen($val) + 1 : ($type === 3 ? 2 : ($type === 4 ? 4 : ($type === 5 ? 8 * (is_array($val[0]) ? count($val) : 1) : strlen($val)))); if ($len > 4) $b += $len + ($len % 2); } return 2 + 12 * count($entries) + 4 + $b; };
+    if ($exif) $ifd0[0x8769] = [4, 0];
+    if ($gps) $ifd0[0x8825] = [4, 0];
+    $o0 = 8; $oE = $o0 + $size($ifd0); $oG = $oE + ($exif ? $size($exif) : 0);
+    if ($exif) $ifd0[0x8769] = [4, $oE];
+    if ($gps) $ifd0[0x8825] = [4, $oG];
+    $x0 = $xe = $xg = '';
+    $t0 = $build($ifd0, $o0, $x0); $te = $exif ? $build($exif, $oE, $xe) : ''; $tg = $gps ? $build($gps, $oG, $xg) : '';
+    $seg = "Exif\0\0" . 'II' . pack('v', 42) . pack('V', 8) . $t0 . $x0 . $te . $xe . $tg . $xg;
+    file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($seg) + 2) . $seg . substr($jpeg, 2));
+}
+
+/** The tags a phone's photo carries, all of them: what the info panel may show and what it must never. The sentinels in the text let a test look for them. */
+function photo_info_rich_tags() {
+    return [
+        'ifd0' => [0x010F => [2, 'Apple'], 0x0110 => [2, 'iPhone 15 Pro'], 0x0131 => [2, 'Photos 9.1'], 0x013B => [2, 'SENTINEL-ARTIST Pat'], 0x8298 => [2, 'SENTINEL-COPYRIGHT 2026'], 0x010E => [2, 'SENTINEL-DESCRIPTION']],
+        'exif' => [0x9003 => [2, '2026:10:06 14:32:10'], 0x9011 => [2, '+02:00'], 0x829A => [5, [1, 120]], 0x829D => [5, [18, 10]], 0x8827 => [3, 125], 0x920A => [5, [42, 10]], 0x9209 => [3, 16],
+                   0xA405 => [3, 26], 0xA434 => [2, 'iPhone 15 Pro back camera 6.86mm f/1.78'], 0xA433 => [2, 'Apple'], 0xA431 => [2, 'SENTINEL-BODYSERIAL'], 0xA435 => [2, 'SENTINEL-LENSSERIAL'],
+                   0xA420 => [2, 'SENTINEL-IMAGEID'], 0x9286 => [7, "ASCII\0\0\0" . 'SENTINEL-COMMENT'], 0x927C => [7, 'SENTINEL-MAKERNOTE-BYTES']],
+        'gps' => [1 => [2, 'N'], 2 => [5, [[48, 1], [51, 1], [2376, 100]]], 3 => [2, 'E'], 4 => [5, [[2, 1], [21, 1], [846, 100]]]],
+    ];
+}
+
+/** An MP4 with one video track (H.264, $w x $h, $frames frames over $seconds seconds) and one audio track (AAC, stereo, 48 kHz), and a phone's make and local time. */
+function make_mp4_with_tracks($path, $seconds, $w, $h, $frames) {
+    $box = function ($type, $body) { return pack('N', 8 + strlen($body)) . $type . $body; };
+    $ts = 1000;
+    $mvhd = $box('mvhd', pack('N', 0) . pack('N', 3800000000) . pack('N', 0) . pack('N', $ts) . pack('N', $seconds * $ts) . str_repeat("\0", 80));
+    $tkhd = fn ($w, $h) => $box('tkhd', pack('N', 3) . str_repeat("\0", 72) . pack('N', $w << 16) . pack('N', $h << 16));
+    $mdhd = $box('mdhd', pack('N', 0) . pack('N', 0) . pack('N', 0) . pack('N', $ts) . pack('N', $seconds * $ts) . pack('N', 0));
+    $hdlr = fn ($k) => $box('hdlr', pack('N', 0) . pack('N', 0) . $k . str_repeat("\0", 12) . "x\0");
+    $vEntry = pack('N', 86) . 'avc1' . str_repeat("\0", 78);
+    $aEntry = pack('N', 36) . 'mp4a' . str_repeat("\0", 6) . pack('n', 1) . pack('nn', 0, 0) . pack('N', 0) . pack('n', 2) . pack('n', 16) . pack('N', 0) . pack('N', 48000 << 16);
+    $stsd = fn ($entry) => $box('stsd', pack('N', 0) . pack('N', 1) . $entry);
+    $stts = $box('stts', pack('N', 0) . pack('N', 1) . pack('N', $frames) . pack('N', 1));
+    $trak = fn ($tk, $kind, $entry, $withStts) => $box('trak', $tk . $box('mdia', $mdhd . $hdlr($kind) . $box('minf', $box('stbl', $stsd($entry) . ($withStts ? $stts : '')))));
+    $key = fn ($n) => pack('N', 8 + strlen($n)) . 'mdta' . $n;
+    $keys = $box('keys', pack('N', 0) . pack('N', 3) . $key('com.apple.quicktime.make') . $key('com.apple.quicktime.model') . $key('com.apple.quicktime.creationdate'));
+    $item = fn ($i, $v) => $box(pack('N', $i), $box('data', pack('N', 1) . pack('N', 0) . $v));
+    $ilst = $box('ilst', $item(1, 'Apple') . $item(2, 'iPhone 15 Pro') . $item(3, '2026-10-06T14:32:10+0200'));
+    $meta = $box('meta', $box('hdlr', pack('N', 0) . pack('N', 0) . 'mdta' . str_repeat("\0", 12) . "\0") . $keys . $ilst);
+    $moov = $box('moov', $mvhd . $trak($tkhd($w, $h), 'vide', $vEntry, true) . $trak($tkhd(0, 0), 'soun', $aEntry, false) . $meta);
+    file_put_contents($path, $box('ftyp', 'isom' . pack('N', 0)) . $moov);
+}
+
 function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
     $im = imagecreatetruecolor(60, 60);
     imagefill($im, 0, 0, imagecolorallocate($im, 10, 200, 10));
@@ -1561,6 +1629,123 @@ write_patched_index("$fxSs1/index.php", $indexContents, []);
 $portSs1 = find_free_port(); start_server($fxSs1, $portSs1);
 [, $ss1Page] = http_get("http://127.0.0.1:$portSs1/");
 check('[slideshow] a page with a single photo has no Play button on the page (nothing to play)', !str_contains($ss1Page, 'id="slideshow-start"') && str_contains($ss1Page, 'id="map-bar"') );
+// ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
+echo "== photo info panel ==\n";
+$fxPi = new_fixture_dir('photoinfo');
+foreach (['Italy', 'Italy/Rome', 'Italy/Rome/Forum', 'Italy/Priv', 'Spain'] as $piD) mkdir("$fxPi/$piD", 0777, true);
+foreach (['Italy/a.jpg', 'Italy/Rome/b.jpg', 'Italy/Rome/hide.jpg', 'Italy/Rome/show.jpg', 'Italy/Rome/Forum/f.jpg', 'Italy/Priv/d.jpg', 'Spain/c.jpg', 'r.jpg'] as $piF) make_exif_jpeg("$fxPi/$piF", photo_info_rich_tags());
+make_mp4_with_tracks("$fxPi/Italy/v.mp4", 7, 640, 360, 210);
+$piPng = imagecreatetruecolor(40, 30); imagepng($piPng, "$fxPi/Italy/Rome/plain.png"); unset($piPng);
+$piNasty = photo_info_rich_tags(); $piNasty['exif'][0x9286] = [7, "ASCII\0\0\0" . "<b>x</b> \x01\x02 bad\xFF\xFE end"]; make_exif_jpeg("$fxPi/Italy/nasty.jpg", $piNasty);
+$piLoc = fn () => ['lat' => 48.8566, 'lng' => 2.3522, 'label' => ''];
+write_data_file("$fxPi/Italy/.gallery-items.php", ['items' => ['a.jpg' => ['location' => $piLoc()], 'v.mp4' => ['location' => $piLoc()], 'nasty.jpg' => ['location' => $piLoc()]], 'mediaInfo' => true, 'locationEnabled' => true]);
+write_data_file("$fxPi/Italy/Rome/.gallery-items.php", ['items' => ['b.jpg' => ['location' => $piLoc()], 'hide.jpg' => ['location' => $piLoc(), 'locationVisibility' => 'hide'], 'show.jpg' => ['location' => $piLoc(), 'locationVisibility' => 'show']]]);
+write_data_file("$fxPi/Italy/Rome/Forum/.gallery-items.php", ['items' => ['f.jpg' => ['location' => $piLoc()]], 'mediaInfo' => false]);
+write_data_file("$fxPi/Italy/Priv/.gallery-items.php", ['items' => ['d.jpg' => ['location' => $piLoc()]], 'restriction' => 'private']);
+write_data_file("$fxPi/Spain/.gallery-items.php", ['items' => ['c.jpg' => ['location' => $piLoc()]]]);
+$piCfg = fn (array $extra = []) => cfg_text($extra + ['ADMIN_PASSWORD' => 'pi-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'pi view pw', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'ENABLE_SHARE_LINKS' => true]);
+file_put_contents("$fxPi/.gallery-config.php", $piCfg());
+write_patched_index("$fxPi/index.php", $indexContents, []);
+$portPi = find_free_port(); start_server($fxPi, $portPi); $basePi = "http://127.0.0.1:$portPi";
+$piGet = function ($rel, $headers = [], $extra = '') use ($basePi) {
+    [$st, $body] = http_get("$basePi/?photoinfo=" . rawurlencode($rel) . $extra, $headers);
+    $j = json_decode($body, true);
+    return ['status' => $st, 'body' => $body, 'json' => is_array($j) ? $j : null, 'rows' => is_array($j) ? array_column($j['rows'] ?? [], 'value', 'label') : [], 'all' => is_array($j) ? ($j['rows'] ?? []) : []];
+};
+$piSignIn = function () use ($basePi) { [, , $hd] = http_post("$basePi/?admin", ['access_code' => 'pi-admin-pw-1'], [], false); return 'Cookie: ' . extract_cookie_header($hd); };   // (a rewritten settings file ends the session: sign in again when it has been)
+$piOwner = $piSignIn();
+[, , $piRvHd] = http_post("$basePi/?reveal", ['access_code' => 'pi view pw'], [], false);
+$piReveal = 'Cookie: ' . extract_cookie_header($piRvHd);
+$piKeys = fn ($r) => array_keys($r['rows']);
+
+// the five switches that start on, in a folder that has chosen on
+$pa = $piGet('Italy/a.jpg');
+check('[photo info] a photo in a folder that switched info on gets its rows: camera, when (with the time zone, the location being allowed), resolution, file size, position, as JSON the browser must not keep', $pa['status'] === 200 && $piKeys($pa) === ['Camera', 'Taken', 'Resolution', 'File size', 'Position'] && $pa['rows']['Camera'] === 'Apple iPhone 15 Pro' && $pa['rows']['Taken'] === 'Oct 6, 2026, 14:32 (UTC+02:00)' && $pa['rows']['Resolution'] === '0.0 MP (48 × 36)', json_encode($pa['rows']));
+check('[photo info] ...the position is a link that opens that spot on OpenStreetMap, pinned, and the answer is not cached', ($pa['all'][4]['href'] ?? '') === 'https://www.openstreetmap.org/?mlat=48.8566&mlon=2.3522#map=16/48.8566/2.3522' && $pa['rows']['Position'] === '48.8566° N, 2.3522° E', json_encode($pa['all'][4] ?? null));
+check('[photo info] ...and nothing else the file carries: no lens, settings, software, serial numbers, owner, copyright, image id, comments or maker\'s notes (they are off, or never offered)', !str_contains($pa['body'], 'SENTINEL') && !str_contains($pa['body'], 'Lens') && !str_contains($pa['body'], 'Photos 9.1') && !str_contains($pa['body'], 'f/1.8'), $pa['body']);
+// inheritance
+$pr = $piGet('Italy/Rome/b.jpg');
+check('[photo info] a folder with no choice takes the folder above\'s: Italy is on, so Italy/Rome is too', $pr['status'] === 200 && isset($pr['rows']['Camera']), $pr['body']);
+check('[photo info] a folder\'s own off beats the folder above (Italy/Rome/Forum)', $piGet('Italy/Rome/Forum/f.jpg')['status'] === 404);
+check('[photo info] a folder nothing above has chosen for is off: the gallery-wide settings never switch a folder on (Spain, and a photo at the top)', $piGet('Spain/c.jpg')['status'] === 404 && $piGet('r.jpg')['status'] === 404);
+// who may see the photo at all
+check('[photo info] a private folder\'s photo is a 404 to a stranger (as the photo itself is), and gets its rows when the owner or the private-view password asks', $piGet('Italy/Priv/d.jpg')['status'] === 404 && $piGet('Italy/Priv/d.jpg', [$piOwner])['status'] === 200 && $piGet('Italy/Priv/d.jpg', [$piReveal])['status'] === 200);
+check('[photo info] a made-up file, a path that climbs out of the gallery, a bare folder name and no name at all answer 404 with nothing to learn from', $piGet('Italy/nothere.jpg')['status'] === 404 && $piGet('../index.php')['status'] === 404 && $piGet('Italy')['status'] === 404 && $piGet('')['status'] === 404 && $piGet('Italy/../Spain/c.jpg')['status'] === 404);
+check('[photo info] a photo\'s own code (?k=) gets nothing: a Not listed photo\'s page has no panel', $piGet('Italy/a.jpg', [], '&k=AbCdEfGh')['status'] === 404);
+// the location gate: the folder, the photo, the gallery, who is looking
+$piItems = fn ($path) => json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxPi/$path/.gallery-items.php")), true);
+$pb = $piGet('Italy/Rome/hide.jpg'); $ps = $piGet('Italy/Rome/show.jpg');
+check('[photo info] a photo set to hide its location shows no position and no time zone, and still shows the rest', $pb['status'] === 200 && !isset($pb['rows']['Position']) && $pb['rows']['Taken'] === 'Oct 6, 2026, 14:32' && isset($pb['rows']['Camera']), json_encode($pb['rows']));
+$piRome = $piItems('Italy/Rome'); $piRome['locationEnabled'] = false; write_data_file("$fxPi/Italy/Rome/.gallery-items.php", $piRome);
+$pr2 = $piGet('Italy/Rome/b.jpg'); $ps2 = $piGet('Italy/Rome/show.jpg');
+check('[photo info] a folder that has switched its locations off (Italy/Rome, while Italy has them on) shows no position and no time zone for its photos...', !isset($pr2['rows']['Position']) && $pr2['rows']['Taken'] === 'Oct 6, 2026, 14:32' && isset($pr2['rows']['Camera']), json_encode($pr2['rows']));
+check('[photo info] ...but a photo set to show its location still does (as its pin does), and the owner and the private-view password see the position wherever it is', isset($ps2['rows']['Position']) && isset($piGet('Italy/Rome/b.jpg', [$piOwner])['rows']['Position']) && isset($piGet('Italy/Rome/b.jpg', [$piReveal])['rows']['Position']) && ($piGet('Italy/Rome/b.jpg', [$piOwner])['rows']['Taken'] ?? '') === 'Oct 6, 2026, 14:32 (UTC+02:00)', json_encode([$ps2['rows'], $piGet('Italy/Rome/b.jpg', [$piOwner])['rows']]));
+unset($piRome['locationEnabled']); write_data_file("$fxPi/Italy/Rome/.gallery-items.php", $piRome);
+check('[photo info] a folder with no location choice takes the folder above\'s for locations too (Italy/Rome is back to taking Italy\'s on)', isset($piGet('Italy/Rome/b.jpg')['rows']['Position']));
+file_put_contents("$fxPi/.gallery-config.php", $piCfg(['ENABLE_PHOTO_LOCATION' => false]));
+$pg = $piGet('Italy/a.jpg');
+check('[photo info] with locations off for the whole gallery there is no position and no time zone anywhere, and the other rows stay', $pg['status'] === 200 && !isset($pg['rows']['Position']) && $pg['rows']['Taken'] === 'Oct 6, 2026, 14:32' && isset($pg['rows']['Camera']), json_encode($pg['rows']));
+file_put_contents("$fxPi/.gallery-config.php", $piCfg());
+// a share link: its own location setting decides
+$piOwner = $piSignIn();
+$piCsrf = extract_csrf_token(http_get("$basePi/?admin", [$piOwner])[1]);
+$piLink = function ($locations) use ($basePi, $piOwner, $piCsrf) {
+    [, $body] = http_post("$basePi/?admin", ['action' => 'link_create', 'label' => 'Info ' . $locations, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => $locations, 'heads_up' => 'default', 'downloads' => 'off', 'zip' => 'off', 'scope_type' => 'public', 'csrf_token' => $piCsrf], ['X-Requested-With: gallery-fetch', $piOwner]);
+    $j = json_decode($body, true);
+    $code = (string) parse_url((string) ($j['urls']['long'] ?? ''), PHP_URL_QUERY);   // (the address as ?CODE)
+    [, , $h] = http_post("$basePi/?link=" . rawurlencode($code), ['go' => '1'], [], false);   // (the link's "Open the gallery" button)
+    return 'Cookie: ' . extract_cookie_header($h);
+};
+$piRome = $piItems('Italy/Rome'); $piRome['locationEnabled'] = false; write_data_file("$fxPi/Italy/Rome/.gallery-items.php", $piRome);
+$piLinkPub = $piLink('public'); $piLinkAll = $piLink('all');
+check('[photo info] on a share link set to show public locations only, a folder with its locations off shows no position; on one set to show all locations, it does', !isset($piGet('Italy/Rome/b.jpg', [$piLinkPub])['rows']['Position']) && isset($piGet('Italy/Rome/b.jpg', [$piLinkAll])['rows']['Position']) && isset($piGet('Italy/a.jpg', [$piLinkPub])['rows']['Position']), json_encode([$piGet('Italy/Rome/b.jpg', [$piLinkPub])['status'], $piGet('Italy/Rome/b.jpg', [$piLinkAll])['status']]));
+unset($piRome['locationEnabled']); write_data_file("$fxPi/Italy/Rome/.gallery-items.php", $piRome);
+// the extra switches: lens, exposure, software, video, and the ones that say more than people expect
+file_put_contents("$fxPi/.gallery-config.php", $piCfg(['INFO_LENS' => true, 'INFO_EXPOSURE' => true, 'INFO_SOFTWARE' => true, 'INFO_VIDEO' => true, 'INFO_SERIALS' => true, 'INFO_OWNER' => true, 'INFO_COPYRIGHT' => true, 'INFO_IMAGE_ID' => true, 'INFO_COMMENTS' => true]));
+$pall = $piGet('Italy/a.jpg');
+check('[photo info] with every switch on a photo gives lens, focal length (and the 35 mm equivalent), aperture, shutter speed, ISO, flash, software, serial numbers, owner, copyright, image id and the comments', $pall['rows']['Lens'] === 'Apple iPhone 15 Pro back camera 6.86mm f/1.78' && $pall['rows']['Focal length'] === '4.2 mm (26 mm equivalent)' && $pall['rows']['Aperture'] === 'f/1.8' && $pall['rows']['Shutter speed'] === '1/120 s' && $pall['rows']['ISO'] === '125' && $pall['rows']['Flash'] === 'Did not fire' && $pall['rows']['Software'] === 'Photos 9.1' && $pall['rows']['Camera serial number'] === 'SENTINEL-BODYSERIAL' && $pall['rows']['Lens serial number'] === 'SENTINEL-LENSSERIAL' && $pall['rows']['Owner'] === 'SENTINEL-ARTIST Pat' && $pall['rows']['Copyright'] === 'SENTINEL-COPYRIGHT 2026' && $pall['rows']['Image ID'] === 'SENTINEL-IMAGEID' && $pall['rows']['Description'] === 'SENTINEL-DESCRIPTION' && $pall['rows']['Comment'] === 'SENTINEL-COMMENT', json_encode($pall['rows']));
+check('[photo info] ...and even then the maker\'s notes are never sent', !str_contains($pall['body'], 'MAKERNOTE'));
+$pn = $piGet('Italy/nasty.jpg');
+check('[photo info] a comment with control characters and bytes that are not text comes back as one clean line of valid JSON', $pn['json'] !== null && ($pn['rows']['Comment'] ?? '') !== '' && !preg_match('/[\x00-\x1F]/', (string) $pn['rows']['Comment']) && str_contains($pn['rows']['Comment'], '<b>x</b>') && str_contains($pn['rows']['Comment'], 'end'), json_encode($pn['rows']['Comment'] ?? null));
+$pv = $piGet('Italy/v.mp4');
+check('[photo info] a video: when it was made (the phone\'s local time and zone), its make and model, its size in pixels, its length, frame rate, video and audio kinds and bitrate, read from the file with no tool', ($pv['rows']['Camera'] ?? '') === 'Apple iPhone 15 Pro' && ($pv['rows']['Taken'] ?? '') === 'Oct 6, 2026, 14:32 (UTC+02:00)' && ($pv['rows']['Resolution'] ?? '') === '640 × 360' && ($pv['rows']['Length'] ?? '') === '0:07' && ($pv['rows']['Frame rate'] ?? '') === '30 frames/s' && ($pv['rows']['Video'] ?? '') === 'H.264' && ($pv['rows']['Audio'] ?? '') === 'AAC, stereo, 48 kHz' && isset($pv['rows']['Bitrate']), json_encode($pv['rows']));
+$pp = $piGet('Italy/Rome/plain.png');
+check('[photo info] a picture with no EXIF (a PNG) still has its size and file size, and nothing made up', $pp['status'] === 200 && ($pp['rows']['Resolution'] ?? '') === '0.0 MP (40 × 30)' && isset($pp['rows']['File size']) && !isset($pp['rows']['Camera']) && !isset($pp['rows']['Taken']), json_encode($pp['rows']));
+file_put_contents("$fxPi/.gallery-config.php", $piCfg(['INFO_CAMERA' => false, 'INFO_TAKEN' => false, 'INFO_RESOLUTION' => false, 'INFO_FILE_SIZE' => false, 'INFO_POSITION' => false]));
+check('[photo info] with every switch off there is nothing to show: the answer is a 404 and the file was not read', $piGet('Italy/a.jpg')['status'] === 404);
+file_put_contents("$fxPi/.gallery-config.php", $piCfg(['INFO_CAMERA' => false]));
+check('[photo info] a switch turned off takes its row out at once', !isset($piGet('Italy/a.jpg')['rows']['Camera']) && isset($piGet('Italy/a.jpg')['rows']['Taken']));
+file_put_contents("$fxPi/.gallery-config.php", $piCfg());
+// Settings: the heading, the five switches that start on in the open, the others folded under "More media information"
+$piOwner = $piSignIn();
+$piSettings = http_get("$basePi/?admin", [$piOwner])[1];
+$piMore = preg_match('#<details class="site-more">(.*?)</details>#s', $piSettings, $pm) ? $pm[1] : '';
+$piOpenPart = str_replace($piMore, '', $piSettings);
+$piOn = ['INFO_CAMERA', 'INFO_TAKEN', 'INFO_RESOLUTION', 'INFO_FILE_SIZE', 'INFO_POSITION'];
+$piOff = ['INFO_LENS', 'INFO_EXPOSURE', 'INFO_SOFTWARE', 'INFO_VIDEO', 'INFO_SERIALS', 'INFO_OWNER', 'INFO_COPYRIGHT', 'INFO_IMAGE_ID', 'INFO_COMMENTS'];
+$piRowChecked = fn ($html, $name) => preg_match('#id="setting-' . $name . '".*?type="checkbox" name="set_' . $name . '"[^>]*>#s', $html, $m) && str_contains($m[0], 'checked');
+check('[photo info settings] the Settings group is called "Locations and media information" (not "Location data" any more)', str_contains($piSettings, '<span class="site-group-title">Locations and media information</span>') && !str_contains($piSettings, '>Location data<'));
+check('[photo info settings] the five switches that start on (camera, date and time, resolution, file size, position) are in the open and on', count(array_filter($piOn, fn ($n) => str_contains($piOpenPart, 'id="setting-' . $n . '"') && !str_contains($piMore, 'id="setting-' . $n . '"') && $piRowChecked($piOpenPart, $n))) === 5);
+check('[photo info settings] every other switch (lens, exposure, software, video, serial numbers, owner, copyright, image id, comments) is folded under "More media information" and off', str_contains($piSettings, 'More media information') && count(array_filter($piOff, fn ($n) => str_contains($piMore, 'id="setting-' . $n . '"') && !str_contains($piOpenPart, 'id="setting-' . $n . '"') && !$piRowChecked($piMore, $n))) === 9);
+// A folder: the switch, where it is taken from, and the way back
+$piFolderPage = fn ($f) => http_get("$basePi/?admin&folder=" . rawurlencode($f), [$piOwner])[1];
+$piFp = $piFolderPage('Italy/Rome'); $piFi = $piFolderPage('Italy'); $piFs = $piFolderPage('Spain');
+check('[photo info folder] a folder\'s settings have "Locations and media information" with a Show photo info switch, and a folder that has not chosen says where its setting is taken from', str_contains($piFp, 'Locations and media information') && str_contains($piFp, 'Show photo info to visitors for this folder') && str_contains($piFp, 'Taken from Italy') && !str_contains($piFp, '<button type="button" class="linklike" data-flag-inherit'), '');
+check('[photo info folder] a folder that has made its own choice says so, with a way back to the folder above\'s; one with nothing above it that has chosen says it is off', str_contains($piFi, 'This folder\'s own choice.') && str_contains($piFi, '<button type="button" class="linklike" data-flag-inherit') && str_contains($piFs, 'No folder above has chosen, so this is off.'));
+$piCsrf2 = extract_csrf_token($piFs);
+$piAct = function ($folder, $action, $field, $value) use ($basePi, $piOwner, $piCsrf2) {
+    [, $body] = http_post("$basePi/?admin&folder=" . rawurlencode($folder), ['csrf_token' => $piCsrf2, 'action' => $action, $field => $value], ['X-Requested-With: gallery-fetch', $piOwner]);
+    return json_decode($body, true) ?? ['ok' => null, 'text' => substr($body, 0, 80)];
+};
+$piAct('Spain', 'toggle_media_info', 'info', '1');
+check('[photo info folder] switching Show photo info on for a folder saves it, and the panel works there at once', ($piItems('Spain')['mediaInfo'] ?? null) === true && $piGet('Spain/c.jpg')['status'] === 200);
+$piAct('Spain', 'toggle_media_info', 'info', 'inherit');
+check('[photo info folder] "Use the folder above\'s choice" takes the folder\'s own choice away: nothing above has chosen, so it is off again', !is_bool($piItems('Spain')['mediaInfo'] ?? null) && $piGet('Spain/c.jpg')['status'] === 404);
+$piAct('Italy/Rome', 'toggle_location_enabled', 'enabled', '0');
+check('[photo info folder] a folder\'s locations switch can be turned off on its own below a folder that has them on, and then handed back to the folder above', ($piItems('Italy/Rome')['locationEnabled'] ?? null) === false && !isset($piGet('Italy/Rome/b.jpg')['rows']['Position']));
+$piAct('Italy/Rome', 'toggle_location_enabled', 'enabled', 'inherit');
+check('[photo info folder] ...handed back, it takes the folder above\'s locations again', !is_bool($piItems('Italy/Rome')['locationEnabled'] ?? null) && isset($piGet('Italy/Rome/b.jpg')['rows']['Position']));
+
 // ---- "Put first" as one list: the site's order of the three kinds (SORT_PRIORITY), and a folder's own list on its settings page.
 echo "== put first: one list, in an order you set ==\n";
 $fxPf = new_fixture_dir('putfirst');
@@ -2728,9 +2913,9 @@ check('[privacy] the owner\'s folder buttons carry a lock in each private folder
 check('[privacy] "private first" puts the photos kept private on their own first, even in a private folder where everything is hidden', preg_match_all('#class="card[^"]*"[^>]*data-file="([^"]+)"#', $p3PrivFirst, $p3Order) && ($p3Order[1][0] ?? '') === 'Europe/France/Paris/eiffel.jpg');
 // Folder settings that save field by field
 [, $p3Settings] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
-check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Locations section with the location switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'class="priv-folder-form"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Locations</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
+check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Locations and media information section with the location switch, the photo info switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'class="priv-folder-form"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Locations and media information</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
 $p3Pos = function ($needle) use ($p3Settings) { $at = strpos($p3Settings, $needle); return $at === false ? PHP_INT_MAX : $at; };
-check('[settings order] a folder\'s settings run: name, dates, position, description, Cards/Flat, then Gallery of its own, Private folder, Not listed, then the order of the photos, then Locations', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('class="priv-folder-form"') && $p3Pos('class="priv-folder-form"') < $p3Pos('name="unlisted"') && $p3Pos('name="unlisted"') < $p3Pos('class="field wide sort-details"') && $p3Pos('class="field wide sort-details"') < $p3Pos('<h3 class="subhead">Locations</h3>') && $p3Pos('<h3 class="subhead">Locations</h3>') < $p3Pos('id="map-under"'));
+check('[settings order] a folder\'s settings run: name, dates, position, description, Cards/Flat, then Gallery of its own, Private folder, Not listed, then the order of the photos, then Locations and media information', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('class="priv-folder-form"') && $p3Pos('class="priv-folder-form"') < $p3Pos('name="unlisted"') && $p3Pos('name="unlisted"') < $p3Pos('class="field wide sort-details"') && $p3Pos('class="field wide sort-details"') < $p3Pos('<h3 class="subhead">Locations and media information</h3>') && $p3Pos('<h3 class="subhead">Locations and media information</h3>') < $p3Pos('id="map-under"'));
 check('[settings order] ...the order of the photos is a form of its own (so the switches can sit above it), sharing the one fingerprint, and the words beside the switches are short', substr_count($p3Settings, 'class="identity-form') === 2 && substr_count($p3Settings, 'name="loaded_hash"') === 2 && str_contains($p3Settings, 'Private folder <small class="muted">(contents included)</small>') && str_contains($p3Settings, 'Gallery of its own <small class="muted">(limits navigation)</small>') && !str_contains($p3Settings, 'class="hint priv-folder-note"') && !str_contains($p3Settings, 'visitors who arrive here can go no higher') && str_contains($p3Settings, 'To share it, send a photo'));
 check('[settings] ...each field has its own save note, and the Save buttons are only for a browser without JavaScript', substr_count($p3Settings, 'class="rowstate"') >= 8 && preg_match('#<div class="nojs-only"><button type="submit">Save folder settings</button></div>#', $p3Settings) === 1);
 $p3Hash = preg_match('/name="loaded_hash" value="([0-9a-f]{32})"/', $p3Settings, $m3) ? $m3[1] : '';
@@ -5772,10 +5957,10 @@ check('[quick popup] only "Type my own instead…" (or More options…) opens th
 check('[qr] the QR code button opens the large code at once, with Copy, Save and Done; the small code and its side panel are gone', str_contains($nTab, "else if (what === 'qr') showLarge(url, opts.name, b);") && str_contains($nTab, 'data-gs="saveimg">Save</button><button type="button" class="gs-btn gs-dark" data-gs="done">Done') && !str_contains($nTab, 'gs-qrbox') && !str_contains($nTab, 'Show large') && !str_contains($nTab, 'Scan to open') && str_contains($nTab, "d.id = 'gs-addrbox'") && str_contains($nTab, "select it and copy by hand."));
 // the Settings page
 $nGroups = (preg_match_all('~<details class="site-group"[^>]*>\s*<summary><span class="site-group-title">(.*?)</span>(?: <span class="muted">(.*?)</span>)?~s', $nTab, $gm) ? $gm : [[], [], []]);
-check('[settings page] the groups are, in this order: Folders and photos, Videos and thumbnails, Visitors and logs, Location data, Sharing and access, Signing in and passwords, Server setup (advanced), then Files this gallery has made; "What is shown", "Share links" and "Passwords" are gone as groups', $nGroups[1] === ['Folders and photos', 'Videos and thumbnails', 'Visitors and logs', 'Location data', 'Sharing and access', 'Signing in and passwords', 'Server setup (advanced)', 'Files this gallery has made'] && !str_contains($nTab, '>What is shown<') && !str_contains($nTab, '>Passwords<'), json_encode($nGroups[1]));
+check('[settings page] the groups are, in this order: Folders and photos, Videos and thumbnails, Visitors and logs, Locations and media information, Sharing and access, Signing in and passwords, Server setup (advanced), then Files this gallery has made; "What is shown", "Share links" and "Passwords" are gone as groups', $nGroups[1] === ['Folders and photos', 'Videos and thumbnails', 'Visitors and logs', 'Locations and media information', 'Sharing and access', 'Signing in and passwords', 'Server setup (advanced)', 'Files this gallery has made'] && !str_contains($nTab, '>What is shown<') && !str_contains($nTab, '>Passwords<'), json_encode($nGroups[1]));
 check('[settings page] every group starts closed (the first one no longer opens by itself)', !preg_match('/<details class="site-group"[^>]*\sopen/', $nTab));
 check('[settings page] the sign-in group holds both passwords, both signed-in lengths and the list of signed-in browsers, and says "12 settings"', preg_match('~Signing in and passwords</span> <span class="muted">12 settings</span>.*?name="pw_admin".*?name="pw_private".*?name="set_ADMIN_STAY_SIGNED_IN_DAYS".*?name="set_PRIVATE_VIEW_SIGNED_IN_DAYS".*?id="browsers-row".*?</details>~s', $nTab) === 1);
-check('[settings page] Sharing and access has no visitor download row any more (it is on each folder), Scrub location data is in Location data, and the video settings are in Videos', preg_match('~Sharing and access</span>.*?set_CLOSE_PUBLIC_GALLERY.*?</details>~s', $nTab) === 1 && !str_contains($nTab, 'id="setting-PUBLIC_DOWNLOAD_MODE"') && preg_match('~Location data</span>.*?set_ENABLE_PHOTO_LOCATION.*?id="setting-SCRUB_LOCATION_DATA".*?</details>~s', $nTab) === 1 && preg_match('~>Videos and thumbnails</span>.*?set_ENABLE_VIDEO".*?set_ENABLE_VIDEO_THUMBNAILS.*?set_ENABLE_VIDEO_PREVIEWS.*?</details>~s', $nTab) === 1);
+check('[settings page] Sharing and access has no visitor download row any more (it is on each folder), Scrub location data is in Locations and media information, and the video settings are in Videos', preg_match('~Sharing and access</span>.*?set_CLOSE_PUBLIC_GALLERY.*?</details>~s', $nTab) === 1 && !str_contains($nTab, 'id="setting-PUBLIC_DOWNLOAD_MODE"') && preg_match('~Locations and media information</span>.*?set_ENABLE_PHOTO_LOCATION.*?id="setting-SCRUB_LOCATION_DATA".*?</details>~s', $nTab) === 1 && preg_match('~>Videos and thumbnails</span>.*?set_ENABLE_VIDEO".*?set_ENABLE_VIDEO_THUMBNAILS.*?set_ENABLE_VIDEO_PREVIEWS.*?</details>~s', $nTab) === 1);
 check('[settings page] Prepare media is inside Videos and thumbnails, right under the Thumbnails switch, and is not a panel of its own above Settings', preg_match('~Videos and thumbnails</span>.*?set_ENABLE_THUMBNAIL_CACHE.*?id="media-panel".*?Visitors and logs~s', $nTab) === 1 && substr_count($nTab, 'id="media-panel"') === 1 && !preg_match('~<section class="panel media-panel"~', $nTab));
 file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_THUMBNAIL_CACHE' => false]));
 check('[settings page] with Thumbnails off the Prepare media panel is not drawn at all', substr_count(http_get("$baseN/?admin", ["Cookie: $nCookie"])[1], 'id="media-panel"') === 0);
@@ -8215,7 +8400,7 @@ check('[collections admin] ...and switched off again they are off, and the galle
 // the owner's pages
 $caHighHash = null;
 [, $caFrance] = http_get("$baseCa/?admin&folder=France", $caOwn);
-check('[collections admin] a folder\'s settings have a Collections section (before Locations): the collections in it with Open settings and Delete collection, and a box to make a new one from just a name', str_contains($caFrance, '<h3 class="subhead">Collections</h3>') && str_contains($caFrance, 'class="cm-section"') && str_contains($caFrance, 'Open settings') && str_contains($caFrance, 'Delete collection') && str_contains($caFrance, 'Name of the new collection') && strpos($caFrance, 'class="subhead">Collections<') < strpos($caFrance, 'class="subhead">Locations<') && str_contains($caFrance, 'Highlights'));
+check('[collections admin] a folder\'s settings have a Collections section (before Locations and media information): the collections in it with Open settings and Delete collection, and a box to make a new one from just a name', str_contains($caFrance, '<h3 class="subhead">Collections</h3>') && str_contains($caFrance, 'class="cm-section"') && str_contains($caFrance, 'Open settings') && str_contains($caFrance, 'Delete collection') && str_contains($caFrance, 'Name of the new collection') && strpos($caFrance, 'class="subhead">Collections<') < strpos($caFrance, 'class="subhead">Locations and media information<') && str_contains($caFrance, 'Highlights'));
 [, $caRootPage] = http_get("$baseCa/?admin", $caOwn);
 check('[collections admin] ...and so do the gallery\'s own settings, for the collections on the front page', str_contains($caRootPage, 'class="cm-section" data-csrf') && str_contains($caRootPage, 'data-parent=""'));
 [, $caCollPage] = http_get("$baseCa/?admin&folder=France%2Fhighlights", $caOwn);

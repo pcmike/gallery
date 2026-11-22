@@ -8,6 +8,8 @@ What changes at each version, and what to back up.
 
 **Updating** means replacing `index.php`, by hand or with **Update now** in the Health check when a newer version is out ([how it works](admin.md#new-versions-and-update-now)). Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
 
+**Upgrading to 2.6.7** from 2.6.6: replace `index.php` (or press **Update now**). One thing can change on screen: a folder's *Show photo locations* switch is now taken from the folder above when the folder has made no choice (before, a folder you had never touched was simply off). So a folder inside one that has locations on **now shows its locations too**, unless you switch it off. After updating, look through the subfolders of any folder that has locations on, and switch off any that should stay private (a folder you switched off yourself stays off). The new **photo info** panel is off in every folder until you switch it on; its field switches are in Settings under *Locations and media information* (the heading was *Location data*).
+
 **Upgrading to 2.6.4** from 2.6.3: replace `index.php` (or press **Update now**). Nothing stored changes. The only difference: the thumbnail clean-up now leaves a folder from elsewhere on the server (`EXTRA_FOLDERS`, `EXTRA_ROOTS`) alone, so another gallery showing the same folder keeps its thumbnails; a gallery no longer tidies its own old thumbnails in such a folder, and a few can build up there (safe to delete by hand).
 
 **Upgrading to 2.6.6** from 2.6.4 (or 2.6.3, 2.6.2): replace `index.php` (or press **Update now**). Things to know:

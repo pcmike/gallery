@@ -545,6 +545,25 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
+// What the viewer's info panel may say about a photo (Settings, Locations and media information). A folder opts in to the panel (its own "Show photo
+// info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
+// start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
+// Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.
+define('INFO_CAMERA', gallery_setting('INFO_CAMERA', true));
+define('INFO_TAKEN', gallery_setting('INFO_TAKEN', true));
+define('INFO_RESOLUTION', gallery_setting('INFO_RESOLUTION', true));
+define('INFO_FILE_SIZE', gallery_setting('INFO_FILE_SIZE', true));
+define('INFO_POSITION', gallery_setting('INFO_POSITION', true));
+define('INFO_LENS', gallery_setting('INFO_LENS', false));
+define('INFO_EXPOSURE', gallery_setting('INFO_EXPOSURE', false));
+define('INFO_SOFTWARE', gallery_setting('INFO_SOFTWARE', false));
+define('INFO_VIDEO', gallery_setting('INFO_VIDEO', false));
+define('INFO_SERIALS', gallery_setting('INFO_SERIALS', false));
+define('INFO_OWNER', gallery_setting('INFO_OWNER', false));
+define('INFO_COPYRIGHT', gallery_setting('INFO_COPYRIGHT', false));
+define('INFO_IMAGE_ID', gallery_setting('INFO_IMAGE_ID', false));
+define('INFO_COMMENTS', gallery_setting('INFO_COMMENTS', false));
+
 // A second, lower-privilege password that unlocks items flagged hidden
 // from public view in the admin tool — scoped to viewing only, never
 // editing. Empty/off by default, same pattern as ADMIN_PASSWORD. The

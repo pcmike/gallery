@@ -28,6 +28,7 @@ php/022-map-points-1.php
 js/023-map-script-pins.js
 php/024-map-points-2.php
 php/025-item-data.php
+php/025a-photo-info.php
 php/026-media-stacks-and-records.php
 php/027-gps-and-admin-folder-helpers.php
 php/028-admin-export-and-hidden.php
@@ -90,6 +91,7 @@ js/080-gallery-script-keyboard.js
 js/080a-gallery-script-photo-address.js
 js/080b-gallery-script-live-folder.js
 js/080c-gallery-script-slideshow.js
+js/080d-gallery-script-photo-info.js
 php/081-public-page-script-glue-share-popover.php
 js/082-gallery-script-link-reporting.js
 php/083-public-page-script-glue-deep-link.php

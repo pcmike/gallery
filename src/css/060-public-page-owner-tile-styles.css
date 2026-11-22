@@ -488,7 +488,43 @@
   /* While a slideshow runs the photo is left clean: no arrows, no Close, no row of buttons (the slideshow's own controls come and go, and have Stop;
      the arrow keys and swipes still move by hand). The caption stays; the counter ("3 / 42") moves into the slideshow's controls. */
   .lightbox.ss-on .nav, .lightbox.ss-on .close, .lightbox.ss-on .caption-row .lightbox-tools-wrap, .lightbox.ss-on .caption-row .lightbox-close-row { display: none; }
-  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
+  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }
+  /* The info panel (what the photo's file says about it): a panel beside the photo on a wide screen (also a phone turned on its side), a sheet over the
+     lower part of the screen on a narrow one. The photo makes room; the viewer's own Close and arrow move out of its way; a slideshow has none of it. */
+  .info-panel[hidden] { display: none; }
+  .info-panel { position: fixed; z-index: 7; box-sizing: border-box; color: #e8e8ee; font-size: 0.95rem; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .info-panel:focus { outline: none; }
+  .ip-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+  .ip-title { margin: 0; font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; color: #9a9aa6; font-weight: 600; }
+  .ip-x { width: 44px; height: 44px; margin: -8px -10px -8px 0; padding: 0; display: flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 10px; color: #e8e8ee; cursor: pointer; }
+  .ip-x:hover { background: rgba(255,255,255,0.1); }
+  .ip-x .ico { width: 20px; height: 20px; stroke-width: 2; vertical-align: 0; }
+  .ip-row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ip-row:last-child { border-bottom: 0; }
+  .ip-k { color: #9a9aa6; flex: none; }
+  .ip-v { text-align: right; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .ip-v a { color: #aab2ff; text-decoration: underline; text-underline-offset: 3px; }
+  .ip-note { margin: 10px 0; color: #9a9aa6; }
+  .lightbox-info.on { color: var(--accent, #aab2ff); opacity: 1; }
+  .lightbox.editing .lightbox-info, .lightbox.editing .info-panel, .lightbox.ss-on .lightbox-info, .lightbox.ss-on .info-panel { display: none; }
+  @media (min-width: 601px) {
+    .info-panel { top: 0; right: 0; bottom: 0; width: 320px; padding: 22px 22px 18px; background: rgba(20,20,24,0.96); border-left: 1px solid rgba(255,255,255,0.12); }
+    .lightbox.info-open { padding-right: 320px; }
+    .lightbox.info-open img, .lightbox.info-open video { max-width: calc(100vw - 320px - 48px); }
+    .lightbox.info-open .nav.next { right: 336px; }
+    .lightbox.info-open .close { right: 334px; }
+    .lightbox.info-open .caption-row { margin-right: 0; }
+  }
+  @media (min-width: 601px) and (pointer: coarse) {
+    .lightbox.info-open .caption-row, .lightbox.info-open.zoom-width .caption-row, .lightbox.info-open.zoom-actual .caption-row { right: 320px; }
+  }
+  @media (max-width: 600px) {
+    .info-panel { left: 0; right: 0; bottom: 0; max-height: 55dvh; padding: 16px 20px calc(18px + env(safe-area-inset-bottom, 0px)); background: rgba(20,20,24,0.90); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top: 1px solid rgba(255,255,255,0.14); border-radius: 18px 18px 0 0; }
+    .lightbox.info-open { padding-bottom: var(--ip-h, 40dvh); }
+    .lightbox.info-open img, .lightbox.info-open video { max-height: calc(100dvh - var(--ip-h, 40dvh) - 70px - env(safe-area-inset-top, 0px)); }
+    .lightbox.info-open .nav { top: calc((100dvh - var(--ip-h, 40dvh)) / 2); }
+    .ip-row { padding: 13px 0; }
+  }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }

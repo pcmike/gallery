@@ -545,6 +545,25 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
+// What the viewer's info panel may say about a photo (Settings, Locations and media information). A folder opts in to the panel (its own "Show photo
+// info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
+// start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
+// Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.
+define('INFO_CAMERA', gallery_setting('INFO_CAMERA', true));
+define('INFO_TAKEN', gallery_setting('INFO_TAKEN', true));
+define('INFO_RESOLUTION', gallery_setting('INFO_RESOLUTION', true));
+define('INFO_FILE_SIZE', gallery_setting('INFO_FILE_SIZE', true));
+define('INFO_POSITION', gallery_setting('INFO_POSITION', true));
+define('INFO_LENS', gallery_setting('INFO_LENS', false));
+define('INFO_EXPOSURE', gallery_setting('INFO_EXPOSURE', false));
+define('INFO_SOFTWARE', gallery_setting('INFO_SOFTWARE', false));
+define('INFO_VIDEO', gallery_setting('INFO_VIDEO', false));
+define('INFO_SERIALS', gallery_setting('INFO_SERIALS', false));
+define('INFO_OWNER', gallery_setting('INFO_OWNER', false));
+define('INFO_COPYRIGHT', gallery_setting('INFO_COPYRIGHT', false));
+define('INFO_IMAGE_ID', gallery_setting('INFO_IMAGE_ID', false));
+define('INFO_COMMENTS', gallery_setting('INFO_COMMENTS', false));
+
 // A second, lower-privilege password that unlocks items flagged hidden
 // from public view in the admin tool — scoped to viewing only, never
 // editing. Empty/off by default, same pattern as ADMIN_PASSWORD. The
@@ -1207,6 +1226,7 @@ function request_routes() {
         'strip'       => ['params' => ['strip']],
         'preview'     => ['params' => ['preview']],
         'img'         => ['params' => ['img', 'video']],
+        'photoinfo'   => ['params' => ['photoinfo']],
         'download'    => ['params' => ['download']],
         'about'       => ['params' => ['about']],
         'mapicon'     => ['params' => ['mapicon'], 'when' => ENABLE_PHOTO_LOCATION],
@@ -1328,6 +1348,12 @@ if (request_route() === 'img') {
     } else {
         serve_video($dir, $claimed, $claimedList, $claimedItems);
     }
+    exit;
+}
+
+// ?photoinfo=<file>: what the viewer's info panel says about one photo (JSON; see serve_photo_info).
+if (request_route() === 'photoinfo') {
+    serve_photo_info($dir, $mediaExtensions, $self);
     exit;
 }
 
@@ -6658,6 +6684,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
         $cache = [];
         folder_unlisted_cached(null, null, true);
         folder_own_gallery_cached(null, null, true);
+        folder_flag_resolve(null, null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
@@ -8733,9 +8760,10 @@ function items_path($folderPath) {
  *  from EXIF, since that would publish when the owner was away) and
  *  sortOrder (an explicit position among sibling folders).
  *  locationEnabled is this folder's own
- *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
+ *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show photo info" switch: true, false, or null when it
+ *  has made no choice and takes the one from the folder above it (see folder_flag_resolve). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
 }
 
 function items_read($folderPath) {
@@ -8791,7 +8819,7 @@ function items_get_all_for_files($dir, $files) {
             // each of its own files' entries so callers (the location
             // badge/pin, specifically) don't need a second lookup
             // structure just to find out which folder a file lives in.
-            $entry['_folderLocationEnabled'] = !empty($data['locationEnabled']);
+            $entry['_folderLocationEnabled'] = folder_location_on($dir, ($fr = dirname($folderFiles[0])) === '.' ? '' : $fr);   // (the folder's own choice, or the one it takes from the folder above)
             $entry['_folderKeepLocation'] = ($data['keepLocation'] ?? null) === true;   // (the folder's own "keep the location in files visitors get")
             $result[$file] = $entry;
         }
@@ -9181,6 +9209,387 @@ function media_stacks_resolve($folderReal, $list) {
     return $out;
 }
 
+/* -----------------------------------------------------------------------
+ * Photo information (the viewer's "info" panel).
+ *
+ * Two things live here. The first is the per-folder switches that a folder takes from the folder above it (the location switch and the
+ * info switch): a folder's own choice wins, a folder with none takes the nearest folder above it that has one, and a folder with none
+ * above it is off. The gallery-wide setting is never what switches a folder on: for locations it is a master "allow" (ENABLE_PHOTO_LOCATION),
+ * for info there is none. The second is what the panel says about one photo: asked for when the panel opens (?photoinfo=<file>), read
+ * from the file then, and only the fields whose gallery-wide switch (INFO_*) is on are even read. Anything that says where (the position,
+ * the time zone the camera wrote) is allowed only when that photo's location is. A camera's serial numbers, the owner's name, the
+ * copyright text, the image's unique id and its comments have switches of their own, all off to start with.
+ * ----------------------------------------------------------------------- */
+
+/** A folder's setting for $key ('locationEnabled' or 'mediaInfo'), as the folder gets it: ['on' => bool, 'own' => this folder's own choice (true,
+ *  false) or null when it takes the one above, 'from' => the folder the choice came from ('' is the gallery's own folder) or null]. */
+function folder_flag_resolve($dir, $folderRel, $key, $reset = false) {
+    static $cache = [];
+    if ($reset) { $cache = []; return null; }
+    $folderRel = (string) $folderRel;
+    if ($folderRel === '.') $folderRel = '';
+    $ck = $key . '|' . $folderRel;
+    if (isset($cache[$ck])) return $cache[$ck];
+    $segments = ($folderRel === '' || !AUTO_GROUP_BY_FOLDER) ? [] : explode('/', $folderRel);
+    $paths = [];
+    for ($n = count($segments); $n >= 1; $n--) $paths[] = implode('/', array_slice($segments, 0, $n));   // (the folder itself, then each folder above it...)
+    $paths[] = '';                                                                                         // (...and last the gallery's own folder)
+    foreach ($paths as $p) {
+        $data = items_read($p === '' ? $dir : resolve_real_path($dir, $p));
+        $own = $data[$key] ?? null;
+        if (is_bool($own)) return $cache[$ck] = ['on' => $own, 'own' => $p === $folderRel ? $own : null, 'from' => $p];
+    }
+    return $cache[$ck] = ['on' => false, 'own' => null, 'from' => null];
+}
+
+function folder_location_on($dir, $folderRel) { return folder_flag_resolve($dir, $folderRel, 'locationEnabled')['on']; }
+function folder_info_on($dir, $folderRel) { return folder_flag_resolve($dir, $folderRel, 'mediaInfo')['on']; }
+
+/** The gallery-wide switches, in the order their rows are shown: group => setting. */
+function photo_info_groups() {
+    return ['camera' => 'INFO_CAMERA', 'lens' => 'INFO_LENS', 'exposure' => 'INFO_EXPOSURE', 'taken' => 'INFO_TAKEN', 'resolution' => 'INFO_RESOLUTION',
+            'size' => 'INFO_FILE_SIZE', 'position' => 'INFO_POSITION', 'video' => 'INFO_VIDEO', 'software' => 'INFO_SOFTWARE', 'serials' => 'INFO_SERIALS',
+            'owner' => 'INFO_OWNER', 'copyright' => 'INFO_COPYRIGHT', 'imageid' => 'INFO_IMAGE_ID', 'comments' => 'INFO_COMMENTS'];
+}
+
+/** The groups the owner has switched on: group => true. Empty when none is (then there is nothing for a panel to show). */
+function photo_info_wanted() {
+    $w = [];
+    foreach (photo_info_groups() as $group => $const) if (defined($const) && constant($const)) $w[$group] = true;
+    return $w;
+}
+
+/** Text from a file made safe to show: valid UTF-8, no control characters, one line, not long. */
+function photo_info_text($v, $max = 400) {
+    if (is_array($v)) $v = implode(', ', array_map('strval', $v));
+    $v = (string) $v;
+    if (!preg_match('//u', $v)) $v = (string) @iconv('UTF-8', 'UTF-8//IGNORE', $v);
+    $v = trim((string) preg_replace('/\s+/u', ' ', (string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $v)));
+    return function_exists('mb_substr') ? mb_substr($v, 0, $max) : substr($v, 0, $max);
+}
+
+/** An EXIF rational written as text ("18/10", "1/120", or a plain number) as a number, or null. */
+function photo_info_ratio($v) {
+    if (is_int($v) || is_float($v)) return (float) $v;
+    if (!is_string($v) || !preg_match('#^\s*(-?\d+(?:\.\d+)?)\s*(?:/\s*(-?\d+(?:\.\d+)?))?\s*$#', $v, $m)) return null;
+    $d = isset($m[2]) ? (float) $m[2] : 1.0;
+    return $d == 0.0 ? null : (float) $m[1] / $d;
+}
+
+/** The tags a picture file carries, under plain names: JPEG and TIFF through PHP's own reader, HEIC and HEIF through Imagick (as the location is read
+ *  from them). Only the keys of $wanted's groups are filled in. Anything unreadable is simply left out. */
+function photo_info_tags($realPath, $wanted) {
+    $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
+    $raw = [];
+    if (in_array($ext, ['jpg', 'jpeg', 'tif', 'tiff'], true) && function_exists('exif_read_data')) {
+        $e = @exif_read_data($realPath, null, false);
+        if (is_array($e)) {
+            $raw = [
+                'make' => $e['Make'] ?? null, 'model' => $e['Model'] ?? null, 'software' => $e['Software'] ?? null, 'artist' => $e['Artist'] ?? null,
+                'copyright' => $e['Copyright'] ?? null, 'description' => $e['ImageDescription'] ?? null, 'taken' => $e['DateTimeOriginal'] ?? ($e['DateTime'] ?? null),
+                'offset' => $e['UndefinedTag:0x9011'] ?? ($e['OffsetTimeOriginal'] ?? null), 'exposure_time' => $e['ExposureTime'] ?? null, 'fnumber' => $e['FNumber'] ?? null,
+                'iso' => $e['ISOSpeedRatings'] ?? null, 'focal' => $e['FocalLength'] ?? null, 'focal35' => $e['FocalLengthIn35mmFilm'] ?? null, 'flash' => $e['Flash'] ?? null,
+                'lens' => $e['UndefinedTag:0xA434'] ?? ($e['LensModel'] ?? null), 'lens_make' => $e['UndefinedTag:0xA433'] ?? ($e['LensMake'] ?? null),
+                'body_serial' => $e['UndefinedTag:0xA431'] ?? ($e['BodySerialNumber'] ?? null), 'lens_serial' => $e['UndefinedTag:0xA435'] ?? ($e['LensSerialNumber'] ?? null),
+                'owner_name' => $e['UndefinedTag:0xA430'] ?? ($e['CameraOwnerName'] ?? null), 'image_id' => $e['ImageUniqueID'] ?? null,
+                'user_comment' => $e['COMPUTED']['UserComment'] ?? null, 'xp_comment' => $e['XPComment'] ?? null,
+            ];
+            if (is_string($raw['xp_comment']) && function_exists('mb_convert_encoding')) $raw['xp_comment'] = @mb_convert_encoding($raw['xp_comment'], 'UTF-8', 'UTF-16LE');
+        }
+    } elseif (in_array($ext, ['heic', 'heif'], true) && class_exists('Imagick') && function_exists('picture_coder_for')) {
+        try {
+            $coder = picture_coder_for($realPath);
+            if ($coder !== null) {
+                $im = new Imagick();
+                $im->pingImage($coder . ':' . $realPath);
+                $p = $im->getImageProperties('exif:*');
+                $im->clear();
+                $g = function ($name) use ($p) { return $p['exif:' . $name] ?? null; };
+                $raw = [
+                    'make' => $g('Make'), 'model' => $g('Model'), 'software' => $g('Software'), 'artist' => $g('Artist'), 'copyright' => $g('Copyright'),
+                    'description' => $g('ImageDescription'), 'taken' => $g('DateTimeOriginal') ?? $g('DateTime'), 'offset' => $g('OffsetTimeOriginal'),
+                    'exposure_time' => $g('ExposureTime'), 'fnumber' => $g('FNumber'), 'iso' => $g('ISOSpeedRatings') ?? $g('PhotographicSensitivity'), 'focal' => $g('FocalLength'),
+                    'focal35' => $g('FocalLengthIn35mmFilm'), 'flash' => $g('Flash'), 'lens' => $g('LensModel'), 'lens_make' => $g('LensMake'),
+                    'body_serial' => $g('BodySerialNumber'), 'lens_serial' => $g('LensSerialNumber'), 'owner_name' => $g('CameraOwnerName'),
+                    'image_id' => $g('ImageUniqueID'), 'user_comment' => $g('UserComment'), 'xp_comment' => null,
+                ];
+            }
+        } catch (Throwable $e) { $raw = []; }
+    }
+    $need = [   // (only what a switched-on group will use is kept: the rest is dropped here, not later)
+        'camera' => ['make', 'model'], 'lens' => ['lens', 'lens_make'], 'exposure' => ['exposure_time', 'fnumber', 'iso', 'focal', 'focal35', 'flash'],
+        'taken' => ['taken', 'offset'], 'software' => ['software'], 'serials' => ['body_serial', 'lens_serial'], 'owner' => ['artist', 'owner_name'],
+        'copyright' => ['copyright'], 'imageid' => ['image_id'], 'comments' => ['description', 'user_comment', 'xp_comment'],
+    ];
+    $out = [];
+    foreach ($need as $group => $keys) if (isset($wanted[$group])) foreach ($keys as $k) if (isset($raw[$k]) && $raw[$k] !== '') $out[$k] = $raw[$k];
+    return $out;
+}
+
+/** A picture's size in pixels as [width, height], or null. */
+function photo_info_pixels($realPath) {
+    $s = @getimagesize($realPath);
+    if (is_array($s) && !empty($s[0]) && !empty($s[1])) return [(int) $s[0], (int) $s[1]];
+    $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
+    if (in_array($ext, ['heic', 'heif'], true) && class_exists('Imagick') && function_exists('picture_coder_for')) {
+        try {
+            $coder = picture_coder_for($realPath);
+            if ($coder !== null) { $im = new Imagick(); $im->pingImage($coder . ':' . $realPath); $w = $im->getImageWidth(); $h = $im->getImageHeight(); $im->clear(); if ($w > 0 && $h > 0) return [$w, $h]; }
+        } catch (Throwable $e) {}
+    }
+    return null;
+}
+
+/** What an MP4 or MOV file says about itself (read from its boxes, no tool needed): length, size in pixels, frame rate, the video and audio kinds,
+ *  when it was made and, when a phone wrote them, the make, model, software and local time. Anything else (WebM...) gives an empty list. */
+function photo_info_video_tags($realPath) {
+    $size = @filesize($realPath);
+    $fh = $size === false ? false : @fopen($realPath, 'rb');
+    if (!$fh) return [];
+    $t = [];
+    try {
+        $u32 = function ($s, $o) { return strlen($s) >= $o + 4 ? unpack('N', $s, $o)[1] : null; };
+        $time = function ($fhh, $box) use ($u32) {   // mvhd or mdhd: [timescale, duration, creation (seconds since 1904)]
+            $h = scrub_read($fhh, $box['data'], 36);
+            if ($h === null) return null;
+            if (ord($h[0]) === 1) { if (strlen($h) < 32) return null; return [$u32($h, 20), unpack('J', $h, 24)[1], unpack('J', $h, 4)[1]]; }
+            return [$u32($h, 12), $u32($h, 16), $u32($h, 4)];
+        };
+        $moovs = array_filter(scrub_boxes($fh, 0, $size) ?? [], function ($b) { return $b['type'] === 'moov'; });
+        foreach ($moovs as $moov) {
+            foreach (scrub_boxes($fh, $moov['data'], $moov['end']) ?? [] as $b) {
+                if ($b['type'] === 'mvhd') {
+                    $m = $time($fh, $b);
+                    if ($m && $m[0]) { $t['duration'] = $m[1] / $m[0]; if ($m[2] > 2082844800) $t['created_utc'] = $m[2] - 2082844800; }
+                } elseif ($b['type'] === 'trak') {
+                    $kind = null; $codec = null; $w = $h = null; $audio = null; $frames = null; $ts = null; $dur = null;
+                    foreach (scrub_boxes($fh, $b['data'], $b['end']) ?? [] as $tb) {
+                        if ($tb['type'] === 'tkhd') {
+                            $d = scrub_read($fh, $tb['data'], 96);
+                            if ($d !== null) { $v1 = ord($d[0]) === 1; $o = $v1 ? 88 : 76; if (strlen($d) >= $o + 8) { $w = unpack('n', $d, $o)[1]; $h = unpack('n', $d, $o + 4)[1]; } }
+                        } elseif ($tb['type'] === 'mdia') {
+                            foreach (scrub_boxes($fh, $tb['data'], $tb['end']) ?? [] as $mb) {
+                                if ($mb['type'] === 'hdlr') { $hd = scrub_read($fh, $mb['data'], 12); if ($hd !== null && strlen($hd) >= 12) $kind = substr($hd, 8, 4); }
+                                elseif ($mb['type'] === 'mdhd') { $mm = $time($fh, $mb); if ($mm) { $ts = $mm[0]; $dur = $mm[1]; } }
+                                elseif ($mb['type'] === 'minf') {
+                                    foreach (scrub_boxes($fh, $mb['data'], $mb['end']) ?? [] as $nb) {
+                                        if ($nb['type'] !== 'stbl') continue;
+                                        foreach (scrub_boxes($fh, $nb['data'], $nb['end']) ?? [] as $sb) {
+                                            if ($sb['type'] === 'stsd') {
+                                                $e = scrub_read($fh, $sb['data'] + 8, 40);
+                                                if ($e !== null && strlen($e) >= 12) {
+                                                    $codec = substr($e, 4, 4);
+                                                    if (strlen($e) >= 36) $audio = ['channels' => unpack('n', $e, 24)[1], 'rate' => unpack('n', $e, 32)[1]];
+                                                }
+                                            } elseif ($sb['type'] === 'stts') {
+                                                $sd = scrub_read($fh, $sb['data'], min(8 + 8 * 512, $sb['end'] - $sb['data']));
+                                                if ($sd !== null && strlen($sd) >= 8) { $n = min($u32($sd, 4), intdiv(strlen($sd) - 8, 8)); $frames = 0; for ($i = 0; $i < $n; $i++) $frames += $u32($sd, 8 + 8 * $i); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ($kind === 'vide' && !isset($t['video'])) {
+                        $t['video'] = $codec; if ($w && $h) { $t['width'] = $w; $t['height'] = $h; }
+                        if ($frames && $ts && $dur) $t['fps'] = $frames / ($dur / $ts);
+                    } elseif ($kind === 'soun' && !isset($t['audio'])) {
+                        $t['audio'] = $codec; if ($audio) { $t['audio_channels'] = $audio['channels']; $t['audio_rate'] = $audio['rate']; }
+                    }
+                } elseif ($b['type'] === 'meta') {   // a phone's own notes (make, model, software, local time), under "keys" and "ilst"
+                    $probe = scrub_read($fh, $b['data'] + 4, 4);
+                    $kids = scrub_boxes($fh, $probe === 'hdlr' ? $b['data'] : $b['data'] + 4, $b['end']);
+                    $names = [];
+                    foreach ($kids ?? [] as $k) {
+                        if ($k['type'] !== 'keys') continue;
+                        $head = scrub_read($fh, $k['data'], 8);
+                        if ($head === null) continue;
+                        $entries = $u32($head, 4); $at = $k['data'] + 8;
+                        for ($i = 1; $i <= $entries && $i < 512; $i++) {
+                            $eh = scrub_read($fh, $at, 8);
+                            if ($eh === null) break;
+                            $elen = $u32($eh, 0);
+                            if ($elen < 8 || $at + $elen > $k['end']) break;
+                            $names[$i] = (string) scrub_read($fh, $at + 8, $elen - 8);
+                            $at += $elen;
+                        }
+                    }
+                    foreach ($kids ?? [] as $k) {
+                        if ($k['type'] !== 'ilst') continue;
+                        foreach (scrub_boxes($fh, $k['data'], $k['end']) ?? [] as $item) {
+                            $name = $names[unpack('N', $item['type'])[1]] ?? '';
+                            $slot = ['com.apple.quicktime.make' => 'make', 'com.apple.quicktime.model' => 'model', 'com.apple.quicktime.software' => 'software', 'com.apple.quicktime.creationdate' => 'local_time'][$name] ?? null;
+                            if ($slot === null) continue;
+                            foreach (scrub_boxes($fh, $item['data'], $item['end']) ?? [] as $d) {
+                                if ($d['type'] === 'data' && $d['end'] - $d['data'] > 8) { $v = scrub_read($fh, $d['data'] + 8, min(120, $d['end'] - $d['data'] - 8)); if ($v !== null) $t[$slot] = $v; }
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    } catch (Throwable $e) {
+        $t = [];
+    } finally {
+        fclose($fh);
+    }
+    return $t;
+}
+
+/** The video kind from its four-letter code in the file, in words. */
+function photo_info_codec_name($code) {
+    $names = ['avc1' => 'H.264', 'avc3' => 'H.264', 'hvc1' => 'HEVC (H.265)', 'hev1' => 'HEVC (H.265)', 'av01' => 'AV1', 'vp09' => 'VP9', 'mp4v' => 'MPEG-4',
+              'apch' => 'ProRes', 'apcn' => 'ProRes', 'apcs' => 'ProRes', 'ap4h' => 'ProRes', 'mp4a' => 'AAC', 'alac' => 'ALAC', 'ac-3' => 'AC-3', 'ec-3' => 'E-AC-3', 'Opus' => 'Opus', 'sowt' => 'PCM', 'lpcm' => 'PCM'];
+    $code = (string) $code;
+    return $names[$code] ?? photo_info_text($code, 12);
+}
+
+/** A length in seconds as 0:07, 1:05 or 1:02:03. */
+function photo_info_length($seconds) {
+    $s = (int) round($seconds);
+    return $s >= 3600 ? sprintf('%d:%02d:%02d', intdiv($s, 3600), intdiv($s % 3600, 60), $s % 60) : sprintf('%d:%02d', intdiv($s, 60), $s % 60);
+}
+
+/** The rows the panel shows for one photo: [['label' => ..., 'value' => ..., 'href' => (a link, or absent)], ...], only for the groups switched on, with
+ *  anything that says where left out unless this photo's location is allowed. $entry is the photo's own item data, as the gallery's pages see it. */
+function photo_info_rows($dir, $file, $entry) {
+    $wanted = photo_info_wanted();
+    if (!$wanted) return [];
+    $real = resolve_real_path($dir, $file);
+    $isVideo = is_video_file($file);
+    // May anything that says where be shown for this photo? The same switches as its pin: the gallery, the folder, the photo, who is looking. A photo
+    // whose location the owner cleared is one whose place they do not want said.
+    $probe = $entry; $probe['location'] = ['lat' => 1.0, 'lng' => 1.0];
+    $whereOk = empty($entry['locationCleared']) && photo_location_visible($probe);
+    $rows = [];
+    $add = function ($label, $value, $href = null) use (&$rows) {
+        $value = photo_info_text($value);
+        if ($value === '') return;
+        $row = ['label' => $label, 'value' => $value];
+        if ($href !== null) $row['href'] = $href;
+        $rows[] = $row;
+    };
+    $tags = $isVideo ? photo_info_video_tags($real) : photo_info_tags($real, $wanted);
+    $pixels = ($isVideo || !isset($wanted['resolution'])) ? null : photo_info_pixels($real);
+    $make = isset($wanted['camera']) ? photo_info_text($tags['make'] ?? '') : '';
+    $model = isset($wanted['camera']) ? photo_info_text($tags['model'] ?? '') : '';
+    foreach (photo_info_groups() as $group => $const) {
+        if (!isset($wanted[$group])) continue;
+        switch ($group) {
+            case 'camera':
+                $add('Camera', ($model !== '' && ($make === '' || stripos($model, $make) === 0)) ? $model : trim($make . ' ' . $model));
+                break;
+            case 'lens':
+                $lens = photo_info_text($tags['lens'] ?? '');
+                $lmake = photo_info_text($tags['lens_make'] ?? '');
+                $add('Lens', ($lens !== '' && $lmake !== '' && stripos($lens, $lmake) !== 0) ? $lmake . ' ' . $lens : $lens);
+                break;
+            case 'exposure':
+                $f = photo_info_ratio($tags['focal'] ?? null); $f35 = photo_info_ratio($tags['focal35'] ?? null);
+                if ($f !== null && $f > 0) $add('Focal length', rtrim(rtrim(sprintf('%.1f', $f), '0'), '.') . ' mm' . ($f35 !== null && $f35 > 0 ? ' (' . (int) round($f35) . ' mm equivalent)' : ''));
+                $n = photo_info_ratio($tags['fnumber'] ?? null);
+                if ($n !== null && $n > 0) $add('Aperture', 'f/' . rtrim(rtrim(sprintf('%.1f', $n), '0'), '.'));
+                $x = photo_info_ratio($tags['exposure_time'] ?? null);
+                if ($x !== null && $x > 0) $add('Shutter speed', $x >= 1 ? rtrim(rtrim(sprintf('%.1f', $x), '0'), '.') . ' s' : '1/' . (int) round(1 / $x) . ' s');
+                $iso = $tags['iso'] ?? null;
+                if (is_array($iso)) $iso = $iso[0] ?? null;
+                if ($iso !== null && is_numeric($iso) && (int) $iso > 0) $add('ISO', (string) (int) $iso);
+                if (isset($tags['flash']) && is_numeric($tags['flash'])) $add('Flash', ((int) $tags['flash'] & 1) ? 'Fired' : 'Did not fire');
+                break;
+            case 'taken':
+                if ($isVideo) {
+                    $lt = (string) ($tags['local_time'] ?? '');
+                    if (preg_match('/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d:?\d\d)?/', $lt, $m)) {
+                        $when = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', "$m[1]-$m[2]-$m[3] $m[4]:$m[5]:$m[6]", new DateTimeZone('UTC'));
+                        $zone = isset($m[7]) ? substr($m[7], 0, 3) . ':' . substr($m[7], -2) : '';
+                        if ($when) $add('Taken', $when->format('M j, Y, H:i') . ($whereOk && $zone !== '' ? ' (UTC' . $zone . ')' : ''));
+                    } elseif (isset($tags['created_utc'])) {
+                        $add('Taken', gmdate('M j, Y, H:i', (int) $tags['created_utc']) . ' UTC');
+                    }
+                } else {
+                    $when = isset($tags['taken']) ? DateTimeImmutable::createFromFormat('Y:m:d H:i:s', trim((string) $tags['taken']), new DateTimeZone('UTC')) : false;
+                    if ($when) {
+                        $zone = (string) ($tags['offset'] ?? '');
+                        $add('Taken', $when->format('M j, Y, H:i') . ($whereOk && preg_match('/^[+-]\d\d:\d\d$/', $zone) ? ' (UTC' . $zone . ')' : ''));
+                    }
+                }
+                break;
+            case 'resolution':
+                if ($isVideo) { if (!empty($tags['width']) && !empty($tags['height'])) $add('Resolution', $tags['width'] . ' × ' . $tags['height']); }
+                elseif ($pixels) $add('Resolution', sprintf('%.1f MP (%d × %d)', $pixels[0] * $pixels[1] / 1000000, $pixels[0], $pixels[1]));
+                break;
+            case 'size':
+                $bytes = @filesize($real);
+                if ($bytes !== false) $add('File size', human_bytes($bytes));
+                break;
+            case 'position':
+                $loc = $entry['location'] ?? null;
+                if ($whereOk && is_array($loc) && isset($loc['lat'], $loc['lng']) && is_valid_coordinate($loc['lat'], $loc['lng'])) {
+                    $lat = (float) $loc['lat']; $lng = (float) $loc['lng'];
+                    $add('Position', sprintf('%.4f° %s, %.4f° %s', abs($lat), $lat >= 0 ? 'N' : 'S', abs($lng), $lng >= 0 ? 'E' : 'W'),
+                        'https://www.openstreetmap.org/?mlat=' . rtrim(rtrim(sprintf('%.6F', $lat), '0'), '.') . '&mlon=' . rtrim(rtrim(sprintf('%.6F', $lng), '0'), '.') . '#map=16/' . rtrim(rtrim(sprintf('%.6F', $lat), '0'), '.') . '/' . rtrim(rtrim(sprintf('%.6F', $lng), '0'), '.'));
+                }
+                break;
+            case 'video':
+                if (!$isVideo) break;
+                if (isset($tags['duration']) && $tags['duration'] > 0) $add('Length', photo_info_length($tags['duration']));
+                if (isset($tags['fps']) && $tags['fps'] > 0) $add('Frame rate', rtrim(rtrim(sprintf('%.2f', $tags['fps']), '0'), '.') . ' frames/s');
+                if (!empty($tags['video'])) $add('Video', photo_info_codec_name($tags['video']));
+                if (!empty($tags['audio'])) {
+                    $ch = (int) ($tags['audio_channels'] ?? 0);
+                    $add('Audio', photo_info_codec_name($tags['audio']) . ($ch === 1 ? ', mono' : ($ch === 2 ? ', stereo' : ($ch > 2 ? ', ' . $ch . ' channels' : ''))) . (!empty($tags['audio_rate']) ? ', ' . rtrim(rtrim(sprintf('%.1f', $tags['audio_rate'] / 1000), '0'), '.') . ' kHz' : ''));
+                }
+                $bytes = @filesize($real);
+                if ($bytes !== false && !empty($tags['duration']) && $tags['duration'] > 0) {
+                    $mbit = $bytes * 8 / $tags['duration'] / 1000000;
+                    $add('Bitrate', $mbit >= 1 ? rtrim(rtrim(sprintf('%.1f', $mbit), '0'), '.') . ' Mbit/s' : max(1, (int) round($mbit * 1000)) . ' kbit/s');
+                }
+                break;
+            case 'software':
+                $add('Software', $tags['software'] ?? '');
+                break;
+            case 'serials':
+                $add('Camera serial number', $tags['body_serial'] ?? '');
+                $add('Lens serial number', $tags['lens_serial'] ?? '');
+                break;
+            case 'owner':
+                $add('Owner', ($tags['artist'] ?? '') !== '' ? $tags['artist'] : ($tags['owner_name'] ?? ''));
+                break;
+            case 'copyright':
+                $add('Copyright', $tags['copyright'] ?? '');
+                break;
+            case 'imageid':
+                $add('Image ID', $tags['image_id'] ?? '');
+                break;
+            case 'comments':
+                $add('Description', $tags['description'] ?? '');
+                $add('Comment', $tags['user_comment'] ?? '');
+                $add('Windows comment', $tags['xp_comment'] ?? '');
+                break;
+        }
+    }
+    return $rows;
+}
+
+/** ?photoinfo=<file>: the panel's rows for one photo, as JSON. Answered exactly as ?img= answers for who may see the file (anything else is a 404),
+ *  and only for a folder whose info is on; a Not listed photo's own address has no panel. */
+function serve_photo_info($dir, $mediaExtensions, $self) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: private, no-store');
+    header('X-Content-Type-Options: nosniff');
+    $claimed = $_GET['photoinfo'] ?? null;
+    $list = (is_string($claimed) && valid_media_path($dir, $claimed, $mediaExtensions, $self)) ? [$claimed] : [];
+    $items = $list ? items_get_all_for_files($dir, $list) : [];
+    $folder = $list ? (dirname($claimed) === '.' ? '' : dirname($claimed)) : '';
+    if (!$list || isset($_GET['k']) || !viewer_may_see_item($dir, $claimed, $items) || !photo_info_wanted() || !folder_info_on($dir, $folder)) {
+        http_response_code(404);
+        echo '{"ok":false}';
+        return;
+    }
+    echo json_encode(['ok' => true, 'rows' => photo_info_rows($dir, $claimed, $items[$claimed] ?? [])], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+}
 /** The stacks as stored, cleaned: names only, each photo in one stack at most, an anchor that is a member, and nothing left
  *  that holds fewer than two photos. */
 function media_stacks_clean($stacks) {
@@ -10190,8 +10599,8 @@ function admin_item_json($dir, $files) {
         'private' => $rest === 'private' || ($rest === 'inherit' && $folderPrivate),
         'own' => $rest === 'inherit' ? '' : $rest,   // the photo's own setting: "private", "public", or "" (it follows its folder)
         'folderPrivate' => $folderPrivate,
-        'locationShown' => $vis === 'show' || ($vis === 'inherit' && !empty($data['locationEnabled'])),
-        'folderLocationOn' => !empty($data['locationEnabled']),
+        'locationShown' => $vis === 'show' || ($vis === 'inherit' && folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file))),
+        'folderLocationOn' => folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file)),
         'locationsOff' => !ENABLE_PHOTO_LOCATION,
         'cover' => is_string($cover) && $cover !== '' && $cover === $bare,
         'views' => TRACK_VIEWS ? (int) (stats_get_all_photo_views($dir, [$file])[$file] ?? 0) : null,
@@ -10459,8 +10868,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($bare === '' || !in_array($fullPath, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         }
         $changed = 0;
-        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $state, $dir, $adminFolderPath, &$changed) {
-            $folderLocationOn = !empty($data['locationEnabled']);
+        $folderLocationOnNow = folder_location_on($dir, $adminFolderPath ?? '');   // (this folder's own choice, or the one it takes from the folder above)
+        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $state, $dir, $adminFolderPath, &$changed, $folderLocationOnNow) {
+            $folderLocationOn = $folderLocationOnNow;
             foreach ($names as $bare) {
                 $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
                 $entry = $data['items'][$bare] ?? [];
@@ -10789,7 +11199,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Location data.';
+                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Locations and media information.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
             }
@@ -10811,12 +11221,24 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'text' => $on ? 'Files visitors get from here keep the location, where the gallery shows it.' : 'Files visitors get from here lose the location, as everywhere else.'];
     }
 
-    if ($action === 'toggle_location_enabled') {
-        $enabled = !empty($_POST['enabled']);
+    if ($action === 'toggle_media_info') {
+        $choice = $_POST['info'] ?? '';
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        items_update($targetReal, function (&$data) use ($enabled) {
-            $data['locationEnabled'] = $enabled;
+        items_update($targetReal, function (&$data) use ($choice) {
+            $data['mediaInfo'] = $choice === 'inherit' ? null : !empty($choice);
         });
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
+        return ['type' => 'ok', 'text' => empty($choice) ? 'Photo info is off for this folder (and the folders under it that have not chosen).' : 'Photo info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: every field is switched off in Settings, under Locations and media information.')];
+    }
+
+    if ($action === 'toggle_location_enabled') {
+        $choice = $_POST['enabled'] ?? '';
+        $enabled = $choice !== 'inherit' && !empty($choice);
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        items_update($targetReal, function (&$data) use ($enabled, $choice) {
+            $data['locationEnabled'] = $choice === 'inherit' ? null : $enabled;
+        });
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
         if (!$enabled) {
             return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'];
         }
@@ -10824,7 +11246,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $loose = split_folder_level($files, $prefix)['loose'];
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
-            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Location data).';
+            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Locations and media information).';
         } else {
             // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
             $shown = 0;
@@ -11193,7 +11615,7 @@ function edited_record_keys() {
     return [
         'folder' => [
             'displayName' => 'shown', 'description' => 'shown', 'dates' => 'shown', 'sortOrder' => 'shown', 'restriction' => 'shown', 'unlisted' => 'shown',
-            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown',
+            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown',
             'mapEnabled' => 'shown', 'mapRadius' => 'shown', 'photoSort' => 'shown', 'groups' => 'shown', 'stacks' => 'shown', 'cover' => 'shown', 'coverFollow' => 'shown',
             'folderId' => 'internal', 'pageviews' => 'internal', 'items' => 'internal',
         ],
@@ -11248,6 +11670,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
         if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
         if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
+        if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Photo info ' . ($d['mediaInfo'] ? 'on' : 'off')];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
         if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
@@ -11612,23 +12035,45 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
 <?php
 }
 
+/** Under a switch a folder takes from the folder above it: where its setting comes from (this folder's own choice, or the folder it is taken from), and
+ *  a link back to taking the one above's when the folder has made its own. */
+function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if ($isRoot) return;
+    if ($flag['own'] !== null) {
+        $text = 'This folder\'s own choice.';
+    } elseif ($flag['from'] === null) {
+        $text = 'No folder above has chosen, so this is off.';
+    } else {
+        $text = 'Taken from ' . ($flag['from'] === '' ? 'the gallery\'s own folder' : $esc($flag['from'])) . ' (a folder with nothing chosen takes the choice of the folder above it).';
+    }
+?>
+    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php endif; ?></p>
+<?php
+}
+
 /** The "Locations" section, last on a folder's (or the gallery's) settings: whether photo locations show, and, under that because it
  *  only shows photos whose location is public, the map. */
-function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '') {
+function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '', $dir = null) {
     $isRoot = $adminFolderPath === null;
-    $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
+    $locFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'locationEnabled');   // (this folder's own choice, or the one it takes from the folder above)
+    $infoFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'mediaInfo');
+    $locOn = $locFlag['on'] && ENABLE_PHOTO_LOCATION;
 ?>
-    <h3 class="subhead">Locations</h3>
+    <h3 class="subhead">Locations and media information</h3>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
-          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump); ?>
+          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump);
+          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir); ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
-    <div class="loc-keep"<?= !empty($itemsHere['locationEnabled']) ? '' : ' hidden' ?>>
+    <div class="loc-keep"<?= $locFlag['on'] ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
     </div>
     <?php endif; ?>
     <?php if ($locStatus !== ''): ?>
     <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show photo info to visitors at the root' : 'Show photo info to visitors for this folder', '', ''); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
+    <p class="hint">The viewer gets an info panel for each photo here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Locations and media information). A position or a time zone shows only where the photo's location does.</p>
     <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
       <?php if (!ENABLE_PHOTO_LOCATION): ?>
       <p class="warn-note map-loc-note">Locations are off for the whole gallery, so nothing shows on a map yet. Turn on <strong>Allow photo locations</strong> in <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_PHOTO_LOCATION');">Settings</a>; each folder and photo still has its own switch.</p>
@@ -11961,7 +12406,7 @@ function gallery_setting_definitions() {
             ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
-        ['title' => 'Location data', 'items' => [
+        ['title' => 'Locations and media information', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location shows; each folder and photo still has its own switch. Locations are read when thumbnails are made, or with Prepare media. Maps use OpenStreetMap, which the visitor\'s browser contacts.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
@@ -11970,6 +12415,30 @@ function gallery_setting_definitions() {
              'help' => 'Photos closer than this always share one numbered pin; on top of that, pins that would overlap on screen merge until you zoom in. 1 suits a city trip, 0 turns grouping off (every photo keeps its own pin). Folders can override it.'],
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
              'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
+            ['name' => 'INFO_CAMERA', 'type' => 'bool', 'label' => 'Info panel: camera',
+             'help' => 'The info panel in the viewer (a folder turns the panel on in its own settings) says which camera or phone took the photo: its make and model.'],
+            ['name' => 'INFO_TAKEN', 'type' => 'bool', 'label' => 'Info panel: date and time taken',
+             'help' => 'When the photo was taken, as the camera wrote it. The time zone is added only where that photo\'s location is allowed to show, because a time zone hints at the place.',
+             'risk' => 'Dates can show when you were away.'],
+            ['name' => 'INFO_RESOLUTION', 'type' => 'bool', 'label' => 'Info panel: resolution',
+             'help' => 'The size in pixels, with megapixels for a photo (12.2 MP (4032 × 3024)).'],
+            ['name' => 'INFO_FILE_SIZE', 'type' => 'bool', 'label' => 'Info panel: file size',
+             'help' => 'How big the file is on disk.'],
+            ['name' => 'INFO_POSITION', 'type' => 'bool', 'label' => 'Info panel: position',
+             'help' => 'The photo\'s position, a link that opens it pinned on OpenStreetMap in a new tab. It shows only where the photo\'s location does (the gallery, folder and photo switches above, and for a share link its own setting).',
+             'risk' => 'This is the same location the map shows: GPS can reveal where you live or have been.'],
+            ['name' => 'INFO_LENS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: lens', 'help' => 'The lens that was used.'],
+            ['name' => 'INFO_EXPOSURE', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: exposure settings', 'help' => 'Focal length, aperture, shutter speed, ISO and whether the flash fired.'],
+            ['name' => 'INFO_SOFTWARE', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: software', 'help' => 'The program or phone software that last saved the file.'],
+            ['name' => 'INFO_VIDEO', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: video details', 'help' => 'For a video (MP4 or MOV): its length, frame rate, video and audio kinds and bitrate. Other video files show only the switches above that apply.'],
+            ['name' => 'INFO_SERIALS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: serial numbers', 'help' => 'The serial numbers of the camera body and the lens, if the file has them.',
+             'risk' => 'A serial number identifies one particular camera, and so whoever owns it.'],
+            ['name' => 'INFO_OWNER', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: owner or artist name', 'help' => 'The name a camera or an editing program wrote into the file as its owner or artist.',
+             'risk' => 'This is a person\'s name, written by a program you may not know about.'],
+            ['name' => 'INFO_COPYRIGHT', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: copyright', 'help' => 'The copyright text in the file.'],
+            ['name' => 'INFO_IMAGE_ID', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: image id', 'help' => 'The unique id some cameras give each picture.'],
+            ['name' => 'INFO_COMMENTS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: comments', 'help' => 'Free text kept inside the file: its description and any comment.',
+             'risk' => 'This is whatever someone typed into the file, which can be personal.'],
         ]],
         ['title' => 'Sharing and access', 'items' => [
             ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',
@@ -18120,7 +18589,10 @@ function render_admin_site_settings($csrfToken) {
             $hidAll = array_filter($group['items'], function ($i) { return empty($i['in']) && !empty($i['hidden_when']); });   // (settings that are out of the way while another is on: counted, and said, with the reason on hover)
             if ($hidAll): $nHid = gallery_is_closed() ? count($hidAll) : 0; ?><span class="site-hid" data-hid-group<?= $nHid ? '' : ' hidden' ?> title="<?= $esc(implode(' ', array_map(function ($i) { return $i['label'] . ': ' . ($i['hidden_why'] ?? 'Not needed with the current settings.'); }, $hidAll))) ?>"> (<span data-hid-n><?= $nHid ?></span> hidden)</span><?php endif; ?></span></summary>
           <?php if ($group['title'] === 'Signing in and passwords'): render_admin_password_rows($fromFile); endif; ?>
-          <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
+          <?php $moreOpen = false; foreach ($group['items'] as $d): if (!empty($d['in'])) continue;
+            if (!empty($d['more']) && !$moreOpen) { $moreOpen = true; echo '<details class="site-more"><summary>More media information <span class="muted">(all off to start with)</span></summary>'; }
+            elseif (empty($d['more']) && $moreOpen) { $moreOpen = false; echo '</details>'; }
+            $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
             if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
             // "default: …" is part of the tag beside the name ("your setting · default: off"), shown only while the value differs from the default
             $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true) && ($d['check'] ?? '') !== 'ranges';
@@ -18204,7 +18676,7 @@ function render_admin_site_settings($csrfToken) {
               </div>
             </div>
             <?php if ($name === 'ENABLE_THUMBNAIL_CACHE'): ?><div id="media-slot"><?php render_admin_thumbnails_panel($csrfToken); ?></div><?php endif; ?>
-          <?php endforeach; ?>
+          <?php endforeach; if ($moreOpen) echo '</details>'; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
             <?= render_web_server_rules() ?>
           <?php endif; ?>
@@ -20301,6 +20773,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .char-count { display: block; margin-top: 3px; font-size: 0.75rem; opacity: 0.7; text-align: right; font-variant-numeric: tabular-nums; }
   .char-count.near { opacity: 1; color: #b7791f; }
   .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }
+
+  /* "More media information": the switches that start off, folded away inside the group. */
+  .site-more { margin:6px 0 10px; border-top:1px dashed #34343a; border-bottom:1px dashed #34343a; padding:0; }   /* (no inset at the sides: the switches inside line up with every other switch in Settings) */
+  .site-more > summary { cursor:pointer; padding:9px 0; color:var(--text); }
+  .site-more > summary .muted { font-weight:400; }
+  .flag-source { margin:-2px 0 10px; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -20398,7 +20876,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
-  <?php if (ENABLE_PHOTO_LOCATION && empty($itemsHere['locationEnabled']) && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
+  <?php if (ENABLE_PHOTO_LOCATION && !folder_location_on($dir, $adminFolderPath ?? '') && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
     <div class="panel loc-unsaved-summary">
         <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> a location in the file.</strong>
         <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos whose <em>Location</em> switch (in the pencil's editor) you turn off.</span>
@@ -20413,7 +20891,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <?php render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath)); ?>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, null, 'sort'); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, $adminFolderPath, $csrfToken); ?>
-    <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus, $dir); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
@@ -20422,7 +20900,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <?php render_admin_root_downloads($csrfToken); ?>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, null, 'sort'); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, '', $csrfToken); ?>
-    <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus, $dir); ?>
   </section>
   <?php endif; ?>
 
@@ -22537,6 +23015,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     paint();
   });
+  // "Use the folder above's choice": the folder drops its own choice for a switch it can take from the folder above it. The screen is drawn again, because
+  // the switch's state, and the words under it, now come from somewhere else.
+  [].forEach.call(document.querySelectorAll('[data-flag-inherit]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var body = new URLSearchParams();
+      body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
+      btn.disabled = true;
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+        .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
+    });
+  });
   // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
   // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
   (function () {
@@ -23010,17 +23501,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           var title = norm((g.querySelector('summary') || { textContent: '' }).textContent);
           return {
             el: g, title: title,
-            rows: [].slice.call(g.children).filter(function (r) { return r.tagName !== 'SUMMARY'; }).map(function (r) {   // (every block in the group: the settings, and also the server rules and the Prepare media panel)
-              var c = r.cloneNode(true), key = (r.id || '').replace(/^setting-/, '');
-              [].forEach.call(c.querySelectorAll('.src, script, style, .rowstate'), function (n) { n.parentNode.removeChild(n); });
-              return { el: r, text: norm(title + ' ' + c.textContent + ' ' + key + ' ' + key.replace(/_/g, ' ')) };
-            })
+            rows: [].concat.apply([], [].slice.call(g.children).filter(function (r) { return r.tagName !== 'SUMMARY'; }).map(function (r) {   // (every block in the group: the settings, and also the server rules and the Prepare media panel; a folded "More" part gives its rows)
+              var inner = r.classList && r.classList.contains('site-more') ? [].slice.call(r.children).filter(function (x) { return x.tagName !== 'SUMMARY'; }) : [r];
+              return inner.map(function (x) {
+                var c = x.cloneNode(true), key = (x.id || '').replace(/^setting-/, '');
+                [].forEach.call(c.querySelectorAll('.src, script, style, .rowstate'), function (n) { n.parentNode.removeChild(n); });
+                return { el: x, more: inner[0] === r ? null : r, text: norm(title + ' ' + c.textContent + ' ' + key + ' ' + key.replace(/_/g, ' ')) };
+              });
+            }))
           };
         });
       }
       function clear() {
         if (!saved) return;
-        index.forEach(function (g, i) { g.el.classList.remove('find-miss'); g.rows.forEach(function (r) { r.el.classList.remove('find-miss'); }); g.el.open = saved[i]; });
+        index.forEach(function (g, i) { g.el.classList.remove('find-miss'); g.rows.forEach(function (r) { r.el.classList.remove('find-miss'); if (r.more && r.moreWas !== undefined) { r.more.open = r.moreWas; r.moreWas = undefined; } }); g.el.open = saved[i]; });
         saved = null; note.hidden = true;
       }
       function apply() {
@@ -23036,7 +23530,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             var ok = has(r.text);
             if (ok && r.el.hidden) { later++; ok = false; }   // (a setting that only shows while another is on: counted, not shown)
             r.el.classList.toggle('find-miss', !ok);
-            if (ok) any++;
+            if (ok) { any++; if (r.more) { if (r.moreWas === undefined) r.moreWas = r.more.open; r.more.open = true; } }   // (a match inside the fold opens it; clearing the search puts it back)
           });
           var own = !g.rows.length && has(g.title);   // (a group with nothing in it yet matches by its title)
           g.el.classList.toggle('find-miss', !(any || own));
@@ -26299,6 +26793,7 @@ function ui_icon_paths() {
         'warn'    => '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>',
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'video'   => '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M8 5v14M16 5v14M3.5 9.5H8M3.5 14.5H8M16 9.5h4.5M16 14.5h4.5"/>',
+        'info'    => '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.2"/>',
         'stop'    => '<rect x="6.5" y="6.5" width="11" height="11" rx="1.8"/>',
         'shuffle' => '<path d="M16 3.5h4.5V8M4 20.5 20.5 4M20.5 16v4.5H16M15 15l5.5 5.5M4 4l5 5"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
@@ -28162,7 +28657,43 @@ send_viewer_aware_cache_headers();
   /* While a slideshow runs the photo is left clean: no arrows, no Close, no row of buttons (the slideshow's own controls come and go, and have Stop;
      the arrow keys and swipes still move by hand). The caption stays; the counter ("3 / 42") moves into the slideshow's controls. */
   .lightbox.ss-on .nav, .lightbox.ss-on .close, .lightbox.ss-on .caption-row .lightbox-tools-wrap, .lightbox.ss-on .caption-row .lightbox-close-row { display: none; }
-  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
+  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }
+  /* The info panel (what the photo's file says about it): a panel beside the photo on a wide screen (also a phone turned on its side), a sheet over the
+     lower part of the screen on a narrow one. The photo makes room; the viewer's own Close and arrow move out of its way; a slideshow has none of it. */
+  .info-panel[hidden] { display: none; }
+  .info-panel { position: fixed; z-index: 7; box-sizing: border-box; color: #e8e8ee; font-size: 0.95rem; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .info-panel:focus { outline: none; }
+  .ip-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+  .ip-title { margin: 0; font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; color: #9a9aa6; font-weight: 600; }
+  .ip-x { width: 44px; height: 44px; margin: -8px -10px -8px 0; padding: 0; display: flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 10px; color: #e8e8ee; cursor: pointer; }
+  .ip-x:hover { background: rgba(255,255,255,0.1); }
+  .ip-x .ico { width: 20px; height: 20px; stroke-width: 2; vertical-align: 0; }
+  .ip-row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ip-row:last-child { border-bottom: 0; }
+  .ip-k { color: #9a9aa6; flex: none; }
+  .ip-v { text-align: right; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .ip-v a { color: #aab2ff; text-decoration: underline; text-underline-offset: 3px; }
+  .ip-note { margin: 10px 0; color: #9a9aa6; }
+  .lightbox-info.on { color: var(--accent, #aab2ff); opacity: 1; }
+  .lightbox.editing .lightbox-info, .lightbox.editing .info-panel, .lightbox.ss-on .lightbox-info, .lightbox.ss-on .info-panel { display: none; }
+  @media (min-width: 601px) {
+    .info-panel { top: 0; right: 0; bottom: 0; width: 320px; padding: 22px 22px 18px; background: rgba(20,20,24,0.96); border-left: 1px solid rgba(255,255,255,0.12); }
+    .lightbox.info-open { padding-right: 320px; }
+    .lightbox.info-open img, .lightbox.info-open video { max-width: calc(100vw - 320px - 48px); }
+    .lightbox.info-open .nav.next { right: 336px; }
+    .lightbox.info-open .close { right: 334px; }
+    .lightbox.info-open .caption-row { margin-right: 0; }
+  }
+  @media (min-width: 601px) and (pointer: coarse) {
+    .lightbox.info-open .caption-row, .lightbox.info-open.zoom-width .caption-row, .lightbox.info-open.zoom-actual .caption-row { right: 320px; }
+  }
+  @media (max-width: 600px) {
+    .info-panel { left: 0; right: 0; bottom: 0; max-height: 55dvh; padding: 16px 20px calc(18px + env(safe-area-inset-bottom, 0px)); background: rgba(20,20,24,0.90); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top: 1px solid rgba(255,255,255,0.14); border-radius: 18px 18px 0 0; }
+    .lightbox.info-open { padding-bottom: var(--ip-h, 40dvh); }
+    .lightbox.info-open img, .lightbox.info-open video { max-height: calc(100dvh - var(--ip-h, 40dvh) - 70px - env(safe-area-inset-top, 0px)); }
+    .lightbox.info-open .nav { top: calc((100dvh - var(--ip-h, 40dvh)) / 2); }
+    .ip-row { padding: 13px 0; }
+  }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
@@ -28558,6 +29089,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       $sortCookiePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
   }
   // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
+  // The viewer's info panel: offered for the photos of a folder that has switched it on (or takes that from the folder above), when something is
+  // switched on to show; never on a Not listed photo's own page.
+  $infoFolders = [];
+  if ($photoPass === null && photo_info_wanted()) {
+      foreach ($files as $infoF) {
+          $infoD = dirname($infoF) === '.' ? '' : dirname($infoF);
+          if (!isset($infoSeen[$infoD])) { $infoSeen[$infoD] = true; if (folder_info_on($dir, $infoD)) $infoFolders[] = $infoD; }
+      }
+  }
   $arrangeShown = is_admin_browser() && !AUTO_GROUP_BY_FILENAME && count($sortScope) >= 2 && !$notesLayOut;
   $selectShown = is_admin_browser() && count($sortScope) >= 1;
   $selectCollections = [];   // the collections the owner can add the picked photos to (the Select bar's "Add to collection", shown once there is one)
@@ -28723,6 +29263,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
+  <aside class="info-panel" id="info-panel" aria-label="Photo information" tabindex="-1" hidden>
+    <div class="ip-head"><h3 class="ip-title">Photo info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the photo information"><?= ui_icon('close') ?></button></div>
+    <div class="ip-body" id="info-body" aria-live="polite"></div>
+  </aside>
   <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
     <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
     <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
@@ -28735,6 +29279,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
     <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
+    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Photo info" aria-label="Photo info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -28806,6 +29351,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // picture (they're cached for a year) fetches the new one.
   const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
   const slideScope = <?= js_json(array_map('photo_ref', $sortScope)) ?>;   // (the photos this page shows as its own: where its Play button starts)
+  const infoFolders = <?= js_json($infoFolders) ?>;   // (the folders whose photos get an info panel: it is asked for, one photo at a time, with ?photoinfo=)
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
@@ -29015,6 +29561,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   }
   function closeLightbox() {
     if (window.__ssStop) window.__ssStop();   // (a slideshow ends with the viewer)
+    if (window.__infoClose) window.__infoClose();   // (and so does the info panel)
     const back = lbReturnTo; lbReturnTo = null;
     if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
@@ -30092,6 +30639,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     if (typeof ownerPaint === 'function') ownerPaint();
     if (lbEdit && lbEdit.isOpen()) lbEdit.load();
     if (window.__ssShown) window.__ssShown();   // (the slideshow, when one is playing, starts its wait for this photo)
+    if (window.__infoShown) window.__infoShown();   // (the info button for this photo's folder, and the panel's rows when it is open)
     trackView(file);
     if (window.__linkLog) window.__linkLog('o', file);
   }
@@ -30109,7 +30657,11 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   const toolsWrap = document.getElementById('lightbox-tools-wrap');
   function toolsFade() {
     if (!tools || !toolsWrap) return;
-    const max = tools.scrollWidth - tools.clientWidth;
+    // How wide the buttons really are: their layout widths. (scrollWidth also counts a button an attention animation has scaled with a transform, which
+    // made a strip that fits exactly look as if it overflowed.)
+    let content = 0;
+    for (let i = 0; i < tools.children.length; i++) { const c = tools.children[i]; if (c.offsetParent !== null) content += c.offsetWidth || 0; }
+    const max = Math.min(tools.scrollWidth, content || tools.scrollWidth) - tools.clientWidth;
     toolsWrap.classList.toggle('can-right', max > 2 && tools.scrollLeft < max - 2);
     toolsWrap.classList.toggle('can-left', max > 2 && tools.scrollLeft > 2);
   }
@@ -30982,6 +31534,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     ss.on = true; ss.paused = false; ss.order = null;
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
     lightbox.classList.add('ss-on');
+    if (window.__infoHide) window.__infoHide();   // (the info panel goes while a show runs)
     if (ssBar) ssBar.hidden = false;
     ssPaint(); ssShowBar();
     try {   // as big as the screen can make it, and kept awake: both are only asked for, and a browser may say no
@@ -30997,6 +31550,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     ssDisarm(); clearTimeout(ss.idle); ss.pre = null; ss.order = null;
     if (ss.muted) { lightboxVideo.muted = false; ss.muted = false; }
     lightbox.classList.remove('ss-on', 'ss-idle');
+    if (window.__infoShown) window.__infoShown();   // (and its button comes back)
     if (ssBar) { ssBar.hidden = true; ssBar.classList.remove('idle', 'paused'); }
     if (ss.wake) { try { ss.wake.release(); } catch (x) {} ss.wake = null; }
     if (ss.fs) {
@@ -31062,6 +31616,112 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   };
   window.__ssStop = ssStop;
   ssPaint();
+  // ---- The info panel: what a photo's own file says about it (camera, when it was taken, its size, and whatever else the owner has switched on).
+  // The button is offered only for the photos of a folder that has info on (infoFolders). The panel asks for one photo's rows when it opens and again on every
+  // photo you move to while it stays open (nothing is read ahead of time); the answer is drawn with textContent, never as markup. Beside the photo on a wide
+  // screen, a sheet over the lower part of the screen on a narrow one; a slideshow has none of it.
+  const infoBtn = document.getElementById('lightbox-info');
+  const infoPanel = document.getElementById('info-panel');
+  const infoBody = document.getElementById('info-body');
+  const infoClose = document.getElementById('info-close');
+  const infoState = { open: false, token: 0, touchY: null };
+  const infoSheet = function () { return !!(window.matchMedia && window.matchMedia('(max-width: 600px)').matches); };   // (the narrow layout: a sheet at the bottom)
+
+  function infoRefit() {   // the strip of buttons has just changed: once the layout has settled, look again at whether its "more to swipe" arrow is needed
+    if (typeof toolsFade === 'function') { toolsFade(); if (typeof requestAnimationFrame === 'function') { requestAnimationFrame(toolsFade); setTimeout(toolsFade, 300); } }
+  }
+  function infoAvailable() {
+    return !!infoBtn && typeof infoFolders !== 'undefined' && infoFolders.indexOf(folderOf(files[current])) >= 0 && !lightbox.classList.contains('ss-on');
+  }
+  function infoFit() {   // the photo makes room for the sheet: how tall it is decides how much
+    if (infoState.open && infoSheet()) lightbox.style.setProperty('--ip-h', infoPanel.offsetHeight + 'px');
+    else lightbox.style.removeProperty('--ip-h');
+  }
+  function infoSay(text) {
+    infoBody.textContent = '';
+    const p = document.createElement('p'); p.className = 'ip-note'; p.textContent = text; infoBody.appendChild(p);
+  }
+  function infoDraw(rows) {
+    infoBody.textContent = '';
+    if (!rows.length) { infoSay('Nothing to show for this photo.'); return; }
+    rows.forEach(function (r) {
+      const row = document.createElement('div'); row.className = 'ip-row';
+      const k = document.createElement('span'); k.className = 'ip-k'; k.textContent = r.label;
+      const v = document.createElement('span'); v.className = 'ip-v';
+      if (r.href && /^https:\/\/www\.openstreetmap\.org\//.test(r.href)) {   // (the one kind of link the panel makes: the position, on the map)
+        const a = document.createElement('a'); a.href = r.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = r.value + ' ↗';
+        a.title = 'Open this position on a map (a new tab)'; v.appendChild(a);
+      } else v.textContent = r.value;
+      row.appendChild(k); row.appendChild(v); infoBody.appendChild(row);
+    });
+  }
+  function infoLoad() {
+    if (!infoState.open) return;
+    const my = ++infoState.token, file = files[current];
+    infoSay('Loading…');
+    infoFit();
+    fetch('?photoinfo=' + encodeURIComponent(file), { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (my !== infoState.token || !infoState.open) return; if (j && j.ok) infoDraw(j.rows || []); else infoSay('Nothing to show for this photo.'); infoFit(); })
+      .catch(function () { if (my !== infoState.token || !infoState.open) return; infoSay('Could not load the photo information.'); infoFit(); });
+  }
+  function infoSet(on, fromKey) {
+    if (on && !infoAvailable()) return;
+    if (infoState.open === on) return;
+    if (on && typeof ssStop === 'function' && ss.on) ssStop();   // (a show and the panel do not go together)
+    const hadFocus = infoPanel.contains(document.activeElement);
+    infoState.open = on;
+    infoPanel.hidden = !on;
+    lightbox.classList.toggle('info-open', on);
+    if (infoBtn) { infoBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); infoBtn.classList.toggle('on', on); }
+    if (on) { infoLoad(); try { infoPanel.focus({ preventScroll: true }); } catch (x) {} }
+    else { infoState.token++; lightbox.style.removeProperty('--ip-h'); if ((hadFocus || fromKey) && infoBtn && !infoBtn.hidden) { try { infoBtn.focus({ preventScroll: true }); } catch (x) {} } }
+    infoRefit();
+  }
+
+  if (infoBtn) infoBtn.addEventListener('click', function () { infoSet(!infoState.open); });
+  if (infoClose) infoClose.addEventListener('click', function () { infoSet(false); });
+  // Esc closes the panel before it closes the viewer; the letter i opens and closes it.
+  document.addEventListener('keydown', function (e) {
+    if (!lightbox.classList.contains('open') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, input, textarea, select, [contenteditable="true"]')) return;
+    if (e.key === 'Escape' && infoState.open) { e.preventDefault(); e.stopImmediatePropagation(); infoSet(false, true); return; }
+    if ((e.key === 'i' || e.key === 'I') && (infoState.open || infoAvailable())) { e.preventDefault(); infoSet(!infoState.open, true); }
+  }, true);
+  // Swiping inside the panel is not a swipe of the viewer; a swipe down on the sheet puts it away, and so does one on the photo while a sheet is up
+  // (the first swipe down closes the sheet, the next one the viewer).
+  if (infoPanel) {
+    infoPanel.addEventListener('touchstart', function (e) { e.stopPropagation(); infoState.touchY = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientY : null; }, { passive: true });
+    infoPanel.addEventListener('touchend', function (e) {
+      e.stopPropagation();
+      const y = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientY : null;
+      if (infoSheet() && infoState.touchY !== null && y !== null && y - infoState.touchY > 60 && infoBody.scrollTop <= 0) infoSet(false);
+      infoState.touchY = null;
+    }, { passive: true });
+  }
+  let infoSwipeY = null;
+  lightbox.addEventListener('touchstart', function (e) { infoSwipeY = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientY : null; }, { capture: true, passive: true });
+  lightbox.addEventListener('touchend', function (e) {
+    if (!infoState.open || !infoSheet() || infoSwipeY === null || !e.changedTouches || !e.changedTouches[0]) return;
+    if (e.changedTouches[0].clientY - infoSwipeY > 50) { e.stopPropagation(); infoSet(false); }
+  }, true);
+  window.addEventListener('resize', function () { infoFit(); });
+
+  // Any button of the viewer's strip changing size (the pin button does while the little map loads) is a reason to look again at the strip's "more to swipe" arrow.
+  const infoTools = document.getElementById('lightbox-tools');
+  if (infoTools && window.ResizeObserver) {
+    const ro = new ResizeObserver(function () { if (typeof toolsFade === 'function') toolsFade(); });
+    [].forEach.call(infoTools.children, function (c) { ro.observe(c); });
+  }
+
+  // The viewer calls these: after every photo it shows, and when it closes.
+  window.__infoShown = function () {
+    const ok = infoAvailable();
+    if (infoBtn) { const was = infoBtn.hidden; infoBtn.hidden = !ok; if (was !== infoBtn.hidden) infoRefit(); }
+    if (infoState.open) { if (ok) infoLoad(); else infoSet(false); }
+  };
+  window.__infoHide = function () { infoSet(false); };
+  window.__infoClose = function () { infoSet(false); if (infoBtn) infoBtn.hidden = true; };
 <?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
   let linkPop = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }

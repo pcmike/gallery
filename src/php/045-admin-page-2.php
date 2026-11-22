@@ -95,7 +95,7 @@
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
-  <?php if (ENABLE_PHOTO_LOCATION && empty($itemsHere['locationEnabled']) && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
+  <?php if (ENABLE_PHOTO_LOCATION && !folder_location_on($dir, $adminFolderPath ?? '') && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
     <div class="panel loc-unsaved-summary">
         <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> a location in the file.</strong>
         <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos whose <em>Location</em> switch (in the pencil's editor) you turn off.</span>
@@ -110,7 +110,7 @@
     <?php render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath)); ?>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, null, 'sort'); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, $adminFolderPath, $csrfToken); ?>
-    <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus, $dir); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
@@ -119,7 +119,7 @@
     <?php render_admin_root_downloads($csrfToken); ?>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, null, 'sort'); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, '', $csrfToken); ?>
-    <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus, $dir); ?>
   </section>
   <?php endif; ?>
 

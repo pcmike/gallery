@@ -552,8 +552,8 @@ function admin_item_json($dir, $files) {
         'private' => $rest === 'private' || ($rest === 'inherit' && $folderPrivate),
         'own' => $rest === 'inherit' ? '' : $rest,   // the photo's own setting: "private", "public", or "" (it follows its folder)
         'folderPrivate' => $folderPrivate,
-        'locationShown' => $vis === 'show' || ($vis === 'inherit' && !empty($data['locationEnabled'])),
-        'folderLocationOn' => !empty($data['locationEnabled']),
+        'locationShown' => $vis === 'show' || ($vis === 'inherit' && folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file))),
+        'folderLocationOn' => folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file)),
         'locationsOff' => !ENABLE_PHOTO_LOCATION,
         'cover' => is_string($cover) && $cover !== '' && $cover === $bare,
         'views' => TRACK_VIEWS ? (int) (stats_get_all_photo_views($dir, [$file])[$file] ?? 0) : null,
@@ -821,8 +821,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($bare === '' || !in_array($fullPath, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         }
         $changed = 0;
-        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $state, $dir, $adminFolderPath, &$changed) {
-            $folderLocationOn = !empty($data['locationEnabled']);
+        $folderLocationOnNow = folder_location_on($dir, $adminFolderPath ?? '');   // (this folder's own choice, or the one it takes from the folder above)
+        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $state, $dir, $adminFolderPath, &$changed, $folderLocationOnNow) {
+            $folderLocationOn = $folderLocationOnNow;
             foreach ($names as $bare) {
                 $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
                 $entry = $data['items'][$bare] ?? [];
@@ -1151,7 +1152,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Location data.';
+                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Locations and media information.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
             }
@@ -1173,12 +1174,24 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'text' => $on ? 'Files visitors get from here keep the location, where the gallery shows it.' : 'Files visitors get from here lose the location, as everywhere else.'];
     }
 
-    if ($action === 'toggle_location_enabled') {
-        $enabled = !empty($_POST['enabled']);
+    if ($action === 'toggle_media_info') {
+        $choice = $_POST['info'] ?? '';
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        items_update($targetReal, function (&$data) use ($enabled) {
-            $data['locationEnabled'] = $enabled;
+        items_update($targetReal, function (&$data) use ($choice) {
+            $data['mediaInfo'] = $choice === 'inherit' ? null : !empty($choice);
         });
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
+        return ['type' => 'ok', 'text' => empty($choice) ? 'Photo info is off for this folder (and the folders under it that have not chosen).' : 'Photo info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: every field is switched off in Settings, under Locations and media information.')];
+    }
+
+    if ($action === 'toggle_location_enabled') {
+        $choice = $_POST['enabled'] ?? '';
+        $enabled = $choice !== 'inherit' && !empty($choice);
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        items_update($targetReal, function (&$data) use ($enabled, $choice) {
+            $data['locationEnabled'] = $choice === 'inherit' ? null : $enabled;
+        });
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
         if (!$enabled) {
             return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'];
         }
@@ -1186,7 +1199,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $loose = split_folder_level($files, $prefix)['loose'];
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
-            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Location data).';
+            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Locations and media information).';
         } else {
             // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
             $shown = 0;

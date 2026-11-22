@@ -126,6 +126,7 @@
     ss.on = true; ss.paused = false; ss.order = null;
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
     lightbox.classList.add('ss-on');
+    if (window.__infoHide) window.__infoHide();   // (the info panel goes while a show runs)
     if (ssBar) ssBar.hidden = false;
     ssPaint(); ssShowBar();
     try {   // as big as the screen can make it, and kept awake: both are only asked for, and a browser may say no
@@ -141,6 +142,7 @@
     ssDisarm(); clearTimeout(ss.idle); ss.pre = null; ss.order = null;
     if (ss.muted) { lightboxVideo.muted = false; ss.muted = false; }
     lightbox.classList.remove('ss-on', 'ss-idle');
+    if (window.__infoShown) window.__infoShown();   // (and its button comes back)
     if (ssBar) { ssBar.hidden = true; ssBar.classList.remove('idle', 'paused'); }
     if (ss.wake) { try { ss.wake.release(); } catch (x) {} ss.wake = null; }
     if (ss.fs) {

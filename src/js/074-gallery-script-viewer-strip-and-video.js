@@ -24,6 +24,7 @@
     if (typeof ownerPaint === 'function') ownerPaint();
     if (lbEdit && lbEdit.isOpen()) lbEdit.load();
     if (window.__ssShown) window.__ssShown();   // (the slideshow, when one is playing, starts its wait for this photo)
+    if (window.__infoShown) window.__infoShown();   // (the info button for this photo's folder, and the panel's rows when it is open)
     trackView(file);
     if (window.__linkLog) window.__linkLog('o', file);
   }
@@ -41,7 +42,11 @@
   const toolsWrap = document.getElementById('lightbox-tools-wrap');
   function toolsFade() {
     if (!tools || !toolsWrap) return;
-    const max = tools.scrollWidth - tools.clientWidth;
+    // How wide the buttons really are: their layout widths. (scrollWidth also counts a button an attention animation has scaled with a transform, which
+    // made a strip that fits exactly look as if it overflowed.)
+    let content = 0;
+    for (let i = 0; i < tools.children.length; i++) { const c = tools.children[i]; if (c.offsetParent !== null) content += c.offsetWidth || 0; }
+    const max = Math.min(tools.scrollWidth, content || tools.scrollWidth) - tools.clientWidth;
     toolsWrap.classList.toggle('can-right', max > 2 && tools.scrollLeft < max - 2);
     toolsWrap.classList.toggle('can-left', max > 2 && tools.scrollLeft > 2);
   }

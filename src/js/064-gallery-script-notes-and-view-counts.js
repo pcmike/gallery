@@ -103,6 +103,7 @@
   }
   function closeLightbox() {
     if (window.__ssStop) window.__ssStop();   // (a slideshow ends with the viewer)
+    if (window.__infoClose) window.__infoClose();   // (and so does the info panel)
     const back = lbReturnTo; lbReturnTo = null;
     if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();

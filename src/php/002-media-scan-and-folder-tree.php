@@ -586,6 +586,7 @@ function request_routes() {
         'strip'       => ['params' => ['strip']],
         'preview'     => ['params' => ['preview']],
         'img'         => ['params' => ['img', 'video']],
+        'photoinfo'   => ['params' => ['photoinfo']],
         'download'    => ['params' => ['download']],
         'about'       => ['params' => ['about']],
         'mapicon'     => ['params' => ['mapicon'], 'when' => ENABLE_PHOTO_LOCATION],
@@ -707,6 +708,12 @@ if (request_route() === 'img') {
     } else {
         serve_video($dir, $claimed, $claimedList, $claimedItems);
     }
+    exit;
+}
+
+// ?photoinfo=<file>: what the viewer's info panel says about one photo (JSON; see serve_photo_info).
+if (request_route() === 'photoinfo') {
+    serve_photo_info($dir, $mediaExtensions, $self);
     exit;
 }
 

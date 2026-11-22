@@ -358,6 +358,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       $sortCookiePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
   }
   // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
+  // The viewer's info panel: offered for the photos of a folder that has switched it on (or takes that from the folder above), when something is
+  // switched on to show; never on a Not listed photo's own page.
+  $infoFolders = [];
+  if ($photoPass === null && photo_info_wanted()) {
+      foreach ($files as $infoF) {
+          $infoD = dirname($infoF) === '.' ? '' : dirname($infoF);
+          if (!isset($infoSeen[$infoD])) { $infoSeen[$infoD] = true; if (folder_info_on($dir, $infoD)) $infoFolders[] = $infoD; }
+      }
+  }
   $arrangeShown = is_admin_browser() && !AUTO_GROUP_BY_FILENAME && count($sortScope) >= 2 && !$notesLayOut;
   $selectShown = is_admin_browser() && count($sortScope) >= 1;
   $selectCollections = [];   // the collections the owner can add the picked photos to (the Select bar's "Add to collection", shown once there is one)
@@ -523,6 +532,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
+  <aside class="info-panel" id="info-panel" aria-label="Photo information" tabindex="-1" hidden>
+    <div class="ip-head"><h3 class="ip-title">Photo info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the photo information"><?= ui_icon('close') ?></button></div>
+    <div class="ip-body" id="info-body" aria-live="polite"></div>
+  </aside>
   <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
     <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
     <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
@@ -535,6 +548,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
     <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
+    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Photo info" aria-label="Photo info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -606,6 +620,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // picture (they're cached for a year) fetches the new one.
   const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
   const slideScope = <?= js_json(array_map('photo_ref', $sortScope)) ?>;   // (the photos this page shows as its own: where its Play button starts)
+  const infoFolders = <?= js_json($infoFolders) ?>;   // (the folders whose photos get an info panel: it is asked for, one photo at a time, with ?photoinfo=)
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
