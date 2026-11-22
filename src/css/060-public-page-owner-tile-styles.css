@@ -207,6 +207,7 @@
   .ss-bar[hidden] { display: none; }
   .ss-bar.idle { opacity: 0; pointer-events: none; }
   .ss-btn { min-width: 50px; height: 50px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.09); border: 0; border-radius: 11px; color: #f2f2f6; font: inherit; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .ss-count { display: inline-flex; align-items: center; padding: 0 8px; color: #d8d8e0; font-size: 0.95rem; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ss-btn:hover { background: rgba(255,255,255,0.18); }
   .ss-btn:focus-visible { outline: 2px solid var(--accent, #aab2ff); outline-offset: 2px; }
   .ss-btn[aria-pressed="true"] { background: var(--accent, #5865f2); color: #fff; }
@@ -482,7 +483,11 @@
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }
+  /* While a slideshow runs the photo is left clean: no arrows, no Close, no row of buttons (the slideshow's own controls come and go, and have Stop;
+     the arrow keys and swipes still move by hand). The caption stays; the counter ("3 / 42") moves into the slideshow's controls. */
+  .lightbox.ss-on .nav, .lightbox.ss-on .close, .lightbox.ss-on .caption-row .lightbox-tools-wrap, .lightbox.ss-on .caption-row .lightbox-close-row { display: none; }
+  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }

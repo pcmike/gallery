@@ -159,8 +159,12 @@ try:
     ok(b.js(LB_OPEN) and b.js(SS_ON) and b.js("document.getElementById('lightbox-ss').hidden") is False, "[slideshow] Play on the page opens the viewer and starts the show, with its controls showing")
     ok(b.js("current") == b.js("(() => { let at = -1; slideScope.forEach(n => { const i = files.indexOf(n); if (i >= 0 && (at < 0 || i < at)) at = i; }); return at; })()"), "[slideshow] ...beginning at the first photo the page shows")
     ok(b.js("document.getElementById('ss-speed').textContent") == "3 s" and b.js("document.getElementById('ss-play').getAttribute('aria-label')") == "Pause the slideshow", "[slideshow] ...at the speed it remembered, with Pause on offer")
+    CH = "(() => { const shown = e => !!e && getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0; return {nav: [...document.querySelectorAll('#lightbox .nav')].some(shown), close: [...document.querySelectorAll('#lightbox .close, #lightbox .lightbox-close-row')].some(shown), tools: shown(document.getElementById('lightbox-tools-wrap')) || [...document.querySelectorAll('#lightbox-tools > *')].some(shown), counter: shown(document.querySelector('#lightbox-caption .cap-n')), pillCount: (document.getElementById('ss-count') || {}).textContent, expect: (siblingsOf(current).indexOf(current) + 1) + ' / ' + siblingsOf(current).length, pill: !document.getElementById('lightbox-ss').hidden}; })()"
+    ch = b.js(CH)
+    ok(not ch["nav"] and not ch["close"] and not ch["tools"] and not ch["counter"] and ch["pill"] and ch["pillCount"] == ch["expect"], "[slideshow] while it plays the photo is left clean: no arrows, no Close, no row of buttons, no \"3 / 42\" counter on the photo; the counter is in the slideshow's own controls instead", str(ch))
     c0 = b.js("current"); b.drain(4.2); c1 = b.js("current")
     ok(c1 != c0 and b.js(SS_ON), "[slideshow] after the chosen time the next photo comes on its own", f"{c0} -> {c1}")
+    ok(b.js("document.getElementById('ss-count').textContent") == b.js("(siblingsOf(current).indexOf(current) + 1) + ' / ' + siblingsOf(current).length"), "[slideshow] ...and the counter in the controls follows it")
     # a tap on the photo pauses; nothing changes while paused; a tap again carries on
     b.js("document.getElementById('lightbox-img').click()"); b.drain(0.2)
     ok(b.js("document.getElementById('lightbox-ss').classList.contains('paused')") and b.js("document.getElementById('ss-play').getAttribute('aria-label')") == "Carry on with the slideshow", "[slideshow] a tap on the photo pauses it, and the controls say how to carry on")
@@ -194,6 +198,8 @@ try:
     # Escape ends the show and leaves the viewer up; the next Escape closes the viewer
     kp("Escape", "Escape", 27)
     ok(b.js(LB_OPEN) and not b.js(SS_ON) and b.js("document.getElementById('lightbox-ss').hidden") is True, "[slideshow] the first Escape ends the show and leaves the photo up")
+    ch = b.js(CH)
+    ok(ch["nav"] and ch["close"] and ch["tools"] and ch["counter"], "[slideshow] ...and the arrows, Close, the row of buttons and the counter are back", str(ch))
     cE = b.js("current"); b.drain(4.2)
     ok(b.js("current") == cE, "[slideshow] ...and nothing moves on afterwards")
     kp("Escape", "Escape", 27)

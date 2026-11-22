@@ -14,8 +14,15 @@
   try { const saved = parseInt(localStorage.getItem('gallerySlideSeconds'), 10); if (SS_SPEEDS.indexOf(saved) >= 0) ss.seconds = saved; } catch (x) {}
 
   function ssIcon(btn, name) { if (btn) btn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>'; }
+  function ssCount() {   // "3 / 42": the photo's place in the folder, shown in the controls while the viewer's own counter is hidden
+    const el = document.getElementById('ss-count');
+    if (!el) return;
+    const set = siblingsOf(current);
+    el.textContent = (set.indexOf(current) + 1) + ' / ' + set.length;
+  }
   function ssPaint() {
     const running = ss.on && !ss.paused;
+    ssCount();
     ssIcon(ssToggleBtn, running ? 'pause' : 'play');
     if (ssToggleBtn) { ssToggleBtn.title = running ? 'Pause the slideshow' : 'Carry on with the slideshow'; ssToggleBtn.setAttribute('aria-label', ssToggleBtn.title); }
     ssIcon(ssPlayBtn, running ? 'pause' : 'play');
@@ -188,7 +195,7 @@
   // The viewer calls these: after every photo it shows, and when it closes.
   window.__ssShown = function () {
     if (ssPlayBtn) ssPlayBtn.hidden = siblingsOf(current).length < 2;
-    if (ss.on) { if (lbEdit && lbEdit.isOpen()) { ssStop(); return; } ssArm(); }
+    if (ss.on) { if (lbEdit && lbEdit.isOpen()) { ssStop(); return; } ssCount(); ssArm(); }
   };
   window.__ssStop = ssStop;
   ssPaint();

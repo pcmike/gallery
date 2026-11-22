@@ -527,6 +527,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
     <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
     <button type="button" class="ss-btn" id="ss-shuffle" title="Shuffle" aria-label="Shuffle" aria-pressed="false"><?= ui_icon('shuffle') ?></button>
+    <span class="ss-count" id="ss-count" aria-label="Photo number"></span>
     <button type="button" class="ss-btn" id="ss-stop" title="Stop the slideshow" aria-label="Stop the slideshow"><?= ui_icon('stop') ?></button>
   </div>
   <div class="caption-row">

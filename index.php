@@ -27881,6 +27881,7 @@ send_viewer_aware_cache_headers();
   .ss-bar[hidden] { display: none; }
   .ss-bar.idle { opacity: 0; pointer-events: none; }
   .ss-btn { min-width: 50px; height: 50px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.09); border: 0; border-radius: 11px; color: #f2f2f6; font: inherit; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .ss-count { display: inline-flex; align-items: center; padding: 0 8px; color: #d8d8e0; font-size: 0.95rem; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ss-btn:hover { background: rgba(255,255,255,0.18); }
   .ss-btn:focus-visible { outline: 2px solid var(--accent, #aab2ff); outline-offset: 2px; }
   .ss-btn[aria-pressed="true"] { background: var(--accent, #5865f2); color: #fff; }
@@ -28156,7 +28157,11 @@ send_viewer_aware_cache_headers();
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }
+  /* While a slideshow runs the photo is left clean: no arrows, no Close, no row of buttons (the slideshow's own controls come and go, and have Stop;
+     the arrow keys and swipes still move by hand). The caption stays; the counter ("3 / 42") moves into the slideshow's controls. */
+  .lightbox.ss-on .nav, .lightbox.ss-on .close, .lightbox.ss-on .caption-row .lightbox-tools-wrap, .lightbox.ss-on .caption-row .lightbox-close-row { display: none; }
+  .lightbox.ss-on .caption-row .caption .cap-n, .lightbox.ss-on .caption-row .caption .cap-sep { display: none; }   /* (the "3 / 42" counter, and the dash that joins it to a caption, go too: it is in the slideshow's own controls instead; the caption stays) */   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
@@ -28721,6 +28726,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
     <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
     <button type="button" class="ss-btn" id="ss-shuffle" title="Shuffle" aria-label="Shuffle" aria-pressed="false"><?= ui_icon('shuffle') ?></button>
+    <span class="ss-count" id="ss-count" aria-label="Photo number"></span>
     <button type="button" class="ss-btn" id="ss-stop" title="Stop the slideshow" aria-label="Stop the slideshow"><?= ui_icon('stop') ?></button>
   </div>
   <div class="caption-row">
@@ -30863,8 +30869,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   try { const saved = parseInt(localStorage.getItem('gallerySlideSeconds'), 10); if (SS_SPEEDS.indexOf(saved) >= 0) ss.seconds = saved; } catch (x) {}
 
   function ssIcon(btn, name) { if (btn) btn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>'; }
+  function ssCount() {   // "3 / 42": the photo's place in the folder, shown in the controls while the viewer's own counter is hidden
+    const el = document.getElementById('ss-count');
+    if (!el) return;
+    const set = siblingsOf(current);
+    el.textContent = (set.indexOf(current) + 1) + ' / ' + set.length;
+  }
   function ssPaint() {
     const running = ss.on && !ss.paused;
+    ssCount();
     ssIcon(ssToggleBtn, running ? 'pause' : 'play');
     if (ssToggleBtn) { ssToggleBtn.title = running ? 'Pause the slideshow' : 'Carry on with the slideshow'; ssToggleBtn.setAttribute('aria-label', ssToggleBtn.title); }
     ssIcon(ssPlayBtn, running ? 'pause' : 'play');
@@ -31037,7 +31050,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // The viewer calls these: after every photo it shows, and when it closes.
   window.__ssShown = function () {
     if (ssPlayBtn) ssPlayBtn.hidden = siblingsOf(current).length < 2;
-    if (ss.on) { if (lbEdit && lbEdit.isOpen()) { ssStop(); return; } ssArm(); }
+    if (ss.on) { if (lbEdit && lbEdit.isOpen()) { ssStop(); return; } ssCount(); ssArm(); }
   };
   window.__ssStop = ssStop;
   ssPaint();
