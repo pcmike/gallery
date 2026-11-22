@@ -214,6 +214,7 @@
   .ss-btn .ico { width: 26px; height: 26px; vertical-align: 0; }
   .ss-bar.paused { box-shadow: 0 0 0 2px var(--accent, #aab2ff), 0 8px 28px rgba(0,0,0,0.5); }
   .lightbox.ss-on img { cursor: pointer; }
+  .lightbox.ss-on.ss-idle, .lightbox.ss-on.ss-idle * { cursor: none; }   /* (a mouse pointer with nothing to do hides along with the controls) */
   .lightbox.ss-on .lightbox-zoom { display: none; }
   @media (max-height: 500px) { .ss-btn { min-width: 44px; height: 44px; padding: 0 12px; } .ss-btn .ico { width: 24px; height: 24px; } .ss-bar { top: auto; bottom: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); } }   /* (a phone turned on its side: the photo takes the whole height, so the controls are a smaller pill along the bottom, clear of the strip of buttons at the top) */
   @media (max-width: 600px) { .ss-btn { min-width: 46px; height: 46px; padding: 0 11px; } .ss-bar { gap: 6px; top: auto; bottom: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); } }   /* (on a phone the top is the viewer's own strip of buttons: the controls go to the bottom) */

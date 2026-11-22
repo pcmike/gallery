@@ -165,6 +165,13 @@ try:
     c0 = b.js("current"); b.drain(4.2); c1 = b.js("current")
     ok(c1 != c0 and b.js(SS_ON), "[slideshow] after the chosen time the next photo comes on its own", f"{c0} -> {c1}")
     ok(b.js("document.getElementById('ss-count').textContent") == b.js("(siblingsOf(current).indexOf(current) + 1) + ' / ' + siblingsOf(current).length"), "[slideshow] ...and the counter in the controls follows it")
+    # still mouse, a few seconds: the controls fade and the pointer hides; a real move brings both back
+    idle = b.js("(() => ({fade: document.getElementById('lightbox-ss').classList.contains('idle'), pointer: getComputedStyle(document.getElementById('lightbox-img')).cursor, bar: getComputedStyle(document.getElementById('lightbox')).cursor}))()")
+    ok(idle["fade"] and idle["pointer"] == "none" and idle["bar"] == "none", "[slideshow] after a few seconds untouched the controls fade and the mouse pointer hides", str(idle))
+    b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 300, "y": 300}); b.drain(0.2)
+    b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 360, "y": 330}); b.drain(0.3)
+    back = b.js("(() => ({fade: document.getElementById('lightbox-ss').classList.contains('idle'), pointer: getComputedStyle(document.getElementById('lightbox-img')).cursor}))()")
+    ok(not back["fade"] and back["pointer"] == "pointer", "[slideshow] ...and a real mouse move brings the controls and the pointer back", str(back))
     # a tap on the photo pauses; nothing changes while paused; a tap again carries on
     b.js("document.getElementById('lightbox-img').click()"); b.drain(0.2)
     ok(b.js("document.getElementById('lightbox-ss').classList.contains('paused')") and b.js("document.getElementById('ss-play').getAttribute('aria-label')") == "Carry on with the slideshow", "[slideshow] a tap on the photo pauses it, and the controls say how to carry on")

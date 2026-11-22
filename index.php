@@ -27888,6 +27888,7 @@ send_viewer_aware_cache_headers();
   .ss-btn .ico { width: 26px; height: 26px; vertical-align: 0; }
   .ss-bar.paused { box-shadow: 0 0 0 2px var(--accent, #aab2ff), 0 8px 28px rgba(0,0,0,0.5); }
   .lightbox.ss-on img { cursor: pointer; }
+  .lightbox.ss-on.ss-idle, .lightbox.ss-on.ss-idle * { cursor: none; }   /* (a mouse pointer with nothing to do hides along with the controls) */
   .lightbox.ss-on .lightbox-zoom { display: none; }
   @media (max-height: 500px) { .ss-btn { min-width: 44px; height: 44px; padding: 0 12px; } .ss-btn .ico { width: 24px; height: 24px; } .ss-bar { top: auto; bottom: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); } }   /* (a phone turned on its side: the photo takes the whole height, so the controls are a smaller pill along the bottom, clear of the strip of buttons at the top) */
   @media (max-width: 600px) { .ss-btn { min-width: 46px; height: 46px; padding: 0 11px; } .ss-bar { gap: 6px; top: auto; bottom: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); } }   /* (on a phone the top is the viewer's own strip of buttons: the controls go to the bottom) */
@@ -30950,9 +30951,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 
   function ssShowBar() {
     if (!ss.on || !ssBar) return;
-    ssBar.classList.remove('idle');
+    ssBar.classList.remove('idle'); lightbox.classList.remove('ss-idle');
     clearTimeout(ss.idle);
-    ss.idle = setTimeout(function () { if (ss.on && !ss.paused && ssBar) ssBar.classList.add('idle'); }, 3500);
+    ss.idle = setTimeout(function () { if (ss.on && !ss.paused && ssBar) { ssBar.classList.add('idle'); lightbox.classList.add('ss-idle'); } }, 3500);   // (the controls fade and the mouse pointer hides; the next real move brings both back)
   }
   function ssWake() {
     try { if (navigator.wakeLock && navigator.wakeLock.request && !ss.wake) navigator.wakeLock.request('screen').then(function (l) { if (ss.on) { ss.wake = l; l.addEventListener('release', function () { if (ss.wake === l) ss.wake = null; }); } else l.release(); }, function () {}); } catch (x) {}
@@ -30962,7 +30963,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     ss.paused = true; ssDisarm();
     if (isVideoFile(files[current])) lightboxVideo.pause();
     ssPaint(); ssShowBar();
-    if (ssBar) { clearTimeout(ss.idle); ssBar.classList.remove('idle'); }   // (paused: the controls stay in view)
+    if (ssBar) { clearTimeout(ss.idle); ssBar.classList.remove('idle'); lightbox.classList.remove('ss-idle'); }   // (paused: the controls and the pointer stay in view)
   }
   function ssResume() {
     if (!ss.on || !ss.paused) return;
@@ -30995,7 +30996,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     ss.on = false; ss.paused = false;
     ssDisarm(); clearTimeout(ss.idle); ss.pre = null; ss.order = null;
     if (ss.muted) { lightboxVideo.muted = false; ss.muted = false; }
-    lightbox.classList.remove('ss-on');
+    lightbox.classList.remove('ss-on', 'ss-idle');
     if (ssBar) { ssBar.hidden = true; ssBar.classList.remove('idle', 'paused'); }
     if (ss.wake) { try { ss.wake.release(); } catch (x) {} ss.wake = null; }
     if (ss.fs) {
@@ -31032,7 +31033,14 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const b = e.target.closest && e.target.closest('button, a');
     if (b && b !== ssPlayBtn && !(ssPlayBtn && ssPlayBtn.contains(b))) ssPause();
   }, true);
-  ['mousemove', 'touchstart', 'pointerdown'].forEach(function (name) { lightbox.addEventListener(name, ssShowBar, { passive: true }); });
+  ['touchstart', 'pointerdown'].forEach(function (name) { lightbox.addEventListener(name, ssShowBar, { passive: true }); });
+  // The mouse: only a real move counts (a browser may send a move of nothing when the pointer is hidden, which must not bring it straight back).
+  let ssMx = -1, ssMy = -1;
+  lightbox.addEventListener('mousemove', function (e) {
+    if (Math.abs(e.clientX - ssMx) + Math.abs(e.clientY - ssMy) < 4) return;
+    ssMx = e.clientX; ssMy = e.clientY;
+    ssShowBar();
+  }, { passive: true });
   document.addEventListener('keydown', function (e) {
     if (!ss.on || !lightbox.classList.contains('open') || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, input, textarea, select, [contenteditable="true"]')) return;
