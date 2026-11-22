@@ -87,7 +87,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.6');
+define('GALLERY_VERSION', '2.6.7');
 
 /**
  * The optional settings file. Everything below is configured by the

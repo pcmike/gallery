@@ -6,7 +6,7 @@
 <a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
 <a href="docs/guide/getting-started.md"><img src="https://img.shields.io/badge/PHP-8.3%2B-5865f2" alt="PHP 8.3+"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-5865f2" alt="MIT license with the Commons Clause"></a>
-<a href="src"><img src="https://img.shields.io/badge/source-31k%20lines-5865f2" alt="About 31,000 lines of source (PHP, JavaScript and CSS), built into one file"></a>
+<a href="src"><img src="https://img.shields.io/badge/source-32k%20lines-5865f2" alt="About 32,000 lines of source (PHP, JavaScript and CSS), built into one file"></a>
 </p>
 
 <p align="center"><img src="docs/images/gallery-desktop.webp" alt="A trip gallery on a computer: three folder cards with covers, dates and photo counts" width="860"></p>
@@ -15,6 +15,7 @@
 
 - **One file.** Upload `index.php`, open the folder in a browser, done. Folders become albums, to any depth.
 - **Made for phones as much as computers.** A sharp, fast grid, a full-screen viewer with swipe, captions and a small map, and an admin that works with your thumb.
+- **A slideshow and a photo info panel.** One press plays a folder as a slideshow (shuffle, speed, videos play to their end, a clean full-screen photo with the controls fading away). Each folder can offer an info panel with what the photo's own file says (camera, when it was taken, its size, position), with gallery-wide switches for every field and the location switches always respected. [Notes, folders and the viewer](docs/guide/notes-and-folders.md)
 - **Private photos you can still share.** Hide any photo or folder, then send a temporary link that shows only what you chose, can be limited to a number of browsers or a date, and can be paused or revoked at once. You see who opened it.
 - **Folders only you can open, and albums that stand alone.** Keep a Not listed folder for yourself and share its photos one at a time by their own links (replaceable in one press), and let someone who arrives on one album see just that album.
 - **Hand-picked collections.** Group folders and single photos from anywhere under a name of your own ("Best of Paris") as a card of its own, without moving anything on disk, and give a share link just that set; each member shows only to people who could already see it.
