@@ -5756,6 +5756,22 @@ function update_undo() {
     }
 }
 
+/** What to say before going back to the kept version: [the button's text, what to confirm]. $recent: within the day after the update (the note's own button), when little can have changed since. '' text = no kept version to go back to. */
+function update_undo_offer($recent) {
+    $back = update_backup_version();
+    if ($back === '' || !version_compare($back, GALLERY_VERSION, '<')) return ['', ''];
+    // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
+    // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
+    $warn = '';
+    if (version_compare($back, '2.6.4', '<=')) {
+        $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
+        foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
+        if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
+    }
+    if (!$recent) $warn = ($warn !== '' ? $warn . "\n\n" : '') . 'Put version ' . $back . ' back? It is the file this gallery was running before it was updated. Your photos, captions and settings stay as they are, but anything this version has saved since may not be understood by the older one (new kinds of settings, the visitor log, share links made since). Going back is for when something does not work after an update.';
+    return ['Go back to ' . $back, $warn];
+}
+
 /** The "new version" heads-up for the Health check, or the "just updated" one (with Go back), or null. Same shape as health_headsups(): label, detail, html (buttons). */
 function update_headsups() {
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -5763,16 +5779,9 @@ function update_headsups() {
     $st = update_state();
     $back = update_backup_version();
     if ($back !== '' && $st['updatedAt'] > 0 && time() - (int) $st['updatedAt'] < 86400 && version_compare($back, GALLERY_VERSION, '<')) {
-        // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
-        // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
-        $warn = '';
-        if (version_compare($back, '2.6.4', '<=')) {
-            $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
-            foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
-            if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
-        }
+        [, $warn] = update_undo_offer(true);
         $out[] = ['label' => 'Updated from ' . $back . ' to ' . GALLERY_VERSION, 'detail' => 'The file it replaced is kept, in case something doesn\'t look right.',
-            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo"' . ($warn !== '' ? ' data-warn="' . $e($warn) . '"' : '') . '>Go back to ' . $e($back) . '</button></div>', 'attr' => ' data-update-row'];
+            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo"' . ($warn !== '' ? ' data-warn="' . $e($warn) . '"' : '') . '>Go back to ' . $e($back) . '</button> <button type="button" class="secondary" data-update="dismiss">Hide this</button></div>', 'attr' => ' data-update-row'];
     }
     $n = update_newer();
     if ($n !== null) {
@@ -5794,7 +5803,10 @@ function update_status_text() {
 }
 /** The "Updates" row's own line, under its label: what it found, and Check now. */
 function update_status_html() {
-    return '<div class="health-detail"><span data-update-text>' . htmlspecialchars(update_status_text(), ENT_QUOTES, 'UTF-8') . '</span> <button type="button" class="linklike" data-update="check">Check now</button></div>';
+    [$undoText, $undoWarn] = update_undo_offer(false);   // (the file the last update replaced is kept: Go back stays on offer beside Check now, asking first)
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    return '<div class="health-detail"><span data-update-text>' . $e(update_status_text()) . '</span> <button type="button" class="linklike" data-update="check">Check now</button>'
+        . ($undoText !== '' ? ' <button type="button" class="linklike" data-update="undo" data-warn="' . $e($undoWarn) . '">' . $e($undoText) . '</button>' : '') . '</div>';
 }
 
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
@@ -5809,6 +5821,7 @@ function update_admin_action($action) {
     }
     if ($action === 'update_apply') admin_json_exit(update_apply());
     if ($action === 'update_undo') admin_json_exit(update_undo());
+    if ($action === 'update_dismiss') { $st = update_state(); $st['updatedAt'] = 0; update_state_save($st); admin_json_exit(['ok' => true, 'text' => 'Hidden.']); }   // (the note after an update is shown for a day; this ends it now. The file the update replaced stays, as before.)
     admin_json_exit(['ok' => false, 'text' => 'Unknown action.']);
 }
 /* -----------------------------------------------------------------------
@@ -15947,7 +15960,10 @@ function backup_admin_action($action, $dir, $files) {
     if ($action === 'backup_run') {
         $r = backup_run(true, $dir, $files);
         $left = 0; foreach ($r['problems'] as $pr) if ($pr[2] === 'left out') $left++;
-        admin_json_exit(['ok' => $r['ok'], 'busy' => $r['busy'], 'problems' => count($r['problems']), 'text' => $r['ok'] ? 'Backed up ' . number_format($r['files']) . ' file' . ($r['files'] === 1 ? '' : 's') . ' (' . ($r['bytes'] >= 1048576 ? round($r['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($r['bytes'] / 1024)) . ' KB') . ').' . ($r['problems'] ? ' Some parts could not be read soundly: see the Backup row.' : '') : $r['why']]);
+        $heldRows = []; $otherN = 0; foreach ($r['problems'] as $pr) { if (($pr[2] ?? '') === 'held') $heldRows[] = $pr; else $otherN++; }
+        $heldN = count($heldRows); $heldSay = []; foreach (array_slice($heldRows, 0, 2) as $pr) $heldSay[] = $pr[0] . ' (' . $pr[1] . ')';   // (the file, and what is gone from it: the same words as the row in the list)
+        $backupNote = ($otherN ? ' Some parts could not be read soundly: see the Backup row.' : '') . ($heldN ? ' The backup kept the earlier copy of ' . implode('; ', $heldSay) . ($heldN > 2 ? ' and ' . ($heldN - 2) . ' more' : '') . '. The live ' . ($heldN === 1 ? 'file was' : 'files were') . ' not touched: see the ' . ($heldN === 1 ? 'row' : 'rows') . ' "The backup kept the earlier copy of ..." in the list.' : '');
+        admin_json_exit(['ok' => $r['ok'], 'busy' => $r['busy'], 'problems' => count($r['problems']), 'text' => $r['ok'] ? 'Backed up ' . number_format($r['files']) . ' file' . ($r['files'] === 1 ? '' : 's') . ' (' . ($r['bytes'] >= 1048576 ? round($r['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($r['bytes'] / 1024)) . ' KB') . ').' . $backupNote : $r['why']]);
     }
     if ($action === 'backup_restore_log') { [$ok, $text] = backup_restore_log(); admin_json_exit(['ok' => $ok, 'text' => $text]); }
     if ($action === 'backup_new_log') {
@@ -17613,7 +17629,8 @@ function health_server_rows($add) {
             'Then press Check again at the top of this page.']);
 }
 
-/** The numbers across the top: [[label, value]]. Only what is cheap to know. */
+/** The numbers across the top: [[label, value, disks, html, title, go]]. Only what is cheap to know. Order: what is in the gallery (photos, videos, folders), what the server has (disk room, the log's size),
+ *  then what has a tab or a row of its own (links, visitors, backup): those three are buttons ($go: the tab to open, or 'backup' for the Backup row with its buttons). */
 function health_strip($dir, $files) {
     $videos = 0; $n = 0;
     foreach ($files as $f) { $n++; if (is_video_file($f)) $videos++; }
@@ -17622,22 +17639,24 @@ function health_strip($dir, $files) {
     $folders = count(all_folder_paths($files)) + 1;   // (and the front page)
     if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
     $out[] = ['Folders', number_format($folders)];
-    if (is_file(links_path())) {
-        $act = 0; $other = 0;
-        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
-        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
-        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
-        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : '')];
-    }
-    if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
-    $bk = backup_status(); $bkBad = $bk['have'] && (health_heavy($dir, $files, false)['zip'] ?? true) === false;   // (the file read back, as the row below does: a ZIP cut short is not "just now")
-    $out[] = ['Backup', !$bk['have'] ? 'none' : ($bkBad ? 'damaged' : health_ago_short($bk['at'])), null, null, !$bk['have'] ? 'No backup has been made yet' : ($bkBad ? 'The backup file does not check out when it is read back' : 'The backup was made ' . health_ago($bk['at']))];
     $vols = health_volumes($dir, $files);
     if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
     elseif ($vols) {
         $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
         $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
     }
+    $hasLog = visitlog_find() !== null && visitlog_driver_ok();
+    if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
+    if (is_file(links_path())) {
+        $act = 0; $other = 0;
+        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
+        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
+        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
+        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : ''), 'links'];
+    }
+    if ($hasLog) $out[] = ['Visitors', number_format(visitlog_visitor_count()), null, null, '', 'visits'];
+    $bk = backup_status(); $bkBad = $bk['have'] && (health_heavy($dir, $files, false)['zip'] ?? true) === false;   // (the file read back, as the row below does: a ZIP cut short is not "just now")
+    $out[] = ['Backup', !$bk['have'] ? 'none' : ($bkBad ? 'damaged' : health_ago_short($bk['at'])), null, null, !$bk['have'] ? 'No backup has been made yet' : ($bkBad ? 'The backup file does not check out when it is read back' : 'The backup was made ' . health_ago($bk['at'])), 'backup'];
     return $out;
 }
 /** What the page already tells the owner on the front page, brought into the admin (where there is room to name things and to act): rows
@@ -17700,7 +17719,7 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
       <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h">Free space on <?= count($si[2]) ?> disks, the lowest first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
@@ -19659,6 +19678,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-strip .hs-t small { text-align:center; color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
   .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
   .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
+  .health-row.hs-flash { box-shadow:0 0 0 2px var(--accent, #aab2ff); border-radius:8px; transition:box-shadow .4s; }
   .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
   .health-strip button.hs-t[aria-expanded="true"] .tri { transform:rotate(180deg); }
   .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; }
@@ -20934,6 +20954,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var what = b.getAttribute('data-update'), was = b.textContent;
         if (what === 'undo' && b.getAttribute('data-warn') && !window.confirm(b.getAttribute('data-warn'))) return;   // (going back to a version that doesn't know Not listed: asked first)
         b.disabled = true;
+        if (what === 'dismiss') {   // (Hide this: the note that the gallery was just updated goes now, not after a day; the kept file stays)
+          post({ action: 'update_dismiss' }, function (j) { if (j && j.ok) { var r = b.closest('.health-row'); if (r) r.remove(); if (window.__healthRecount) window.__healthRecount(); } else b.disabled = false; }, function () { b.disabled = false; });
+          return;
+        }
         if (what === 'check') {
           say('Checking…'); b.textContent = 'Checking…';
           post({ action: 'update_check', force: '1' }, function (j) { b.disabled = false; b.textContent = was; say(j.text); showRows(j.rows); }, function () { b.disabled = false; b.textContent = was; say('Could not reach the gallery.'); });
@@ -22891,6 +22915,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
+    document.addEventListener('click', function (e) {   // (the numbers across the top that are buttons: Links opens Shares, Visitors opens Visitors, Backup opens the list and shows the Backup row with its buttons)
+      var g = e.target.closest ? e.target.closest('.hs-go') : null; if (!g) return;
+      var panel = g.closest('#health-panel'); if (!panel) return;
+      var go = g.getAttribute('data-go');
+      if (go !== 'backup') { adminGoTo(go); return; }
+      if (!panel.classList.contains('show-all')) { var tg = panel.querySelector('.health-toggle'); if (tg) tg.click(); }
+      var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
+      if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
+    });
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
       var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
@@ -22955,6 +22988,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           window.__siteDirty = true;
           return redrawBackupPart(panel).then(function (done) {
             if (!done) { try { sessionStorage.setItem('healthOpen', '1'); } catch (er) {} location.reload(); return; }
+            if (j.problems > 0) { var rf = panel.querySelector('[data-health-refresh]'); if (rf) { rf.click(); return; } }   // (a part was held or could not be read: its own rows are drawn too, not only the Backup row, so the whole Health list is looked at again)
             var nb = panel.querySelector('[data-backup-act="run"]'), o = nb && nb.parentNode.querySelector('.health-act-out');
             if (o) { o.textContent = j.text || 'Backed up.'; o.className = 'health-act-out ' + (j.problems > 0 ? 'warn-text' : 'ok-text'); }
           });

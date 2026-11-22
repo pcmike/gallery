@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [Unreleased]
+
+### Changed
+- **The numbers across the top of the Health check are in a better order, and three are buttons.** Photos, Videos, Folders, Disk free, Log, then Links, Visitors and Backup. Links opens the Shares tab, Visitors opens the Visitors tab, and Backup opens the list and scrolls to the Backup row, with Back up now in view.
+- **The note after an update can be hidden, and Go back stays on offer.** The "Updated from X to Y" note is shown for a day after an update; a new **Hide this** button ends it at once. The file the update replaced is kept, and **Go back to X** is now also beside **Check now** in the New versions row for as long as that file is kept; it asks first, in plain words, because what the newer version saved since may not be understood by the older one.
+
+### Fixed
+- **"Back up now" no longer says "could not be read soundly" when the backup merely kept the earlier copy of a list.** When a list (share links, collections, or a folder's captions and photo records) has lost a lot since the last backup, the backup keeps its earlier copy and leaves the live file alone, and Health asks. The answer to Back up now said the parts "could not be read soundly: see the Backup row", which was wrong. It now names the file and what is gone from it, says the live file was not touched, and the amber row ("The backup kept the earlier copy of ...") is drawn at once, without pressing Check again.
+
 ## [2.6.6] - 2026-11-21
 
 ### Fixed

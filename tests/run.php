@@ -8886,6 +8886,10 @@ check('[update] the gallery runs as the new version, says it was updated from th
 check('[update] the photos and the settings are where they were', is_file("$fxUp/a.jpg") && (cfg_read("$fxUp/.gallery-config.php")['UPDATE_FEED_URL'] ?? '') === "$baseUpRel/feed.json" && http_get("$baseUp/")[0] === 200);
 $upR8 = $upPost(['action' => 'update_apply']);
 check('[update] pressing Update now on a gallery that already has the newest says so and changes nothing', ($upR8['ok'] ?? null) === false && str_contains($upR8['text'], 'already have the newest') && (string) file_get_contents("$fxUp/index.php") === $upNew);
+check('[update] the note after an update has a Hide this button', str_contains($upP7, 'data-update="dismiss"'));
+$upD1 = $upPost(['action' => 'update_dismiss']); $upPD = $upPage();
+check('[update] Hide this ends the note now (not after a day) and the file the update replaced is still kept', ($upD1['ok'] ?? null) === true && !str_contains($upPD, "Updated from $upCur to 9.9.9") && is_file("$fxUp/.gallery-previous.php"), json_encode($upD1));
+check('[update] ...and Go back is still offered beside Check now in the Updates row while the file is kept, and asks first (what it is, and that what the newer version saved since may not be understood)', preg_match('~data-update="check">Check now</button> <button type="button" class="linklike" data-update="undo" data-warn="[^"]*anything this version has saved since may not be understood~', $upPD) === 1, preg_match('~New versions.{0,600}~s', strip_tags($upPD), $m) ? substr($m[0], 0, 300) : 'no Updates row');
 // Go back
 $upU1 = $upPost(['action' => 'update_undo']);
 check('[update] Go back puts the kept file in again, exactly, and the kept copy is used up', ($upU1['ok'] ?? null) === true && ($upU1['version'] ?? '') === $upCur && (string) file_get_contents("$fxUp/index.php") === $upOld && !is_file("$fxUp/.gallery-previous.php") && !glob("$fxUp/.gallery-update-*.tmp"));
@@ -10378,6 +10382,9 @@ check('[backup] the log in it is a whole, sound SQLite file with the visits in i
 unlink("$fxBk/.bk-tmp-log.sqlite");
 // 2. the dashboard: the rows, the tiers, the strip
 $bkHp = $bkPage();
+preg_match('~<div class="health-strip".*?</div>~s', $bkHp, $bkStripM); preg_match_all('~<small>([^<]+)~', $bkStripM[0] ?? '', $bkStripL); $bkOrder = $bkStripL[1] ?? [];
+check('[strip] the numbers are in this order: photos, folders, Disk free, Log, then Visitors and Backup (what has a tab or a row of its own comes last)', array_values(array_intersect(['Photos', 'Folders', 'Disk free', 'Log', 'Visitors', 'Backup'], $bkOrder)) === ['Photos', 'Folders', 'Disk free', 'Log', 'Visitors', 'Backup'] && array_search('Disk free', $bkOrder) < array_search('Log', $bkOrder) && array_search('Log', $bkOrder) < array_search('Visitors', $bkOrder) && array_search('Visitors', $bkOrder) < array_search('Backup', $bkOrder), json_encode($bkOrder));
+check('[strip] Visitors opens the Visitors tab and Backup shows the Backup row: both are buttons (data-go="visits" and "backup"); Log and the rest are plain', str_contains($bkHp, 'class="hs-t hs-go" data-go="visits"') && str_contains($bkHp, 'class="hs-t hs-go" data-go="backup"') && !str_contains($bkHp, 'data-go="log"'));
 check('[dashboard] the Health check has the Database and backup group with the log "sound" and the backup made, the numbers strip, and the button says Details (no "optional" count on it)', str_contains($bkHp, 'Database and backup') && str_contains($bkHp, 'Visitor log: sound') && str_contains($bkHp, 'Backup: made') && str_contains($bkHp, 'class="health-strip"') && str_contains($bkHp, 'data-backup-act="run"') && str_contains($bkHp, 'data-backup-act="download"') && str_contains($bkHp, '<span class="ht-label">Details</span>') && !str_contains($bkHp, ' optional</span>'));
 // 3. damage the log (middle pages), with a bigger log so there are pages to damage
 $bkDb = new PDO('sqlite:' . $bkLogFile()); $bkDb->exec('PRAGMA journal_mode=WAL'); $bkDb->exec('CREATE TABLE junk (id INTEGER PRIMARY KEY, v TEXT)'); $bkDb->exec('CREATE INDEX junk_v ON junk(v)');
@@ -10475,8 +10482,9 @@ $stPage = function () use ($stBase) {
     return http_get("$stBase/?admin&classic=1", ['Cookie: ' . extract_cookie_header($h)])[1];
 };
 $stP1 = $stPage();
-check('[strip] the Links box is labelled Links and shows the ones in use in green and the others (paused, ended) in red, with what each is in its title', str_contains($stP1, '<span class="hs-two"><span class="hs-ok">2</span><span class="hs-bad">2</span></span></b><small>Links</small>') && str_contains($stP1, 'title="2 in use, 2 paused, ended or not started yet"') && !str_contains($stP1, '>Active links<'));
+check('[strip] the Links box is labelled Links and shows the ones in use in green and the others (paused, ended) in red, with what each is in its title', str_contains($stP1, '<span class="hs-two"><span class="hs-ok">2</span><span class="hs-bad">2</span></span></b><small>Links</small>') && str_contains($stP1, 'title="2 in use, 2 paused, ended or not started yet. Open Shares"') && !str_contains($stP1, '>Active links<'));
 preg_match('~<b>([^<]+)</b><small>Folders</small>~', $stP1, $stF1);
+check('[strip] the Links box is a button that opens Shares (data-go="links", with the title saying so)', str_contains($stP1, 'class="hs-t hs-go" data-go="links"') && str_contains($stP1, 'Open Shares'));
 check('[strip] Folders counts the folders and the front page (Rome + the front page = 2) and no collections while there are none', ($stF1[1] ?? '') === '2');
 file_put_contents("$stFx/.gallery-collections.php", $stGuard . json_encode(['collections' => [['id' => 'c' . str_repeat('0', 12), 'name' => 'Favourites', 'parent' => ''], ['id' => 'c' . str_repeat('1', 12), 'name' => 'best-of', 'parent' => '']]]) . "\n");
 preg_match('~<b>([^<]+)</b><small>Folders</small>~', $stPage(), $stF2);
@@ -12209,7 +12217,9 @@ return false;
     $gbPage = http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1];
     check('[go back] with a Not listed folder, the Go back button to a version that does not know Not listed carries a question that says what happens (private, open to an "Everything" link) and that the mark is kept', str_contains($gbPage, 'data-update="undo" data-warn="You have 1 Not listed folder.') && str_contains($gbPage, 'Everything') && str_contains($gbPage, 'updating again hides it again'));
     unlink("$fxGb/Drawer/.gallery-items.php");
-    check('[go back] ...and with none, the button has no question', !str_contains(http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1], 'data-warn=') && str_contains(http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1], 'data-update="undo"'));
+    $gbPage2 = http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1];
+    check('[go back] ...and with none, the note\'s button (the one for the first day) has no question', str_contains($gbPage2, 'class="secondary" data-update="undo">Go back to 2.6.3</button>') && !str_contains($gbPage2, 'You have 1 Not listed folder'));
+    check('[go back] ...while the button beside Check now (offered as long as the file is kept) always asks first: what it is, and that what the newer version saved since may not be understood', str_contains($gbPage2, 'data-update="check">Check now</button> <button type="button" class="linklike" data-update="undo" data-warn="Put version 2.6.3 back?') && str_contains($gbPage2, 'anything this version has saved since may not be understood'));
 }
 
 /* --------------------------------------------------------------------- */
@@ -12479,6 +12489,7 @@ echo "== audit group 13: the backup ==\n";
     $g14Write(10); $g14Run();
     check('[backup hold] two records gone out of twelve is an ordinary change: the new copy is taken', count((array) $g14Names()) === 10 && !$g14Held());
     $g14Write(0); $g14R3 = $g14Run(); $g14Live = (string) file_get_contents($g14Items);
+    check('[backup hold] the answer to Back up now says what was held (which file, and what is gone from it, as the row says; the live file was not touched) and does NOT say "could not be read soundly" (every part was read fine)', str_contains((string) ($g14R3['text'] ?? ''), 'kept the earlier copy of Alpha/.gallery-items.php (') && str_contains((string) ($g14R3['text'] ?? ''), 'are gone from the live file') && str_contains((string) ($g14R3['text'] ?? ''), 'not touched') && !str_contains((string) ($g14R3['text'] ?? ''), 'could not be read soundly'), (string) ($g14R3['text'] ?? ''));
     $g14Page = http_get($g14['base'] . '/?admin&classic=1', $g14['own'])[1];
     check('[backup hold] a captions file that has lost all ten records is not put in: the zip keeps the copy from before (ten records, under the file\'s own name), the live file is not touched, and the answer says a part was held', ($g14R3['ok'] ?? null) === true && count((array) $g14Names()) === 10 && count($g14Held()) === 1 && ($g13State($g14['dir'])['result'] ?? '') === 'partial' && str_contains($g14Live, '"items":{}'), json_encode([$g14R3, $g13State($g14['dir'])['problems'] ?? null]));
     check('[backup hold] Health says which part, how many records the backup keeps and how many are gone from the live file, and offers "That\'s right, use the new one"', str_contains($g14Page, 'data-backup-act="accept"') && str_contains($g14Page, 'data-backup-name="Alpha/.gallery-items.php"') && preg_match('/\b10\b/', strip_tags($g14Page)) === 1 && str_contains($g14Page, 'kept'), substr(strip_tags($g14Page), 0, 400));

@@ -385,7 +385,8 @@ function health_server_rows($add) {
             'Then press Check again at the top of this page.']);
 }
 
-/** The numbers across the top: [[label, value]]. Only what is cheap to know. */
+/** The numbers across the top: [[label, value, disks, html, title, go]]. Only what is cheap to know. Order: what is in the gallery (photos, videos, folders), what the server has (disk room, the log's size),
+ *  then what has a tab or a row of its own (links, visitors, backup): those three are buttons ($go: the tab to open, or 'backup' for the Backup row with its buttons). */
 function health_strip($dir, $files) {
     $videos = 0; $n = 0;
     foreach ($files as $f) { $n++; if (is_video_file($f)) $videos++; }
@@ -394,21 +395,23 @@ function health_strip($dir, $files) {
     $folders = count(all_folder_paths($files)) + 1;   // (and the front page)
     if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
     $out[] = ['Folders', number_format($folders)];
-    if (is_file(links_path())) {
-        $act = 0; $other = 0;
-        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
-        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
-        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
-        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : '')];
-    }
-    if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
-    $bk = backup_status(); $bkBad = $bk['have'] && (health_heavy($dir, $files, false)['zip'] ?? true) === false;   // (the file read back, as the row below does: a ZIP cut short is not "just now")
-    $out[] = ['Backup', !$bk['have'] ? 'none' : ($bkBad ? 'damaged' : health_ago_short($bk['at'])), null, null, !$bk['have'] ? 'No backup has been made yet' : ($bkBad ? 'The backup file does not check out when it is read back' : 'The backup was made ' . health_ago($bk['at']))];
     $vols = health_volumes($dir, $files);
     if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
     elseif ($vols) {
         $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
         $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
     }
+    $hasLog = visitlog_find() !== null && visitlog_driver_ok();
+    if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
+    if (is_file(links_path())) {
+        $act = 0; $other = 0;
+        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
+        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
+        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
+        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : ''), 'links'];
+    }
+    if ($hasLog) $out[] = ['Visitors', number_format(visitlog_visitor_count()), null, null, '', 'visits'];
+    $bk = backup_status(); $bkBad = $bk['have'] && (health_heavy($dir, $files, false)['zip'] ?? true) === false;   // (the file read back, as the row below does: a ZIP cut short is not "just now")
+    $out[] = ['Backup', !$bk['have'] ? 'none' : ($bkBad ? 'damaged' : health_ago_short($bk['at'])), null, null, !$bk['have'] ? 'No backup has been made yet' : ($bkBad ? 'The backup file does not check out when it is read back' : 'The backup was made ' . health_ago($bk['at'])), 'backup'];
     return $out;
 }

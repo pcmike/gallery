@@ -610,6 +610,7 @@
   .health-strip .hs-t small { text-align:center; color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
   .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
   .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
+  .health-row.hs-flash { box-shadow:0 0 0 2px var(--accent, #aab2ff); border-radius:8px; transition:box-shadow .4s; }
   .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
   .health-strip button.hs-t[aria-expanded="true"] .tri { transform:rotate(180deg); }
   .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; }

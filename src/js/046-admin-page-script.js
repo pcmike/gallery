@@ -408,6 +408,10 @@
         var what = b.getAttribute('data-update'), was = b.textContent;
         if (what === 'undo' && b.getAttribute('data-warn') && !window.confirm(b.getAttribute('data-warn'))) return;   // (going back to a version that doesn't know Not listed: asked first)
         b.disabled = true;
+        if (what === 'dismiss') {   // (Hide this: the note that the gallery was just updated goes now, not after a day; the kept file stays)
+          post({ action: 'update_dismiss' }, function (j) { if (j && j.ok) { var r = b.closest('.health-row'); if (r) r.remove(); if (window.__healthRecount) window.__healthRecount(); } else b.disabled = false; }, function () { b.disabled = false; });
+          return;
+        }
         if (what === 'check') {
           say('Checking…'); b.textContent = 'Checking…';
           post({ action: 'update_check', force: '1' }, function (j) { b.disabled = false; b.textContent = was; say(j.text); showRows(j.rows); }, function () { b.disabled = false; b.textContent = was; say('Could not reach the gallery.'); });
@@ -2365,6 +2369,15 @@
     });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
+    document.addEventListener('click', function (e) {   // (the numbers across the top that are buttons: Links opens Shares, Visitors opens Visitors, Backup opens the list and shows the Backup row with its buttons)
+      var g = e.target.closest ? e.target.closest('.hs-go') : null; if (!g) return;
+      var panel = g.closest('#health-panel'); if (!panel) return;
+      var go = g.getAttribute('data-go');
+      if (go !== 'backup') { adminGoTo(go); return; }
+      if (!panel.classList.contains('show-all')) { var tg = panel.querySelector('.health-toggle'); if (tg) tg.click(); }
+      var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
+      if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
+    });
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
       var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
@@ -2429,6 +2442,7 @@
           window.__siteDirty = true;
           return redrawBackupPart(panel).then(function (done) {
             if (!done) { try { sessionStorage.setItem('healthOpen', '1'); } catch (er) {} location.reload(); return; }
+            if (j.problems > 0) { var rf = panel.querySelector('[data-health-refresh]'); if (rf) { rf.click(); return; } }   // (a part was held or could not be read: its own rows are drawn too, not only the Backup row, so the whole Health list is looked at again)
             var nb = panel.querySelector('[data-backup-act="run"]'), o = nb && nb.parentNode.querySelector('.health-act-out');
             if (o) { o.textContent = j.text || 'Backed up.'; o.className = 'health-act-out ' + (j.problems > 0 ? 'warn-text' : 'ok-text'); }
           });

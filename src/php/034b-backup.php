@@ -470,7 +470,10 @@ function backup_admin_action($action, $dir, $files) {
     if ($action === 'backup_run') {
         $r = backup_run(true, $dir, $files);
         $left = 0; foreach ($r['problems'] as $pr) if ($pr[2] === 'left out') $left++;
-        admin_json_exit(['ok' => $r['ok'], 'busy' => $r['busy'], 'problems' => count($r['problems']), 'text' => $r['ok'] ? 'Backed up ' . number_format($r['files']) . ' file' . ($r['files'] === 1 ? '' : 's') . ' (' . ($r['bytes'] >= 1048576 ? round($r['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($r['bytes'] / 1024)) . ' KB') . ').' . ($r['problems'] ? ' Some parts could not be read soundly: see the Backup row.' : '') : $r['why']]);
+        $heldRows = []; $otherN = 0; foreach ($r['problems'] as $pr) { if (($pr[2] ?? '') === 'held') $heldRows[] = $pr; else $otherN++; }
+        $heldN = count($heldRows); $heldSay = []; foreach (array_slice($heldRows, 0, 2) as $pr) $heldSay[] = $pr[0] . ' (' . $pr[1] . ')';   // (the file, and what is gone from it: the same words as the row in the list)
+        $backupNote = ($otherN ? ' Some parts could not be read soundly: see the Backup row.' : '') . ($heldN ? ' The backup kept the earlier copy of ' . implode('; ', $heldSay) . ($heldN > 2 ? ' and ' . ($heldN - 2) . ' more' : '') . '. The live ' . ($heldN === 1 ? 'file was' : 'files were') . ' not touched: see the ' . ($heldN === 1 ? 'row' : 'rows') . ' "The backup kept the earlier copy of ..." in the list.' : '');
+        admin_json_exit(['ok' => $r['ok'], 'busy' => $r['busy'], 'problems' => count($r['problems']), 'text' => $r['ok'] ? 'Backed up ' . number_format($r['files']) . ' file' . ($r['files'] === 1 ? '' : 's') . ' (' . ($r['bytes'] >= 1048576 ? round($r['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($r['bytes'] / 1024)) . ' KB') . ').' . $backupNote : $r['why']]);
     }
     if ($action === 'backup_restore_log') { [$ok, $text] = backup_restore_log(); admin_json_exit(['ok' => $ok, 'text' => $text]); }
     if ($action === 'backup_new_log') {

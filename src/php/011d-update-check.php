@@ -202,6 +202,22 @@ function update_undo() {
     }
 }
 
+/** What to say before going back to the kept version: [the button's text, what to confirm]. $recent: within the day after the update (the note's own button), when little can have changed since. '' text = no kept version to go back to. */
+function update_undo_offer($recent) {
+    $back = update_backup_version();
+    if ($back === '' || !version_compare($back, GALLERY_VERSION, '<')) return ['', ''];
+    // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
+    // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
+    $warn = '';
+    if (version_compare($back, '2.6.4', '<=')) {
+        $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
+        foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
+        if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
+    }
+    if (!$recent) $warn = ($warn !== '' ? $warn . "\n\n" : '') . 'Put version ' . $back . ' back? It is the file this gallery was running before it was updated. Your photos, captions and settings stay as they are, but anything this version has saved since may not be understood by the older one (new kinds of settings, the visitor log, share links made since). Going back is for when something does not work after an update.';
+    return ['Go back to ' . $back, $warn];
+}
+
 /** The "new version" heads-up for the Health check, or the "just updated" one (with Go back), or null. Same shape as health_headsups(): label, detail, html (buttons). */
 function update_headsups() {
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -209,16 +225,9 @@ function update_headsups() {
     $st = update_state();
     $back = update_backup_version();
     if ($back !== '' && $st['updatedAt'] > 0 && time() - (int) $st['updatedAt'] < 86400 && version_compare($back, GALLERY_VERSION, '<')) {
-        // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
-        // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
-        $warn = '';
-        if (version_compare($back, '2.6.4', '<=')) {
-            $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
-            foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
-            if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
-        }
+        [, $warn] = update_undo_offer(true);
         $out[] = ['label' => 'Updated from ' . $back . ' to ' . GALLERY_VERSION, 'detail' => 'The file it replaced is kept, in case something doesn\'t look right.',
-            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo"' . ($warn !== '' ? ' data-warn="' . $e($warn) . '"' : '') . '>Go back to ' . $e($back) . '</button></div>', 'attr' => ' data-update-row'];
+            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo"' . ($warn !== '' ? ' data-warn="' . $e($warn) . '"' : '') . '>Go back to ' . $e($back) . '</button> <button type="button" class="secondary" data-update="dismiss">Hide this</button></div>', 'attr' => ' data-update-row'];
     }
     $n = update_newer();
     if ($n !== null) {
@@ -240,7 +249,10 @@ function update_status_text() {
 }
 /** The "Updates" row's own line, under its label: what it found, and Check now. */
 function update_status_html() {
-    return '<div class="health-detail"><span data-update-text>' . htmlspecialchars(update_status_text(), ENT_QUOTES, 'UTF-8') . '</span> <button type="button" class="linklike" data-update="check">Check now</button></div>';
+    [$undoText, $undoWarn] = update_undo_offer(false);   // (the file the last update replaced is kept: Go back stays on offer beside Check now, asking first)
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    return '<div class="health-detail"><span data-update-text>' . $e(update_status_text()) . '</span> <button type="button" class="linklike" data-update="check">Check now</button>'
+        . ($undoText !== '' ? ' <button type="button" class="linklike" data-update="undo" data-warn="' . $e($undoWarn) . '">' . $e($undoText) . '</button>' : '') . '</div>';
 }
 
 /** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
@@ -255,5 +267,6 @@ function update_admin_action($action) {
     }
     if ($action === 'update_apply') admin_json_exit(update_apply());
     if ($action === 'update_undo') admin_json_exit(update_undo());
+    if ($action === 'update_dismiss') { $st = update_state(); $st['updatedAt'] = 0; update_state_save($st); admin_json_exit(['ok' => true, 'text' => 'Hidden.']); }   // (the note after an update is shown for a day; this ends it now. The file the update replaced stays, as before.)
     admin_json_exit(['ok' => false, 'text' => 'Unknown action.']);
 }

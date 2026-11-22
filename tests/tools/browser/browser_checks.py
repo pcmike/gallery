@@ -5011,6 +5011,39 @@ try:
         ok("not the admin password" in b.js("document.querySelector('#health-panel .health-act-out').textContent"), "[backup] a wrong password is refused in the row, and nothing is offered", b.js("document.querySelector('#health-panel .health-act-out').textContent"))
         b.js("(() => { const i = document.querySelector('#health-panel .health-pw'); i.value = ''; i.focus(); })()"); b.call("Input.insertText", {"text": KPW}); b.js("document.querySelector('#health-panel .health-pw').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))"); b.drain(1.5)
         ok("backupdownload=" in (b.js("(() => { const a = document.querySelector('#health-panel .health-act-out a'); return a ? a.getAttribute('href') : ''; })()") or ""), "[backup] the right password gives a download link (one use, two minutes)")
+        # the numbers across the top that are buttons: Links opens Shares, Visitors opens Visitors, Backup opens the list and brings Back up now into view
+        for tile, tab in (("links", "links"), ("visits", "visits")):
+            if b.js("!!document.querySelector('#health-panel .hs-go[data-go=" + tile + "]')"):
+                b.js("adminGoTo('site')"); b.drain(0.4)
+                b.js("document.querySelector('#health-panel .hs-go[data-go=" + tile + "]').click()"); b.drain(0.7)
+                ok(b.js("document.querySelector('.tab-panel[data-tab=" + tab + "]').classList.contains('active')"), "[strip click] the " + tile + " number opens its tab (" + tab + ")", tile)
+        b.js("adminGoTo('site')"); b.drain(0.4)
+        b.js("(() => { const p = document.getElementById('health-panel'); if (p.classList.contains('show-all')) p.querySelector('.health-toggle').click(); })()"); b.drain(0.3)
+        b.js("document.querySelector('#health-panel .hs-go[data-go=backup]').click()"); b.drain(1.6)
+        sc = b.js("(() => { const p = document.getElementById('health-panel'); const x = p.querySelector('[data-backup-act=run]'); const r = x.getBoundingClientRect(); return {open: p.classList.contains('show-all'), seen: r.top >= 0 && r.bottom <= window.innerHeight}; })()")
+        ok(sc["open"] and sc["seen"], "[strip click] the Backup number opens the list and scrolls to the Backup row, with Back up now in view", str(sc))
+        b.js("adminGoTo('site')"); b.drain(0.4)
+        # a list that lost a lot since the last backup (the backup keeps the earlier copy): after Back up now its amber row is on screen at once, without a reload and without pressing Check again
+        itp = SITE_K + "/Alpha/.gallery-items.php"; itguard = "<?php http_response_code(404); exit; ?>\n"
+        itwas = open(itp, "rb").read() if os.path.exists(itp) else None
+        def setitems(n): open(itp, "w").write(itguard + json.dumps({"items": ({("h%02d.jpg" % i): {"caption": "c%d" % i} for i in range(1, n + 1)} or {})}))
+        try:
+            setitems(8); b.js("adminGoTo('site')"); b.drain(0.4)
+            b.js("document.querySelector('#health-panel [data-backup-act=run]').click()"); kwait("false", 1.0); b.drain(2.5)   # (a backup that holds the eight records)
+            setitems(0)
+            b.js("window.__keep2 = 1; document.querySelector('#health-panel [data-backup-act=run]').click()")
+            ok(kwait("!!(" + krow("The backup kept the earlier copy of") + ")", 15) and b.js("window.__keep2 === 1"), "[backup hold] after Back up now a list that lost all its records shows its own amber row (the backup kept the earlier copy) on screen at once, with no reload", "")
+            b.js("document.querySelector('#health-panel [data-backup-act=accept]').click()"); b.drain(0.4)
+            b.js("[...document.querySelectorAll('#health-panel .health-row button')].find(y => y.textContent === 'Yes, go ahead').click()")
+            ok(kwait("!(" + krow("The backup kept the earlier copy of") + ")", 20), "[backup hold] \"That's right, use the new one\" takes the live copy and the amber row goes", "")
+        except Exception as ex:
+            ok(False, "[backup hold] the held-list check ran", str(ex)[:200])
+        finally:
+            if itwas is None:
+                try: os.remove(itp)
+                except OSError: pass
+            else: open(itp, "wb").write(itwas)
+        b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.5)
         # a damaged log: Check again finds it; the buttons ask in the row first (no dialog), Cancel puts everything back
         kdb = [f for f in glob.glob(SITE_K + "/.gallery-visits-*.sqlite")][0]
         c = _sq3.connect(kdb); c.execute("PRAGMA journal_mode=WAL"); c.execute("CREATE TABLE junk (id INTEGER PRIMARY KEY, v TEXT)"); c.execute("CREATE INDEX junk_v ON junk(v)")
