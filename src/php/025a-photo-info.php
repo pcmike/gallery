@@ -41,9 +41,10 @@ function photo_info_groups() {
             'owner' => 'INFO_OWNER', 'copyright' => 'INFO_COPYRIGHT', 'imageid' => 'INFO_IMAGE_ID', 'comments' => 'INFO_COMMENTS'];
 }
 
-/** The groups the owner has switched on: group => true. Empty when none is (then there is nothing for a panel to show). */
+/** The groups the owner has switched on: group => true. Empty when the main switch (INFO_PANEL) is off or none is on (then there is nothing for a panel to show). */
 function photo_info_wanted() {
     $w = [];
+    if (!INFO_PANEL) return $w;   // (the main switch is off: no panel anywhere, so nothing is read and no folder is offered one)
     foreach (photo_info_groups() as $group => $const) if (defined($const) && constant($const)) $w[$group] = true;
     return $w;
 }

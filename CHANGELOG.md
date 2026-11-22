@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [Unreleased]
+
+### Added
+- **Health shows which build is running.** *Running 2.6.8 · build 3f9a1c2e*: the first eight characters of this file's SHA-256, the same as the start of the release's `index.php.sha256`, so two builds of one version can be told apart.
+- **A Media metadata row in Features,** next to Photo locations and maps (two features, each with its own switch): On or Off by the main Info panel switch, with a button that jumps to it and marks the switch and its list together.
+
+### Changed
+- **The info panel has a main switch.** *Info panel* in Settings → Metadata, off to start with: while it is off no folder is offered a panel and the panel's address answers 404, whatever a folder has chosen. The field switches sit under it, indented, in one folded list called **Media information** (all fourteen; they can be looked at while the main switch is off, but are greyed out and cannot be changed until it is on).
+- **"Location data" / "Locations and media information" is now "Metadata"** (Settings, and a folder's settings).
+- **A folder's "Show photo info" is now "Show media info"** and is the first row of the folder's Metadata section (the map stays under the location switch, as before; the row is greyed, with a link to Settings, while the main switch is off). The panel's own title and button say "Media info".
+
 ## [2.6.7] - 2026-11-22
 
 ### Added

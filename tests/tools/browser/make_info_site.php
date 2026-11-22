@@ -36,5 +36,5 @@ exif_jpeg("$dir/Other/6.jpg", 'Apple', 'iPhone 15 Pro', '2026:10:06 14:33:10', n
 $loc = ['lat' => 48.8566, 'lng' => 2.3522, 'label' => ''];
 file_put_contents("$dir/Trip/.gallery-items.php", $guard . json_encode(['items' => ['1.jpg' => ['location' => $loc], '2.jpg' => ['location' => $loc], '3.jpg' => ['location' => $loc]], 'mediaInfo' => true, 'locationEnabled' => true]) . "\n");
 file_put_contents("$dir/Trip/Sub/.gallery-items.php", $guard . json_encode(['items' => ['4.jpg' => ['location' => $loc]]]) . "\n");
-file_put_contents("$dir/.gallery-config.php", $guard . json_encode(['AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'INFO_COMMENTS' => true]) . "\n");
+file_put_contents("$dir/.gallery-config.php", $guard . json_encode(['AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'INFO_PANEL' => true, 'INFO_COMMENTS' => true]) . "\n");
 copy($index, "$dir/index.php");

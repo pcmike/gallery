@@ -1234,8 +1234,11 @@
   .char-count.near { opacity: 1; color: #b7791f; }
   .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }
 
-  /* "More media information": the switches that start off, folded away inside the group. */
-  .site-more { margin:6px 0 10px; border-top:1px dashed #34343a; border-bottom:1px dashed #34343a; padding:0; }   /* (no inset at the sides: the switches inside line up with every other switch in Settings) */
+  /* "Media information": the field switches of the info panel, folded under the main Info panel switch and indented under it. */
+  .site-more { margin:2px 0 10px 22px; padding:0; }
   .site-more > summary { cursor:pointer; padding:9px 0; color:var(--text); }
-  .site-more > summary .muted { font-weight:400; }
+  .site-dim { opacity:.5; }   /* (the main Info panel switch is off: the field switches can be looked at but not changed) */
+  .site-dim .switch { cursor:not-allowed; }
   .flag-source { margin:-2px 0 10px; }
+  .info-under.no-info .instant-row, .info-under.no-info .flag-source, .info-under.no-info .hint { opacity:.55; }   /* (the info panel is off for the whole gallery: the folder's choice can still be made, but nothing shows yet) */
+  .info-under { margin:2px 0 18px; }

@@ -87,7 +87,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.7');
+define('GALLERY_VERSION', '2.6.8');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -545,10 +545,11 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
-// What the viewer's info panel may say about a photo (Settings, Locations and media information). A folder opts in to the panel (its own "Show photo
+// What the viewer's info panel may say about a photo (Settings, Metadata). The panel itself is off for the whole gallery until INFO_PANEL is on; then a folder opts in to the panel (its own "Show photo
 // info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
 // start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
 // Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.
+define('INFO_PANEL', gallery_setting('INFO_PANEL', false));   // (the main switch: off, no info panel is offered anywhere, whatever a folder has chosen; the field switches below only matter once it is on)
 define('INFO_CAMERA', gallery_setting('INFO_CAMERA', true));
 define('INFO_TAKEN', gallery_setting('INFO_TAKEN', true));
 define('INFO_RESOLUTION', gallery_setting('INFO_RESOLUTION', true));
@@ -8760,7 +8761,7 @@ function items_path($folderPath) {
  *  from EXIF, since that would publish when the owner was away) and
  *  sortOrder (an explicit position among sibling folders).
  *  locationEnabled is this folder's own
- *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show photo info" switch: true, false, or null when it
+ *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show media info" switch: true, false, or null when it
  *  has made no choice and takes the one from the folder above it (see folder_flag_resolve). */
 function items_default() {
     return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
@@ -9252,9 +9253,10 @@ function photo_info_groups() {
             'owner' => 'INFO_OWNER', 'copyright' => 'INFO_COPYRIGHT', 'imageid' => 'INFO_IMAGE_ID', 'comments' => 'INFO_COMMENTS'];
 }
 
-/** The groups the owner has switched on: group => true. Empty when none is (then there is nothing for a panel to show). */
+/** The groups the owner has switched on: group => true. Empty when the main switch (INFO_PANEL) is off or none is on (then there is nothing for a panel to show). */
 function photo_info_wanted() {
     $w = [];
+    if (!INFO_PANEL) return $w;   // (the main switch is off: no panel anywhere, so nothing is read and no folder is offered one)
     foreach (photo_info_groups() as $group => $const) if (defined($const) && constant($const)) $w[$group] = true;
     return $w;
 }
@@ -11228,7 +11230,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $data['mediaInfo'] = $choice === 'inherit' ? null : !empty($choice);
         });
         if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
-        return ['type' => 'ok', 'text' => empty($choice) ? 'Photo info is off for this folder (and the folders under it that have not chosen).' : 'Photo info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: every field is switched off in Settings, under Locations and media information.')];
+        return ['type' => 'ok', 'text' => empty($choice) ? 'Media info is off for this folder (and the folders under it that have not chosen).' : 'Media info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: the info panel is switched off, or every field is, in Settings, under Metadata.')];
     }
 
     if ($action === 'toggle_location_enabled') {
@@ -11670,7 +11672,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
         if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
         if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
-        if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Photo info ' . ($d['mediaInfo'] ? 'on' : 'off')];
+        if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Media info ' . ($d['mediaInfo'] ? 'on' : 'off')];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
         if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
@@ -12052,15 +12054,20 @@ function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $
 <?php
 }
 
-/** The "Locations" section, last on a folder's (or the gallery's) settings: whether photo locations show, and, under that because it
- *  only shows photos whose location is public, the map. */
+/** The "Metadata" section, last on a folder's (or the gallery's) settings: whether photo locations show, under that because it
+ *  only shows photos whose location is public the map. First comes whether the folder offers the viewer's info panel. */
 function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '', $dir = null) {
     $isRoot = $adminFolderPath === null;
     $locFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'locationEnabled');   // (this folder's own choice, or the one it takes from the folder above)
     $infoFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'mediaInfo');
     $locOn = $locFlag['on'] && ENABLE_PHOTO_LOCATION;
 ?>
-    <h3 class="subhead">Locations and media information</h3>
+    <h3 class="subhead">Metadata</h3>
+    <?php $infoJump = !INFO_PANEL ? ' (the info panel is off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-INFO_PANEL\');">Settings</a>)' : ''; ?>
+    <div class="info-under<?= INFO_PANEL ? '' : ' no-info' ?>" id="info-under">
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
+      <p class="hint">The viewer gets an info panel for each photo or video here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Metadata). A position or a time zone shows only where the photo's location does.</p>
+    </div>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
           render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump);
           render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir); ?>
@@ -12072,8 +12079,6 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
     <?php if ($locStatus !== ''): ?>
     <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show photo info to visitors at the root' : 'Show photo info to visitors for this folder', '', ''); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
-    <p class="hint">The viewer gets an info panel for each photo here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Locations and media information). A position or a time zone shows only where the photo's location does.</p>
     <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
       <?php if (!ENABLE_PHOTO_LOCATION): ?>
       <p class="warn-note map-loc-note">Locations are off for the whole gallery, so nothing shows on a map yet. Turn on <strong>Allow photo locations</strong> in <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_PHOTO_LOCATION');">Settings</a>; each folder and photo still has its own switch.</p>
@@ -12406,7 +12411,7 @@ function gallery_setting_definitions() {
             ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
-        ['title' => 'Locations and media information', 'items' => [
+        ['title' => 'Metadata', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location shows; each folder and photo still has its own switch. Locations are read when thumbnails are made, or with Prepare media. Maps use OpenStreetMap, which the visitor\'s browser contacts.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
@@ -12415,29 +12420,42 @@ function gallery_setting_definitions() {
              'help' => 'Photos closer than this always share one numbered pin; on top of that, pins that would overlap on screen merge until you zoom in. 1 suits a city trip, 0 turns grouping off (every photo keeps its own pin). Folders can override it.'],
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
              'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
-            ['name' => 'INFO_CAMERA', 'type' => 'bool', 'label' => 'Info panel: camera',
-             'help' => 'The info panel in the viewer (a folder turns the panel on in its own settings) says which camera or phone took the photo: its make and model.'],
-            ['name' => 'INFO_TAKEN', 'type' => 'bool', 'label' => 'Info panel: date and time taken',
+            ['name' => 'INFO_PANEL', 'type' => 'bool', 'label' => 'Info panel',
+             'help' => 'Lets the viewer show an info panel with what a photo\'s own file says about it (camera, when it was taken, its size, position and more). Off: no folder is offered one. Turn it on, then switch it on in the folders that should have it (a folder\'s settings, under Metadata); the switches under Media information choose what it says.',
+             'risk' => 'A photo file can carry more than people expect. The switches below, and the location switches above, decide what visitors see.',
+             'offwarn' => 'No info panel is offered anywhere. Each folder\'s own choice is kept.'],
+            ['name' => 'INFO_CAMERA', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Camera',
+             'help' => 'Which camera or phone took the photo: its make and model.'],
+            ['name' => 'INFO_TAKEN', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Date and time taken',
              'help' => 'When the photo was taken, as the camera wrote it. The time zone is added only where that photo\'s location is allowed to show, because a time zone hints at the place.',
              'risk' => 'Dates can show when you were away.'],
-            ['name' => 'INFO_RESOLUTION', 'type' => 'bool', 'label' => 'Info panel: resolution',
+            ['name' => 'INFO_RESOLUTION', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Resolution',
              'help' => 'The size in pixels, with megapixels for a photo (12.2 MP (4032 × 3024)).'],
-            ['name' => 'INFO_FILE_SIZE', 'type' => 'bool', 'label' => 'Info panel: file size',
+            ['name' => 'INFO_FILE_SIZE', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'File size',
              'help' => 'How big the file is on disk.'],
-            ['name' => 'INFO_POSITION', 'type' => 'bool', 'label' => 'Info panel: position',
+            ['name' => 'INFO_POSITION', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Position',
              'help' => 'The photo\'s position, a link that opens it pinned on OpenStreetMap in a new tab. It shows only where the photo\'s location does (the gallery, folder and photo switches above, and for a share link its own setting).',
              'risk' => 'This is the same location the map shows: GPS can reveal where you live or have been.'],
-            ['name' => 'INFO_LENS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: lens', 'help' => 'The lens that was used.'],
-            ['name' => 'INFO_EXPOSURE', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: exposure settings', 'help' => 'Focal length, aperture, shutter speed, ISO and whether the flash fired.'],
-            ['name' => 'INFO_SOFTWARE', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: software', 'help' => 'The program or phone software that last saved the file.'],
-            ['name' => 'INFO_VIDEO', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: video details', 'help' => 'For a video (MP4 or MOV): its length, frame rate, video and audio kinds and bitrate. Other video files show only the switches above that apply.'],
-            ['name' => 'INFO_SERIALS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: serial numbers', 'help' => 'The serial numbers of the camera body and the lens, if the file has them.',
+            ['name' => 'INFO_LENS', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Lens',
+             'help' => 'The lens that was used.'],
+            ['name' => 'INFO_EXPOSURE', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Exposure settings',
+             'help' => 'Focal length, aperture, shutter speed, ISO and whether the flash fired.'],
+            ['name' => 'INFO_SOFTWARE', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Software',
+             'help' => 'The program or phone software that last saved the file.'],
+            ['name' => 'INFO_VIDEO', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Video details',
+             'help' => 'For a video (MP4 or MOV): its length, frame rate, video and audio kinds and bitrate. Other video files show only the switches above that apply.'],
+            ['name' => 'INFO_SERIALS', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Serial numbers',
+             'help' => 'The serial numbers of the camera body and the lens, if the file has them.',
              'risk' => 'A serial number identifies one particular camera, and so whoever owns it.'],
-            ['name' => 'INFO_OWNER', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: owner or artist name', 'help' => 'The name a camera or an editing program wrote into the file as its owner or artist.',
+            ['name' => 'INFO_OWNER', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Owner or artist name',
+             'help' => 'The name a camera or an editing program wrote into the file as its owner or artist.',
              'risk' => 'This is a person\'s name, written by a program you may not know about.'],
-            ['name' => 'INFO_COPYRIGHT', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: copyright', 'help' => 'The copyright text in the file.'],
-            ['name' => 'INFO_IMAGE_ID', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: image id', 'help' => 'The unique id some cameras give each picture.'],
-            ['name' => 'INFO_COMMENTS', 'type' => 'bool', 'more' => true, 'label' => 'Info panel: comments', 'help' => 'Free text kept inside the file: its description and any comment.',
+            ['name' => 'INFO_COPYRIGHT', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Copyright',
+             'help' => 'The copyright text in the file.'],
+            ['name' => 'INFO_IMAGE_ID', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Image id',
+             'help' => 'The unique id some cameras give each picture.'],
+            ['name' => 'INFO_COMMENTS', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Comments',
+             'help' => 'Free text kept inside the file: its description and any comment.',
              'risk' => 'This is whatever someone typed into the file, which can be personal.'],
         ]],
         ['title' => 'Sharing and access', 'items' => [
@@ -17321,9 +17339,10 @@ function health_checks($dir, $files) {
 
     // --- this install
     $rec = health_version_record($dir);
-    if ($rec === null) $add('This install', 'warn', 'Running ' . GALLERY_VERSION, 'The folder is not writable by the web server, so the version history can\'t be kept.');
-    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, (version_compare((string) $rec['from'], GALLERY_VERSION, '>') ? 'Went back from ' : 'Upgraded from ') . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
-    else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
+    $running = 'Running ' . GALLERY_VERSION . ' · build ' . substr((string) @hash_file('sha256', __FILE__), 0, 8);   // (the first characters of this file's checksum: two builds of one version are told apart by it, and it matches the release's index.php.sha256)
+    if ($rec === null) $add('This install', 'warn', $running, 'The folder is not writable by the web server, so the version history can\'t be kept.');
+    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', $running, (version_compare((string) $rec['from'], GALLERY_VERSION, '>') ? 'Went back from ' : 'Upgraded from ') . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
+    else $add('This install', 'ok', $running, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
     $add('This install', 'ok', 'New versions', '', null, update_status_html());
     $add('This install', PHP_VERSION_ID >= 80300 ? 'ok' : 'bad', 'PHP ' . PHP_VERSION, PHP_VERSION_ID >= 80300 ? '' : 'This gallery needs PHP 8.3 or newer.');
     $hasGd = extension_loaded('gd'); $hasImagick = class_exists('Imagick');
@@ -18475,6 +18494,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <?= $row('Subfolders', $onOff(AUTO_GROUP_BY_FOLDER), AUTO_GROUP_BY_FOLDER ? ($fx['AUTO_GROUP_BY_FOLDER']['on'] !== '' ? 'Showing your subfolders ' . (folder_style_flat() ? 'flat, all their photos on one page, folder by folder' . (FOLDER_FLAT_NAMES ? ', with their names' . (FOLDER_FLAT_NOTES ? ' and notes' : '') : '') : 'as cover cards') . '.' : 'No subfolders here yet.') : $fx['AUTO_GROUP_BY_FOLDER']['off'], $goSetting(AUTO_GROUP_BY_FOLDER ? 'Folder style →' : 'Turn on →', AUTO_GROUP_BY_FOLDER ? 'setting-FOLDER_DISPLAY_MODE' : 'setting-AUTO_GROUP_BY_FOLDER')) ?>
       <?= $row('Videos', $onOff(ENABLE_VIDEO), ENABLE_VIDEO ? 'Videos play in the viewer, sent as recorded.' : 'Shows .mov and .mp4 files. ' . $fx['ENABLE_VIDEO']['off'], $goSetting(ENABLE_VIDEO ? 'Settings →' : 'Turn on →', 'setting-ENABLE_VIDEO')) ?>
       <?= $row('Photo locations and maps', $onOff(ENABLE_PHOTO_LOCATION), ENABLE_PHOTO_LOCATION ? 'Each folder and photo can show its location, and each folder its own map.' : $fx['ENABLE_PHOTO_LOCATION']['off'], $goSetting(ENABLE_PHOTO_LOCATION ? 'Settings →' : 'Turn on →', 'setting-ENABLE_PHOTO_LOCATION')) ?>
+      <?= $row('Media metadata', $onOff(INFO_PANEL), INFO_PANEL ? 'Folders can offer an info panel in the viewer: what a photo\'s file says about it (camera, when it was taken, its size, position and more), as far as the Metadata switches allow.' : 'An info panel in the viewer with what a photo\'s own file says about it: camera, when it was taken, its size and more. Switch it on in Settings, then in each folder that should have it.', $goSetting(INFO_PANEL ? 'Settings →' : 'Turn on →', 'setting-INFO_PANEL')) ?>
       <?= $row('Share links', $onOff(ENABLE_SHARE_LINKS), ENABLE_SHARE_LINKS ? ($links > 0 ? $links . ' link' . ($links === 1 ? '' : 's') . ' made.' : 'None made yet: press Share on a private folder, or press Select, tick photos and press Share….') : 'Temporary links that let someone see private photos, with a log of what they looked at.', $goSetting(ENABLE_SHARE_LINKS ? 'Settings →' : 'Turn on →', 'setting-ENABLE_SHARE_LINKS')) ?>
       <?php if (gallery_is_closed()): ?>
       <?= $row('Visitor downloads', $chip('opt', 'Per link'), 'The gallery is closed, so strangers see nothing to download. Each share link has its own choice of whether its visitors may download.', '<button type="button" class="secondary" onclick="return adminGoTo(\'links\');">→ Shares</button>') ?>
@@ -18590,7 +18610,7 @@ function render_admin_site_settings($csrfToken) {
             if ($hidAll): $nHid = gallery_is_closed() ? count($hidAll) : 0; ?><span class="site-hid" data-hid-group<?= $nHid ? '' : ' hidden' ?> title="<?= $esc(implode(' ', array_map(function ($i) { return $i['label'] . ': ' . ($i['hidden_why'] ?? 'Not needed with the current settings.'); }, $hidAll))) ?>"> (<span data-hid-n><?= $nHid ?></span> hidden)</span><?php endif; ?></span></summary>
           <?php if ($group['title'] === 'Signing in and passwords'): render_admin_password_rows($fromFile); endif; ?>
           <?php $moreOpen = false; foreach ($group['items'] as $d): if (!empty($d['in'])) continue;
-            if (!empty($d['more']) && !$moreOpen) { $moreOpen = true; echo '<details class="site-more"><summary>More media information <span class="muted">(all off to start with)</span></summary>'; }
+            if (!empty($d['more']) && !$moreOpen) { $moreOpen = true; echo '<details class="site-more" id="setting-INFO_FIELDS"><summary>Media information</summary>'; }
             elseif (empty($d['more']) && $moreOpen) { $moreOpen = false; echo '</details>'; }
             $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
             if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
@@ -18604,7 +18624,8 @@ function render_admin_site_settings($csrfToken) {
             <?php $reqOn = $settingOn($d);
               $swOk = true;   // (a row that only matters for one choice of another setting, such as the Flat switches under Folder style, is shown only then)
               if (!empty($d['shown_when'])) { [$swName, $swWant] = explode('=', $d['shown_when'], 2); $swNow = $swName === 'FOLDER_DISPLAY_MODE' ? (in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true) ? 'flat' : 'overview') : (string) (defined($swName) ? constant($swName) : ''); $swOk = $swNow === $swWant; } ?>
-            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' . ($settingDepth($d) >= 2 ? ' depth-2' : '') : '' ?>" id="setting-<?= $esc($name) ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn && $swOk ? '' : ' hidden') : '' ?><?= !empty($d['shown_when']) ? ' data-shown-when="' . $esc($d['shown_when']) . '"' . (empty($d['requires']) && !$swOk ? ' hidden' : '') : '' ?><?= !empty($d['hidden_when']) ? ' data-hidden-when="set_' . $esc($d['hidden_when']) . '"' . (gallery_is_closed() ? ' hidden' : '') : '' ?>>
+            <?php $dimmed = !empty($d['dim_when']) && defined($d['dim_when']) && !constant($d['dim_when']); ?>
+            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' . ($settingDepth($d) >= 2 ? ' depth-2' : '') : '' ?><?= $dimmed ? ' site-dim' : '' ?>" id="setting-<?= $esc($name) ?>"<?= !empty($d['dim_when']) ? ' data-dim-when="set_' . $esc($d['dim_when']) . '"' : '' ?><?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn && $swOk ? '' : ' hidden') : '' ?><?= !empty($d['shown_when']) ? ' data-shown-when="' . $esc($d['shown_when']) . '"' . (empty($d['requires']) && !$swOk ? ' hidden' : '') : '' ?><?= !empty($d['hidden_when']) ? ' data-hidden-when="set_' . $esc($d['hidden_when']) . '"' . (gallery_is_closed() ? ' hidden' : '') : '' ?>>
               <div>
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if ($showDefault): ?><span class="src<?= $isDef ? ' is-default' : '' ?>" data-default="<?= $esc($defKey) ?>" title="This value is not the default, so it is kept in .gallery-config.php">your setting &middot; default: <?= $esc($defText) ?></span>
@@ -18636,8 +18657,8 @@ function render_admin_site_settings($csrfToken) {
               </div>
               <div class="ctl">
                 <?php if ($d['type'] === 'bool'): ?>
-                  <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
-                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?><?= ($name === 'LOG_PUBLIC_VISITS' && !$now && !visitlog_check_quiet()[0]) ? ' disabled' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                  <?php if (!$dimmed): ?><input type="hidden" name="set_<?= $esc($name) ?>" value="0"><?php endif; ?>   <?php /* (a greyed-out row sends nothing when the whole form is saved: its hidden "off" would otherwise switch the defaults off) */ ?>
+                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?><?= $dimmed ? ' disabled' : '' ?><?= ($name === 'LOG_PUBLIC_VISITS' && !$now && !visitlog_check_quiet()[0]) ? ' disabled' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'sortfirst'): $sfNames = sort_priority_names(); $sfOrder = sort_priority_list(); $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = (bool) constant($nm[2]); $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; }))); ?>
                   <div class="sortfirst" data-name="set_<?= $esc($name) ?>" data-order="<?= $esc(implode(',', $sfOrder)) ?>">
                     <ol class="sf-list">
@@ -20774,11 +20795,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .char-count.near { opacity: 1; color: #b7791f; }
   .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }
 
-  /* "More media information": the switches that start off, folded away inside the group. */
-  .site-more { margin:6px 0 10px; border-top:1px dashed #34343a; border-bottom:1px dashed #34343a; padding:0; }   /* (no inset at the sides: the switches inside line up with every other switch in Settings) */
+  /* "Media information": the field switches of the info panel, folded under the main Info panel switch and indented under it. */
+  .site-more { margin:2px 0 10px 22px; padding:0; }
   .site-more > summary { cursor:pointer; padding:9px 0; color:var(--text); }
-  .site-more > summary .muted { font-weight:400; }
+  .site-dim { opacity:.5; }   /* (the main Info panel switch is off: the field switches can be looked at but not changed) */
+  .site-dim .switch { cursor:not-allowed; }
   .flag-source { margin:-2px 0 10px; }
+  .info-under.no-info .instant-row, .info-under.no-info .flag-source, .info-under.no-info .hint { opacity:.55; }   /* (the info panel is off for the whole gallery: the folder's choice can still be made, but nothing shows yet) */
+  .info-under { margin:2px 0 18px; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -21071,7 +21095,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
     e.scrollIntoView({ behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'), block: 'start' });
     e.classList.add('flash-target');
-    setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
+    var also = id === 'setting-INFO_PANEL' ? document.getElementById('setting-INFO_FIELDS') : null;   // (the info panel's main switch is marked together with the list of fields under it)
+    if (also) also.classList.add('flash-target');
+    setTimeout(function () { e.classList.remove('flash-target'); if (also) also.classList.remove('flash-target'); }, 2500);
   }
   // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it. Inside the admin shell the shell
   // opens it (so its header, its folder buttons and its sidebar say where you are); on its own page the tab is switched here.
@@ -23570,6 +23596,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
       document.addEventListener('click', function (e) { if (open && !open.contains(e.target)) close(open); });
     })();
+    // Rows that can be looked at but not changed while another switch is off (the info panel's field switches under the main Info panel switch) follow that switch.
+    function syncDim() {
+      [].forEach.call(form.querySelectorAll('.site-row[data-dim-when]'), function (r) {
+        var m = form.querySelector('input[type=checkbox][name="' + r.getAttribute('data-dim-when') + '"]'), off = !!m && !m.checked;
+        r.classList.toggle('site-dim', off);
+        [].forEach.call(r.querySelectorAll('input'), function (x) { x.disabled = off; });   // (the hidden "off" too: a row that cannot be changed sends nothing when the form is saved)
+      });
+    }
+    form.addEventListener('change', function (e) { if (e.target && e.target.name === 'set_INFO_PANEL') syncDim(); });
     // Rows that only matter for one choice of another setting (the Flat switches under Folder style) follow that choice.
     function syncShown() {
       [].forEach.call(form.querySelectorAll('.site-row[data-shown-when]'), function (r) {
@@ -29263,8 +29298,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
-  <aside class="info-panel" id="info-panel" aria-label="Photo information" tabindex="-1" hidden>
-    <div class="ip-head"><h3 class="ip-title">Photo info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the photo information"><?= ui_icon('close') ?></button></div>
+  <aside class="info-panel" id="info-panel" aria-label="Media information" tabindex="-1" hidden>
+    <div class="ip-head"><h3 class="ip-title">Media info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the media information"><?= ui_icon('close') ?></button></div>
     <div class="ip-body" id="info-body" aria-live="polite"></div>
   </aside>
   <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
@@ -29279,7 +29314,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
     <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
-    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Photo info" aria-label="Photo info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
+    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Media info" aria-label="Media info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -31663,7 +31698,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     fetch('?photoinfo=' + encodeURIComponent(file), { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) { if (my !== infoState.token || !infoState.open) return; if (j && j.ok) infoDraw(j.rows || []); else infoSay('Nothing to show for this photo.'); infoFit(); })
-      .catch(function () { if (my !== infoState.token || !infoState.open) return; infoSay('Could not load the photo information.'); infoFit(); });
+      .catch(function () { if (my !== infoState.token || !infoState.open) return; infoSay('Could not load the media information.'); infoFit(); });
   }
   function infoSet(on, fromKey) {
     if (on && !infoAvailable()) return;

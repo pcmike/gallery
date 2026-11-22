@@ -47,7 +47,9 @@
     for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
     e.scrollIntoView({ behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'), block: 'start' });
     e.classList.add('flash-target');
-    setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
+    var also = id === 'setting-INFO_PANEL' ? document.getElementById('setting-INFO_FIELDS') : null;   // (the info panel's main switch is marked together with the list of fields under it)
+    if (also) also.classList.add('flash-target');
+    setTimeout(function () { e.classList.remove('flash-target'); if (also) also.classList.remove('flash-target'); }, 2500);
   }
   // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it. Inside the admin shell the shell
   // opens it (so its header, its folder buttons and its sidebar say where you are); on its own page the tab is switched here.
@@ -2546,6 +2548,15 @@
       });
       document.addEventListener('click', function (e) { if (open && !open.contains(e.target)) close(open); });
     })();
+    // Rows that can be looked at but not changed while another switch is off (the info panel's field switches under the main Info panel switch) follow that switch.
+    function syncDim() {
+      [].forEach.call(form.querySelectorAll('.site-row[data-dim-when]'), function (r) {
+        var m = form.querySelector('input[type=checkbox][name="' + r.getAttribute('data-dim-when') + '"]'), off = !!m && !m.checked;
+        r.classList.toggle('site-dim', off);
+        [].forEach.call(r.querySelectorAll('input'), function (x) { x.disabled = off; });   // (the hidden "off" too: a row that cannot be changed sends nothing when the form is saved)
+      });
+    }
+    form.addEventListener('change', function (e) { if (e.target && e.target.name === 'set_INFO_PANEL') syncDim(); });
     // Rows that only matter for one choice of another setting (the Flat switches under Folder style) follow that choice.
     function syncShown() {
       [].forEach.call(form.querySelectorAll('.site-row[data-shown-when]'), function (r) {

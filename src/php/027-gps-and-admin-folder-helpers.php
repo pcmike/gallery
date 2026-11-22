@@ -1181,7 +1181,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $data['mediaInfo'] = $choice === 'inherit' ? null : !empty($choice);
         });
         if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
-        return ['type' => 'ok', 'text' => empty($choice) ? 'Photo info is off for this folder (and the folders under it that have not chosen).' : 'Photo info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: every field is switched off in Settings, under Locations and media information.')];
+        return ['type' => 'ok', 'text' => empty($choice) ? 'Media info is off for this folder (and the folders under it that have not chosen).' : 'Media info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: the info panel is switched off, or every field is, in Settings, under Metadata.')];
     }
 
     if ($action === 'toggle_location_enabled') {

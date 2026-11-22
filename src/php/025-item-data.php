@@ -24,7 +24,7 @@ function items_path($folderPath) {
  *  from EXIF, since that would publish when the owner was away) and
  *  sortOrder (an explicit position among sibling folders).
  *  locationEnabled is this folder's own
- *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show photo info" switch: true, false, or null when it
+ *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show media info" switch: true, false, or null when it
  *  has made no choice and takes the one from the folder above it (see folder_flag_resolve). */
 function items_default() {
     return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];

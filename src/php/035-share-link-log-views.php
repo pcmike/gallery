@@ -845,9 +845,10 @@ function health_checks($dir, $files) {
 
     // --- this install
     $rec = health_version_record($dir);
-    if ($rec === null) $add('This install', 'warn', 'Running ' . GALLERY_VERSION, 'The folder is not writable by the web server, so the version history can\'t be kept.');
-    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, (version_compare((string) $rec['from'], GALLERY_VERSION, '>') ? 'Went back from ' : 'Upgraded from ') . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
-    else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
+    $running = 'Running ' . GALLERY_VERSION . ' · build ' . substr((string) @hash_file('sha256', __FILE__), 0, 8);   // (the first characters of this file's checksum: two builds of one version are told apart by it, and it matches the release's index.php.sha256)
+    if ($rec === null) $add('This install', 'warn', $running, 'The folder is not writable by the web server, so the version history can\'t be kept.');
+    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', $running, (version_compare((string) $rec['from'], GALLERY_VERSION, '>') ? 'Went back from ' : 'Upgraded from ') . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
+    else $add('This install', 'ok', $running, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
     $add('This install', 'ok', 'New versions', '', null, update_status_html());
     $add('This install', PHP_VERSION_ID >= 80300 ? 'ok' : 'bad', 'PHP ' . PHP_VERSION, PHP_VERSION_ID >= 80300 ? '' : 'This gallery needs PHP 8.3 or newer.');
     $hasGd = extension_loaded('gd'); $hasImagick = class_exists('Imagick');

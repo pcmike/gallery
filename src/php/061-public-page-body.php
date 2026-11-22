@@ -532,8 +532,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
-  <aside class="info-panel" id="info-panel" aria-label="Photo information" tabindex="-1" hidden>
-    <div class="ip-head"><h3 class="ip-title">Photo info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the photo information"><?= ui_icon('close') ?></button></div>
+  <aside class="info-panel" id="info-panel" aria-label="Media information" tabindex="-1" hidden>
+    <div class="ip-head"><h3 class="ip-title">Media info</h3><button type="button" class="ip-x" id="info-close" title="Close" aria-label="Close the media information"><?= ui_icon('close') ?></button></div>
     <div class="ip-body" id="info-body" aria-live="polite"></div>
   </aside>
   <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
@@ -548,7 +548,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
     <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
-    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Photo info" aria-label="Photo info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
+    <button class="lightbox-copy lightbox-info" id="lightbox-info" type="button" title="Media info" aria-label="Media info" aria-pressed="false" hidden><?= ui_icon('info') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>

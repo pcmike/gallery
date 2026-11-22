@@ -45,7 +45,7 @@
     fetch('?photoinfo=' + encodeURIComponent(file), { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) { if (my !== infoState.token || !infoState.open) return; if (j && j.ok) infoDraw(j.rows || []); else infoSay('Nothing to show for this photo.'); infoFit(); })
-      .catch(function () { if (my !== infoState.token || !infoState.open) return; infoSay('Could not load the photo information.'); infoFit(); });
+      .catch(function () { if (my !== infoState.token || !infoState.open) return; infoSay('Could not load the media information.'); infoFit(); });
   }
   function infoSet(on, fromKey) {
     if (on && !infoAvailable()) return;
