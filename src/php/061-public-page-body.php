@@ -373,7 +373,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 ?>
   <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
         // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
-  <div class="map-preview map-bar<?= $fewCovers ?>" id="map-bar">
+  <div class="map-preview map-bar<?= $fewCovers ?><?= is_admin_browser() ? ' is-owner' : '' ?>" id="map-bar">
     <div class="map-preview-heading">
       <?php if ($hasMap): ?>
       <span class="map-combo">
@@ -385,7 +385,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <span class="map-combo sort-combo" id="sort-combo" data-spec="<?= htmlspecialchars(media_sort_encode($sortSpec), ENT_QUOTES, 'UTF-8') ?>" data-path="<?= htmlspecialchars($sortCookiePath, ENT_QUOTES, 'UTF-8') ?>">
         <button type="button" class="map-combo-btn" id="sort-menu-btn" title="Order of the photos" aria-haspopup="true" aria-expanded="false" aria-controls="sort-pop"><?= ui_icon('sort') ?><span class="map-toggle-label">Order of the photos</span></button>
         <?php if ($sortHasPrivate): ?><button type="button" class="map-combo-btn sort-flag" data-flag="private" title="Private items first" aria-pressed="false"><?= ui_icon('lock') ?><span class="map-toggle-label">Private items first</span></button><?php endif; ?>
-        <?php if ($sortHasVideo): ?><button type="button" class="map-combo-btn sort-flag" data-flag="video" title="Videos first" aria-pressed="false"><?= ui_icon('play') ?><span class="map-toggle-label">Videos first</span></button><?php endif; ?>
+        <?php if ($sortHasVideo): ?><button type="button" class="map-combo-btn sort-flag" data-flag="video" title="Videos first" aria-pressed="false"><?= ui_icon('video') ?><span class="map-toggle-label">Videos first</span></button><?php endif; ?>
         <?php if ($sortHasLocated): ?><button type="button" class="map-combo-btn sort-flag" data-flag="located" title="Photos with a location first" aria-pressed="false"><?= ui_icon('pin') ?><span class="map-toggle-label">Photos with a location first</span></button><?php endif; ?>
       </span>
       <div class="sort-pop" id="sort-pop" hidden role="dialog" aria-label="Order of the photos">
@@ -395,17 +395,20 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <button type="button" class="sort-reset">Use this gallery's order</button>
       </div>
       <?php endif; ?>
-      <?php if ($selectShown): ?>
-      <span class="map-combo select-combo"><button type="button" class="map-combo-btn" id="select-btn" title="Select <?= media_word() ?>" aria-pressed="false"><?= ui_icon('select') ?><span class="map-toggle-label">Select <?= media_word() ?></span></button></span>
-      <?php endif; ?>
       <span class="page-tools">
+        <?php if ($selectShown): ?>
+        <span class="map-combo select-combo"><button type="button" class="map-combo-btn" id="select-btn" title="Select <?= media_word() ?>" aria-pressed="false"><?= ui_icon('select') ?><span class="map-toggle-label">Select <?= media_word() ?></span></button></span>
+        <?php endif; ?>
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
         <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>
         <?php if (ENABLE_SHARE_LINKS && is_admin_browser() && $currentFolderPath !== null && folder_is_private($dir, $currentFolderPath)): ?>
         <span class="map-combo"><button type="button" class="map-combo-btn page-share" data-gs-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-gs-label="<?= htmlspecialchars(link_folder_label($dir, $currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" title="Share this folder…" aria-label="Share this folder…"><?= ui_icon('share') ?></button></span>
         <?php endif; ?>
-        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
+        <?php if (count($sortScope) >= 2): ?>
+        <span class="map-combo slide-combo"><button type="button" class="map-combo-btn" id="slideshow-start" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button></span>
+        <?php endif; ?>
+        <span class="map-combo page-about-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
   </div>
@@ -520,10 +523,17 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
+  <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
+    <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
+    <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
+    <button type="button" class="ss-btn" id="ss-shuffle" title="Shuffle" aria-label="Shuffle" aria-pressed="false"><?= ui_icon('shuffle') ?></button>
+    <button type="button" class="ss-btn" id="ss-stop" title="Stop the slideshow" aria-label="Stop the slideshow"><?= ui_icon('stop') ?></button>
+  </div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
+    <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -594,6 +604,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
   const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
+  const slideScope = <?= js_json(array_map('photo_ref', $sortScope)) ?>;   // (the photos this page shows as its own: where its Play button starts)
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.

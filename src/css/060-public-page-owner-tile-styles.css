@@ -201,6 +201,21 @@
     opacity: 0.75;
   }
   .lightbox-copy:hover { opacity: 1; }
+  /* Slideshow: a small pill of controls at the top while it plays (big enough for a finger, and for a car's screen); it fades after a few
+     seconds without a touch or a mouse move and comes back with the next one. */
+  .ss-bar { position: fixed; top: 12px; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 8px; padding: 6px; background: rgba(18,18,22,0.88); border: 1px solid rgba(255,255,255,0.16); border-radius: 16px; box-shadow: 0 8px 28px rgba(0,0,0,0.5); transition: opacity .45s; }
+  .ss-bar[hidden] { display: none; }
+  .ss-bar.idle { opacity: 0; pointer-events: none; }
+  .ss-btn { min-width: 50px; height: 50px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.09); border: 0; border-radius: 11px; color: #f2f2f6; font: inherit; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .ss-btn:hover { background: rgba(255,255,255,0.18); }
+  .ss-btn:focus-visible { outline: 2px solid var(--accent, #aab2ff); outline-offset: 2px; }
+  .ss-btn[aria-pressed="true"] { background: var(--accent, #5865f2); color: #fff; }
+  .ss-btn .ico { width: 26px; height: 26px; vertical-align: 0; }
+  .ss-bar.paused { box-shadow: 0 0 0 2px var(--accent, #aab2ff), 0 8px 28px rgba(0,0,0,0.5); }
+  .lightbox.ss-on img { cursor: pointer; }
+  .lightbox.ss-on .lightbox-zoom { display: none; }
+  @media (max-height: 500px) { .ss-btn { min-width: 44px; height: 44px; padding: 0 12px; } .ss-btn .ico { width: 24px; height: 24px; } .ss-bar { top: auto; bottom: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); } }   /* (a phone turned on its side: the photo takes the whole height, so the controls are a smaller pill along the bottom, clear of the strip of buttons at the top) */
+  @media (max-width: 600px) { .ss-btn { min-width: 46px; height: 46px; padding: 0 11px; } .ss-bar { gap: 6px; top: auto; bottom: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); } }   /* (on a phone the top is the viewer's own strip of buttons: the controls go to the bottom) */
   /* Zoom: the photo is shown to fit the screen; one press fills the width of the window (scroll up and down, never
      distorted, from the original file), another shows it at its real pixel size (scroll both ways). */
   .lightbox img { cursor: zoom-in; }
@@ -336,6 +351,16 @@
     .map-combo { flex: 0 1 auto; min-width: 0; }
     .map-combo-btn { width: 36px; flex: 0 1 36px; min-width: 28px; }
     .page-tools { gap: 4px; min-width: 0; flex: 0 1 auto; }
+    /* The icons at the right (Select and download for the signed-in owner, the slideshow, and the About icon for everyone else) keep their size
+       whatever the width: on a narrow phone it is the map and sort groups at the left that give way. The owner's are one joined group, with the
+       About icon's place taken by the slideshow icon; the gap before the group is a little wider than the one between the groups at the left. */
+    .map-bar.is-owner .page-about-combo { display: none; }
+    .page-tools, .page-tools .map-combo { flex: none; }
+    .page-tools .map-combo-btn { flex: none; width: 36px; min-width: 36px; }
+    .map-bar.is-owner .page-tools { gap: 0; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; background: var(--card); }
+    .map-bar.is-owner .page-tools .map-combo { border: 0; border-radius: 0; background: none; }
+    .map-bar.is-owner .page-tools .map-combo + .map-combo { border-left: 1px solid #2c2c30; }
+    .sort-combo:has(~ .page-tools), .map-preview-heading > .map-combo:has(+ .page-tools) { margin-right: 2px; }   /* (the sort menu's pop-up sits between the sort group and the icons, so one rule is for the sort group, one for the map group when there is none) */
   }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
@@ -457,7 +482,7 @@
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom { display: none; }
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }

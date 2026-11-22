@@ -26298,6 +26298,9 @@ function ui_icon_paths() {
         'refresh' => '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
         'warn'    => '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>',
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
+        'video'   => '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M8 5v14M16 5v14M3.5 9.5H8M3.5 14.5H8M16 9.5h4.5M16 14.5h4.5"/>',
+        'stop'    => '<rect x="6.5" y="6.5" width="11" height="11" rx="1.8"/>',
+        'shuffle' => '<path d="M16 3.5h4.5V8M4 20.5 20.5 4M20.5 16v4.5H16M15 15l5.5 5.5M4 4l5 5"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
         'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
         'zoom-in' => '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2M11 8.5v5M8.5 11h5"/>',
@@ -27872,6 +27875,21 @@ send_viewer_aware_cache_headers();
     opacity: 0.75;
   }
   .lightbox-copy:hover { opacity: 1; }
+  /* Slideshow: a small pill of controls at the top while it plays (big enough for a finger, and for a car's screen); it fades after a few
+     seconds without a touch or a mouse move and comes back with the next one. */
+  .ss-bar { position: fixed; top: 12px; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 8px; padding: 6px; background: rgba(18,18,22,0.88); border: 1px solid rgba(255,255,255,0.16); border-radius: 16px; box-shadow: 0 8px 28px rgba(0,0,0,0.5); transition: opacity .45s; }
+  .ss-bar[hidden] { display: none; }
+  .ss-bar.idle { opacity: 0; pointer-events: none; }
+  .ss-btn { min-width: 50px; height: 50px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.09); border: 0; border-radius: 11px; color: #f2f2f6; font: inherit; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  .ss-btn:hover { background: rgba(255,255,255,0.18); }
+  .ss-btn:focus-visible { outline: 2px solid var(--accent, #aab2ff); outline-offset: 2px; }
+  .ss-btn[aria-pressed="true"] { background: var(--accent, #5865f2); color: #fff; }
+  .ss-btn .ico { width: 26px; height: 26px; vertical-align: 0; }
+  .ss-bar.paused { box-shadow: 0 0 0 2px var(--accent, #aab2ff), 0 8px 28px rgba(0,0,0,0.5); }
+  .lightbox.ss-on img { cursor: pointer; }
+  .lightbox.ss-on .lightbox-zoom { display: none; }
+  @media (max-height: 500px) { .ss-btn { min-width: 44px; height: 44px; padding: 0 12px; } .ss-btn .ico { width: 24px; height: 24px; } .ss-bar { top: auto; bottom: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); } }   /* (a phone turned on its side: the photo takes the whole height, so the controls are a smaller pill along the bottom, clear of the strip of buttons at the top) */
+  @media (max-width: 600px) { .ss-btn { min-width: 46px; height: 46px; padding: 0 11px; } .ss-bar { gap: 6px; top: auto; bottom: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); } }   /* (on a phone the top is the viewer's own strip of buttons: the controls go to the bottom) */
   /* Zoom: the photo is shown to fit the screen; one press fills the width of the window (scroll up and down, never
      distorted, from the original file), another shows it at its real pixel size (scroll both ways). */
   .lightbox img { cursor: zoom-in; }
@@ -28007,6 +28025,16 @@ send_viewer_aware_cache_headers();
     .map-combo { flex: 0 1 auto; min-width: 0; }
     .map-combo-btn { width: 36px; flex: 0 1 36px; min-width: 28px; }
     .page-tools { gap: 4px; min-width: 0; flex: 0 1 auto; }
+    /* The icons at the right (Select and download for the signed-in owner, the slideshow, and the About icon for everyone else) keep their size
+       whatever the width: on a narrow phone it is the map and sort groups at the left that give way. The owner's are one joined group, with the
+       About icon's place taken by the slideshow icon; the gap before the group is a little wider than the one between the groups at the left. */
+    .map-bar.is-owner .page-about-combo { display: none; }
+    .page-tools, .page-tools .map-combo { flex: none; }
+    .page-tools .map-combo-btn { flex: none; width: 36px; min-width: 36px; }
+    .map-bar.is-owner .page-tools { gap: 0; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; background: var(--card); }
+    .map-bar.is-owner .page-tools .map-combo { border: 0; border-radius: 0; background: none; }
+    .map-bar.is-owner .page-tools .map-combo + .map-combo { border-left: 1px solid #2c2c30; }
+    .sort-combo:has(~ .page-tools), .map-preview-heading > .map-combo:has(+ .page-tools) { margin-right: 2px; }   /* (the sort menu's pop-up sits between the sort group and the icons, so one rule is for the sort group, one for the map group when there is none) */
   }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
@@ -28128,7 +28156,7 @@ send_viewer_aware_cache_headers();
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom { display: none; }
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-play, .lightbox.ss-on .lightbox-zoom { display: none; }   /* (a slideshow does not zoom; here, after the phone rules, so it wins over them) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
@@ -28539,7 +28567,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 ?>
   <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
         // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
-  <div class="map-preview map-bar<?= $fewCovers ?>" id="map-bar">
+  <div class="map-preview map-bar<?= $fewCovers ?><?= is_admin_browser() ? ' is-owner' : '' ?>" id="map-bar">
     <div class="map-preview-heading">
       <?php if ($hasMap): ?>
       <span class="map-combo">
@@ -28551,7 +28579,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <span class="map-combo sort-combo" id="sort-combo" data-spec="<?= htmlspecialchars(media_sort_encode($sortSpec), ENT_QUOTES, 'UTF-8') ?>" data-path="<?= htmlspecialchars($sortCookiePath, ENT_QUOTES, 'UTF-8') ?>">
         <button type="button" class="map-combo-btn" id="sort-menu-btn" title="Order of the photos" aria-haspopup="true" aria-expanded="false" aria-controls="sort-pop"><?= ui_icon('sort') ?><span class="map-toggle-label">Order of the photos</span></button>
         <?php if ($sortHasPrivate): ?><button type="button" class="map-combo-btn sort-flag" data-flag="private" title="Private items first" aria-pressed="false"><?= ui_icon('lock') ?><span class="map-toggle-label">Private items first</span></button><?php endif; ?>
-        <?php if ($sortHasVideo): ?><button type="button" class="map-combo-btn sort-flag" data-flag="video" title="Videos first" aria-pressed="false"><?= ui_icon('play') ?><span class="map-toggle-label">Videos first</span></button><?php endif; ?>
+        <?php if ($sortHasVideo): ?><button type="button" class="map-combo-btn sort-flag" data-flag="video" title="Videos first" aria-pressed="false"><?= ui_icon('video') ?><span class="map-toggle-label">Videos first</span></button><?php endif; ?>
         <?php if ($sortHasLocated): ?><button type="button" class="map-combo-btn sort-flag" data-flag="located" title="Photos with a location first" aria-pressed="false"><?= ui_icon('pin') ?><span class="map-toggle-label">Photos with a location first</span></button><?php endif; ?>
       </span>
       <div class="sort-pop" id="sort-pop" hidden role="dialog" aria-label="Order of the photos">
@@ -28561,17 +28589,20 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <button type="button" class="sort-reset">Use this gallery's order</button>
       </div>
       <?php endif; ?>
-      <?php if ($selectShown): ?>
-      <span class="map-combo select-combo"><button type="button" class="map-combo-btn" id="select-btn" title="Select <?= media_word() ?>" aria-pressed="false"><?= ui_icon('select') ?><span class="map-toggle-label">Select <?= media_word() ?></span></button></span>
-      <?php endif; ?>
       <span class="page-tools">
+        <?php if ($selectShown): ?>
+        <span class="map-combo select-combo"><button type="button" class="map-combo-btn" id="select-btn" title="Select <?= media_word() ?>" aria-pressed="false"><?= ui_icon('select') ?><span class="map-toggle-label">Select <?= media_word() ?></span></button></span>
+        <?php endif; ?>
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
         <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>
         <?php if (ENABLE_SHARE_LINKS && is_admin_browser() && $currentFolderPath !== null && folder_is_private($dir, $currentFolderPath)): ?>
         <span class="map-combo"><button type="button" class="map-combo-btn page-share" data-gs-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-gs-label="<?= htmlspecialchars(link_folder_label($dir, $currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" title="Share this folder…" aria-label="Share this folder…"><?= ui_icon('share') ?></button></span>
         <?php endif; ?>
-        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
+        <?php if (count($sortScope) >= 2): ?>
+        <span class="map-combo slide-combo"><button type="button" class="map-combo-btn" id="slideshow-start" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button></span>
+        <?php endif; ?>
+        <span class="map-combo page-about-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
   </div>
@@ -28686,10 +28717,17 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </div>
 <?php endif; ?>
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
+  <div class="ss-bar" id="lightbox-ss" role="group" aria-label="Slideshow" hidden>
+    <button type="button" class="ss-btn" id="ss-play" title="Pause the slideshow" aria-label="Pause the slideshow"><?= ui_icon('pause') ?></button>
+    <button type="button" class="ss-btn ss-speed" id="ss-speed" title="How long each photo stays" aria-label="How long each photo stays: 5 seconds">5 s</button>
+    <button type="button" class="ss-btn" id="ss-shuffle" title="Shuffle" aria-label="Shuffle" aria-pressed="false"><?= ui_icon('shuffle') ?></button>
+    <button type="button" class="ss-btn" id="ss-stop" title="Stop the slideshow" aria-label="Stop the slideshow"><?= ui_icon('stop') ?></button>
+  </div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
+    <button class="lightbox-copy lightbox-play" id="lightbox-play" type="button" title="Play a slideshow" aria-label="Play a slideshow"><?= ui_icon('play') ?></button>
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -28760,6 +28798,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
   const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
+  const slideScope = <?= js_json(array_map('photo_ref', $sortScope)) ?>;   // (the photos this page shows as its own: where its Play button starts)
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
@@ -28968,6 +29007,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     try { lightbox.focus({ preventScroll: true }); } catch (x) {}
   }
   function closeLightbox() {
+    if (window.__ssStop) window.__ssStop();   // (a slideshow ends with the viewer)
     const back = lbReturnTo; lbReturnTo = null;
     if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
@@ -30044,6 +30084,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     toolsFade();
     if (typeof ownerPaint === 'function') ownerPaint();
     if (lbEdit && lbEdit.isOpen()) lbEdit.load();
+    if (window.__ssShown) window.__ssShown();   // (the slideshow, when one is playing, starts its wait for this photo)
     trackView(file);
     if (window.__linkLog) window.__linkLog('o', file);
   }
@@ -30806,6 +30847,200 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   window.addEventListener('focus', check);
   window.addEventListener('pageshow', function (e) { if (e.persisted) check(); });
 })();
+  // ---- Slideshow: Play in the viewer (or on the page) and the photos keep coming, in the folder's order, round and round (or shuffled).
+  // A photo stays for the chosen time once it has loaded; a video plays to its end, then the next comes. The viewer's own state
+  // (updateImage, closeLightbox) calls the two hooks at the bottom; nothing else here changes how the viewer works.
+  const ssBar = document.getElementById('lightbox-ss');
+  const ssPlayBtn = document.getElementById('lightbox-play');
+  const ssPageBtn = document.getElementById('slideshow-start');
+  const ssToggleBtn = document.getElementById('ss-play');
+  const ssSpeedBtn = document.getElementById('ss-speed');
+  const ssShuffleBtn = document.getElementById('ss-shuffle');
+  const ssStopBtn = document.getElementById('ss-stop');
+  const ssTools = document.getElementById('lightbox-tools');
+  const SS_SPEEDS = [3, 5, 8, 12, 20];
+  const ss = { on: false, paused: false, shuffle: false, seconds: 5, timer: 0, idle: 0, token: 0, order: null, cancel: null, pre: null, fs: false, wake: null, muted: false };
+  try { const saved = parseInt(localStorage.getItem('gallerySlideSeconds'), 10); if (SS_SPEEDS.indexOf(saved) >= 0) ss.seconds = saved; } catch (x) {}
+
+  function ssIcon(btn, name) { if (btn) btn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>'; }
+  function ssPaint() {
+    const running = ss.on && !ss.paused;
+    ssIcon(ssToggleBtn, running ? 'pause' : 'play');
+    if (ssToggleBtn) { ssToggleBtn.title = running ? 'Pause the slideshow' : 'Carry on with the slideshow'; ssToggleBtn.setAttribute('aria-label', ssToggleBtn.title); }
+    ssIcon(ssPlayBtn, running ? 'pause' : 'play');
+    if (ssPlayBtn) { ssPlayBtn.title = !ss.on ? 'Play a slideshow' : (running ? 'Pause the slideshow' : 'Carry on with the slideshow'); ssPlayBtn.setAttribute('aria-label', ssPlayBtn.title); }
+    if (ssSpeedBtn) { ssSpeedBtn.textContent = ss.seconds + ' s'; ssSpeedBtn.setAttribute('aria-label', 'How long each photo stays: ' + ss.seconds + ' seconds'); }
+    if (ssShuffleBtn) { ssShuffleBtn.setAttribute('aria-pressed', ss.shuffle ? 'true' : 'false'); ssShuffleBtn.title = ss.shuffle ? 'Shuffled: back to the folder\'s order' : 'Shuffle'; }
+    if (ssBar) ssBar.classList.toggle('paused', ss.on && ss.paused);
+    // The viewer's strip of buttons has just changed (Play became Pause, the zoom button went or came back): once the layout has settled,
+    // look again at whether the "more this way" arrow is needed, so a moment half-way through the change cannot leave it showing.
+    if (typeof toolsFade === 'function' && typeof requestAnimationFrame === 'function') { requestAnimationFrame(toolsFade); setTimeout(toolsFade, 300); }
+  }
+
+  // What comes next: the folder's order, or a shuffled walk through the folder (every photo once, then shuffled again).
+  function ssPeek() {
+    const set = siblingsOf(current);
+    if (set.length < 2) return current;
+    if (!ss.shuffle) return set[(set.indexOf(current) + 1) % set.length];
+    if (!ss.order || !ss.order.length) {
+      const rest = set.filter(function (i) { return i !== current; });
+      for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)), t = rest[i]; rest[i] = rest[j]; rest[j] = t; }
+      ss.order = rest;
+    }
+    return ss.order[0];
+  }
+  function ssAdvance() {
+    if (!ss.on || ss.paused) return;
+    ss.timer = 0;
+    const next = ssPeek();
+    if (ss.shuffle && ss.order && ss.order[0] === next) ss.order.shift();
+    current = next;
+    updateImage();   // (its hook below sets up the next wait)
+  }
+  function ssPreload() {   // the next photo is fetched while this one is showing
+    try {
+      const n = ssPeek(), f = files[n];
+      if (n === current || isVideoFile(f) || /\.hei[cf]$/i.test(f)) return;
+      ss.pre = new Image();
+      ss.pre.src = '?img=' + encodeURIComponent(f) + '&size=full' + (fileVersions[n] ? '&v=' + fileVersions[n] : '') + passQ;
+    } catch (x) {}
+  }
+  function ssDisarm() {
+    clearTimeout(ss.timer); ss.timer = 0; ss.token++;
+    if (ss.cancel) { ss.cancel(); ss.cancel = null; }
+  }
+  // Start the wait for the photo (or video) that is showing now.
+  function ssArm() {
+    ssDisarm();
+    if (!ss.on || ss.paused) return;
+    const my = ss.token, wait = function () { if (my === ss.token && ss.on && !ss.paused) ss.timer = setTimeout(ssAdvance, ss.seconds * 1000); };
+    if (isVideoFile(files[current])) {
+      const onEnd = function () { if (my === ss.token && ss.on && !ss.paused) ssAdvance(); };
+      lightboxVideo.addEventListener('ended', onEnd);
+      lightboxVideo.addEventListener('error', wait);
+      ss.cancel = function () { lightboxVideo.removeEventListener('ended', onEnd); lightboxVideo.removeEventListener('error', wait); };
+      const tryPlay = function (quiet) {
+        if (quiet) { lightboxVideo.muted = true; ss.muted = true; }
+        const p = lightboxVideo.play();
+        if (p && p.catch) p.catch(function () { if (!quiet) tryPlay(true); else wait(); });   // (a browser that won't start it alone: it stays like a photo for a while, then moves on)
+      };
+      tryPlay(false);
+    } else if (lightboxImg.complete && lightboxImg.naturalWidth) {
+      wait();
+    } else {
+      lightboxImg.addEventListener('load', wait, { once: true });
+      lightboxImg.addEventListener('error', wait, { once: true });
+      ss.cancel = function () { lightboxImg.removeEventListener('load', wait); lightboxImg.removeEventListener('error', wait); };
+    }
+    ssPreload();
+  }
+
+  function ssShowBar() {
+    if (!ss.on || !ssBar) return;
+    ssBar.classList.remove('idle');
+    clearTimeout(ss.idle);
+    ss.idle = setTimeout(function () { if (ss.on && !ss.paused && ssBar) ssBar.classList.add('idle'); }, 3500);
+  }
+  function ssWake() {
+    try { if (navigator.wakeLock && navigator.wakeLock.request && !ss.wake) navigator.wakeLock.request('screen').then(function (l) { if (ss.on) { ss.wake = l; l.addEventListener('release', function () { if (ss.wake === l) ss.wake = null; }); } else l.release(); }, function () {}); } catch (x) {}
+  }
+  function ssPause() {
+    if (!ss.on || ss.paused) return;
+    ss.paused = true; ssDisarm();
+    if (isVideoFile(files[current])) lightboxVideo.pause();
+    ssPaint(); ssShowBar();
+    if (ssBar) { clearTimeout(ss.idle); ssBar.classList.remove('idle'); }   // (paused: the controls stay in view)
+  }
+  function ssResume() {
+    if (!ss.on || !ss.paused) return;
+    ss.paused = false; ssPaint(); ssShowBar(); ssArm();
+  }
+  function ssToggle() { if (ss.paused) ssResume(); else ssPause(); }
+
+  function ssStart(from) {
+    if (ss.on) return;
+    if (lbEdit && lbEdit.isOpen()) {   // (what was typed is saved first; then the editor goes and the show begins)
+      lbEdit.beforeLeave().then(function (ok) { if (ok) { lbEdit.close(); ssStart(from); } });
+      return;
+    }
+    if (typeof from === 'number' && !lightbox.classList.contains('open')) openLightbox(from);
+    if (!lightbox.classList.contains('open') || siblingsOf(current).length < 2) return;
+    ss.on = true; ss.paused = false; ss.order = null;
+    if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
+    lightbox.classList.add('ss-on');
+    if (ssBar) ssBar.hidden = false;
+    ssPaint(); ssShowBar();
+    try {   // as big as the screen can make it, and kept awake: both are only asked for, and a browser may say no
+      const req = lightbox.requestFullscreen || lightbox.webkitRequestFullscreen;
+      if (req && !document.fullscreenElement && !document.webkitFullscreenElement) { const r = req.call(lightbox); ss.fs = true; if (r && r.catch) r.catch(function () { ss.fs = false; }); }
+    } catch (x) { ss.fs = false; }
+    ssWake();
+    ssArm();
+  }
+  function ssStop() {
+    if (!ss.on) return;
+    ss.on = false; ss.paused = false;
+    ssDisarm(); clearTimeout(ss.idle); ss.pre = null; ss.order = null;
+    if (ss.muted) { lightboxVideo.muted = false; ss.muted = false; }
+    lightbox.classList.remove('ss-on');
+    if (ssBar) { ssBar.hidden = true; ssBar.classList.remove('idle', 'paused'); }
+    if (ss.wake) { try { ss.wake.release(); } catch (x) {} ss.wake = null; }
+    if (ss.fs) {
+      ss.fs = false;
+      try { const out = document.exitFullscreen || document.webkitExitFullscreen; if (out && (document.fullscreenElement || document.webkitFullscreenElement)) { const r = out.call(document); if (r && r.catch) r.catch(function () {}); } } catch (x) {}
+    }
+    ssPaint();
+  }
+
+  // Wiring
+  if (ssPlayBtn) ssPlayBtn.addEventListener('click', function () { if (ss.on) ssToggle(); else ssStart(); });
+  if (ssPageBtn) ssPageBtn.addEventListener('click', function () {
+    // The page's Play starts at the first photo of what the page shows (the folder's own, in the folder's order).
+    let at = -1;
+    (typeof slideScope !== 'undefined' ? slideScope : []).forEach(function (name) { const i = files.indexOf(name); if (i >= 0 && (at < 0 || i < at)) at = i; });
+    if (at >= 0) ssStart(at);
+  });
+  if (ssToggleBtn) ssToggleBtn.addEventListener('click', function () { ssToggle(); });
+  if (ssStopBtn) ssStopBtn.addEventListener('click', function () { ssStop(); });
+  if (ssSpeedBtn) ssSpeedBtn.addEventListener('click', function () {
+    ss.seconds = SS_SPEEDS[(SS_SPEEDS.indexOf(ss.seconds) + 1) % SS_SPEEDS.length];
+    try { localStorage.setItem('gallerySlideSeconds', String(ss.seconds)); } catch (x) {}
+    ssPaint(); ssShowBar();
+    if (ss.on && !ss.paused && !isVideoFile(files[current])) ssArm();   // (the new time counts from now)
+  });
+  if (ssShuffleBtn) ssShuffleBtn.addEventListener('click', function () { ss.shuffle = !ss.shuffle; ss.order = null; ssPaint(); ssShowBar(); if (ss.on && !ss.paused) ssPreload(); });
+  // A tap on the photo pauses and carries on; a tap on one of the viewer's other buttons (share, edit, link...) pauses, so the photo does not change under it.
+  lightbox.addEventListener('click', function (e) {
+    if (!ss.on) return;
+    if (e.target === lightboxImg) { e.stopPropagation(); e.preventDefault(); ssToggle(); }
+  }, true);
+  if (ssTools) ssTools.addEventListener('click', function (e) {
+    if (!ss.on || ss.paused) return;
+    const b = e.target.closest && e.target.closest('button, a');
+    if (b && b !== ssPlayBtn && !(ssPlayBtn && ssPlayBtn.contains(b))) ssPause();
+  }, true);
+  ['mousemove', 'touchstart', 'pointerdown'].forEach(function (name) { lightbox.addEventListener(name, ssShowBar, { passive: true }); });
+  document.addEventListener('keydown', function (e) {
+    if (!ss.on || !lightbox.classList.contains('open') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, input, textarea, select, [contenteditable="true"]')) return;
+    ssShowBar();
+    if (e.key === 'Escape') {
+      if (typeof miniExpanded !== 'undefined' && miniExpanded) return;   // (the big map closes first, as it always did)
+      e.preventDefault(); e.stopImmediatePropagation(); ssStop(); return;   // the first Escape ends the show and leaves the photo up; the next closes the viewer
+    }
+    if (e.key === 'z' || e.key === 'Z') { e.stopImmediatePropagation(); return; }   // (no zooming while it plays)
+    if (e.key === ' ' && !(e.target && e.target.closest && e.target.closest('button, a, video'))) { e.preventDefault(); e.stopImmediatePropagation(); ssToggle(); }
+  }, true);
+  document.addEventListener('fullscreenchange', function () { if (ss.on && ss.fs && !document.fullscreenElement) { ss.fs = false; ssStop(); } });   // (leaving full screen by the browser's own way ends the show)
+  document.addEventListener('visibilitychange', function () { if (ss.on && document.visibilityState === 'visible') ssWake(); });
+
+  // The viewer calls these: after every photo it shows, and when it closes.
+  window.__ssShown = function () {
+    if (ssPlayBtn) ssPlayBtn.hidden = siblingsOf(current).length < 2;
+    if (ss.on) { if (lbEdit && lbEdit.isOpen()) { ssStop(); return; } ssArm(); }
+  };
+  window.__ssStop = ssStop;
+  ssPaint();
 <?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
   let linkPop = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }

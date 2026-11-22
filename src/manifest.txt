@@ -89,6 +89,7 @@ php/079-public-page-script-glue-web-link.php
 js/080-gallery-script-keyboard.js
 js/080a-gallery-script-photo-address.js
 js/080b-gallery-script-live-folder.js
+js/080c-gallery-script-slideshow.js
 php/081-public-page-script-glue-share-popover.php
 js/082-gallery-script-link-reporting.js
 php/083-public-page-script-glue-deep-link.php

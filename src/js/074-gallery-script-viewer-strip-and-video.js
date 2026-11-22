@@ -23,6 +23,7 @@
     toolsFade();
     if (typeof ownerPaint === 'function') ownerPaint();
     if (lbEdit && lbEdit.isOpen()) lbEdit.load();
+    if (window.__ssShown) window.__ssShown();   // (the slideshow, when one is playing, starts its wait for this photo)
     trackView(file);
     if (window.__linkLog) window.__linkLog('o', file);
   }
