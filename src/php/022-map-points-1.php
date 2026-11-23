@@ -145,7 +145,7 @@ function collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGr
             $groupColorIndex[$colorKey] = $nextColorIndex++;
         }
         $label = $groupKey !== null ? ($groupLabels[$groupKey] ?? $groupKey) : pathinfo(basename($file), PATHINFO_FILENAME);
-        $nameless = photo_ref($file) !== $file;   // (a Not listed photo's own page: the pin is the photo's code, "Photo", and goes nowhere: its name and its folder are not on the page)
+        $nameless = photo_ref($file) !== $file;   // (an Only me photo's own page: the pin is the photo's code, "Photo", and goes nowhere: its name and its folder are not on the page)
         $points[] = [
             'lat' => (float) $loc['lat'],
             'lng' => (float) $loc['lng'],

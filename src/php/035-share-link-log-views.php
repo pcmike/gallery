@@ -297,11 +297,11 @@ function visits_folder_link($dir, $rel) {
     return '<a class="vt-ci" href="' . ($rel === '' ? '?' : '?folder=' . $esc(rawurlencode($rel))) . '" target="_blank" rel="noopener" title="Open it in the gallery"><b>' . $esc($label) . '</b></a>';
 }
 
-/** Where a visit came in (the public address's records): a folder or the front page, or a Not listed photo opened by its own address, each a link to it. */
+/** Where a visit came in (the public address's records): a folder or the front page, or an Only me photo opened by its own address, each a link to it. */
 function visits_entry_html($dir, $a) {
     if (!is_array($a) || !is_string($a['f'] ?? null)) return '<span class="muted">—</span>';
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    if (!empty($a['u'])) return '<a class="vt-ci" href="' . admin_find_href($a['f']) . '" target="_blank" rel="noopener" title="Open it in the gallery"><span class="sl-lock" title="Not listed">' . ui_icon('lock') . '</span> Not listed photo <b>' . $esc(basename($a['f'])) . '</b></a>';
+    if (!empty($a['u'])) return '<a class="vt-ci" href="' . admin_find_href($a['f']) . '" target="_blank" rel="noopener" title="Open it in the gallery"><span class="sl-lock" title="Only me">' . ui_icon('lock') . '</span> Only me photo <b>' . $esc(basename($a['f'])) . '</b></a>';
     return visits_folder_link($dir, $a['f']);
 }
 
@@ -438,7 +438,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         }
         elseif ($k === 'opened' || $k === 'played' || $k === 'saved') {
             $verb = ['opened' => 'Opened', 'played' => 'Played', 'saved' => 'Downloaded the original of'][$k];
-            $text = $verb . ' <b>' . $esc(basename((string) $e['f'])) . '</b>' . (file_is_unlisted($dir, (string) $e['f']) ? ' <span class="sl-lock" title="Not listed">' . ui_icon('lock') . ' Not listed</span>' : '') . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder((string) $e['f']))) . '</div>' : '');
+            $text = $verb . ' <b>' . $esc(basename((string) $e['f'])) . '</b>' . (file_is_unlisted($dir, (string) $e['f']) ? ' <span class="sl-lock" title="Only me">' . ui_icon('lock') . ' Only me</span>' : '') . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder((string) $e['f']))) . '</div>' : '');
             $pic = link_pic_html((string) $e['f']);
         }
         elseif ($k === 'arrive') $text = 'Arrived at ' . visits_entry_html($dir, ['f' => (string) $e['f'], 'h' => $e['h']] + ($e['u'] ? ['u' => 1] : [])) . '<div class="muted">' . $esc(['typed' => 'an address typed or pasted, or a bookmark or app', 'link' => 'a link on another site', 'other' => 'a way the browser did not say'][$e['h']] ?? '') . '</div>';
@@ -642,7 +642,7 @@ function visits_report($ip, $dir) {
     foreach (visits_query($db, 'SELECT n.src, n.vid, n.name FROM notes n JOIN visitors v ON v.src = n.src AND v.vid = n.vid WHERE n.kind = \'via\' AND v.ip = ?', [$ip])->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
     foreach ($who as $r)
         $lineT([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
-               $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
+               $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Only me photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
     $line([]);
     $line(['What they looked at: one line per photo or video']);
     $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity', 'utc_offset']);
@@ -713,7 +713,7 @@ function visits_export($what, array $f, $dir, $tab = '') {
         foreach (visits_query($db, 'SELECT src, vid, name FROM notes WHERE kind = \'via\'')->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
         foreach (visits_query($db, 'SELECT v.*, ' . visits_seen_sql('v') . ' AS seen FROM visitors v' . $w . ' ORDER BY v.last DESC', $p) as $r)
             $line([$src($r['src']), $r['ip'], $r['country'], $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
-                   $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
+                   $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Only me photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
     } elseif ($what === 'items') {
         foreach (visits_query($db, 'SELECT i.*, v.ip, v.ua FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid' . $w . ' ORDER BY i.src, v.ip, i.item', $p) as $r)
             $line([$src($r['src']), $r['ip'], $r['ua'], link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
@@ -963,7 +963,7 @@ function health_checks($dir, $files) {
             . ': each picture there is sent as the original file, and a HEIC photo can\'t be shown. Delete the link (the folder called .gallery-cache inside ' . ($clN === 1 ? 'it' : 'each of them') . ') and the gallery makes a real folder at the next page load.');
     }
     if (install_secret_damaged()) {
-        $add('Folders and files', 'bad', 'The install secret file is damaged', 'The file .gallery-secret.php is there but holds no key (it may have been cut short or changed in an editor), so the gallery can\'t make a Not listed photo\'s address, and its thumbnails are named without the key. Nothing was replaced, because a new key would change every Not listed photo\'s address without a word. Put the file back from the backup (it keeps the key), or delete it: a new key is made, every Not listed photo\'s address stops working, and people on a share link open their link again.');
+        $add('Folders and files', 'bad', 'The install secret file is damaged', 'The file .gallery-secret.php is there but holds no key (it may have been cut short or changed in an editor), so the gallery can\'t make an Only me photo\'s address, and its thumbnails are named without the key. Nothing was replaced, because a new key would change every Only me photo\'s address without a word. Put the file back from the backup (it keeps the key), or delete it: a new key is made, every Only me photo\'s address stops working, and people on a share link open their link again.');
     }
     $unreadable = (array) (health_heavy($dir, $files, false)['unreadable'] ?? []);
     if ($unreadable) {   // (a folder the web server may not open is simply not there on the page: this is the only place that says so)
@@ -1089,7 +1089,7 @@ function health_checks($dir, $files) {
             $sample = implode('; ', array_map(function ($c) { return implode(' = ', array_slice($c[0], 0, 3)); }, array_slice($copied, 0, 3)));
             $anyUnl = (bool) array_filter($copied, function ($c) { return $c[1]; });
             $add('Left behind', 'warn', number_format(count($copied)) . ' hidden id' . (count($copied) === 1 ? ' is' : 's are') . ' carried by more than one folder (a copy)',
-                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo links of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
+                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo links of an Only me one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
         }
         $bk = media_tidy_backups($dir, $files);
         $bkN = is_array($bk) ? (isset($bk['count']) ? (int) $bk['count'] : count($bk)) : 0;

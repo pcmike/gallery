@@ -629,7 +629,7 @@ define('LINK_COOKIE_NAME', 'gallery_link_' . substr(hash('sha256', __DIR__), 0, 
 define('PREVIEW_COOKIE_NAME', 'gallery_preview_' . substr(hash('sha256', __DIR__), 0, 10));   // the owner previewing a link in this browser
 const PREVIEW_SECONDS = 14400;   // a preview ends by itself after four hours
 define('LINK_PROBE_TOKEN', '0000-probe-0000');   // the admin asks for this one to learn whether the tidy address reaches the script (it has hyphens, so only the rule that allows custom names lets it through)
-const LINK_TOKEN_LENGTH = 8;   // a new random address (the same length as a Not listed photo's); links made before keep their 16
+const LINK_TOKEN_LENGTH = 8;   // a new random address (the same length as an Only me photo's); links made before keep their 16
 const LINK_GUESS_LIMIT = 10;   // wrong share-link or photo addresses from one visitor in 15 minutes before a one-minute pause (a sign-in keeps 5)
 const LINK_ALIASES_MAX = 9;   // old addresses a link may keep working at the same time (with its own, ten ways in)
 const LINK_ADDRESS_TAKEN = 'Another link has (or had) that address: pick another.';

@@ -847,7 +847,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $text = $n === 1
             ? ($flag === 'private' ? '"' . $names[0] . '" is now ' . $what . '.' : '"' . $names[0] . '" is now ' . $what . '.')
             : $n . ' photos are now ' . $what . '.';
-        if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (a Not listed folder: there is no public or private there, only whether a photo's address works)
+        if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (an Only me folder: there is no public or private there, only whether a photo's address works)
             $addrOff = $state === 'private' || ($state === null && $on);
             $text = $n === 1 ? 'The link of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The links of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
         } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
@@ -946,39 +946,64 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         $hidden = !empty($_POST['hidden']);
         items_update($adminFolderReal, function (&$data) use ($hidden) {
-            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction'], $data['unlisted']); }   // (public again is not "not listed" either)
+            if ($hidden) { $data['restriction'] = 'private'; unset($data['quiet']); } else { unset($data['restriction'], $data['unlisted']); }   // (public again is not "Only me" either; a private folder is not Unlisted: the stricter one stands)
         });
         return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.'),
                 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)];
     }
 
-    // Not listed: private, and the contents are the owner's alone (someone with the private-view password does not see them either). It is
+    // Who can see this folder: one of four levels, from open to closed. Public; Unlisted (public, but left out of every list: `quiet`); Private (people with
+    // the private-view password and share links that include it); Only me (private plus the `unlisted` flag: the owner's alone, shared one photo at a time).
+    // Each level is the whole of what is stored for it, so moving between them never leaves a flag of another behind.
+    if ($action === 'set_folder_visibility') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $level = (string) ($_POST['level'] ?? '');
+        if (!in_array($level, ['public', 'unlisted', 'private', 'me'], true)) return ['type' => 'error', 'text' => 'Unknown choice: nothing was changed.'];
+        items_update($adminFolderReal, function (&$data) use ($level) {
+            unset($data['restriction'], $data['unlisted'], $data['quiet']);
+            if ($level === 'unlisted') { $data['quiet'] = true; }
+            elseif ($level === 'private') { $data['restriction'] = 'private'; }
+            elseif ($level === 'me') { $data['restriction'] = 'private'; $data['unlisted'] = true; }
+        });
+        if ($level === 'me') { install_secret(true); folder_id_stamp($adminFolderReal); }   // (what a photo's address is worked out from: every photo in it has one from now on)
+        own_galleries_recompute($dir, $files);   // (an Unlisted folder is a "Gallery of its own" unless the owner says otherwise)
+        $texts = ['public' => 'This folder is public: it shows on the gallery\'s page like any other.',
+                  'unlisted' => 'Unlisted: anyone with the folder\'s address can open it, but it is left out of every list (the gallery\'s page, the folders beside it, the map, counts, notes and ZIPs), and search engines are asked to skip it.',
+                  'private' => 'This entire folder is now private: visitors need the private-view password to see it.',
+                  'me' => 'Only me: only you can open this folder. Visitors and people with the private-view password see nothing of it.'];
+        $ownNow = items_read($adminFolderReal)['ownGallery'] ?? null;
+        return ['type' => 'ok', 'level' => $level, 'private' => $level === 'private' || $level === 'me', 'unlisted' => $level === 'me', 'quiet' => $level === 'unlisted',
+                'own' => ['on' => is_bool($ownNow) ? $ownNow : $level === 'unlisted', 'explicit' => is_bool($ownNow) ? ($ownNow ? 1 : 0) : -1, 'note' => own_gallery_note($level, is_bool($ownNow) ? $ownNow : null)],
+                'counts' => folder_privacy_counts($dir, $files, $adminFolderPath), 'text' => $texts[$level]];
+    }
+
+    // Only me: private, and the contents are the owner's alone (someone with the private-view password does not see them either). It is
     // stored as private plus a flag, so a version that doesn't know the flag still keeps the folder private. Turning it off leaves the
     // folder private; the Private switch is what makes it public.
     if ($action === 'toggle_folder_unlisted') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['unlisted']);
         items_update($adminFolderReal, function (&$data) use ($on) {
-            if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; } else { unset($data['unlisted']); }
+            if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; unset($data['quiet']); } else { unset($data['unlisted']); }
         });
         if ($on) { install_secret(true); folder_id_stamp($adminFolderReal); }   // (what a photo's address is worked out from: so every photo in it has one from now on, with nothing to press)
         $private = item_restriction(items_read($adminFolderReal)) === 'private';
         return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
-                'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
+                'text' => $on ? 'Only me: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
                               : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
     }
 
-    // A Not listed folder's photo has an address (eight letters and digits) that opens that one photo for anyone who has it. This gives the
+    // An Only me folder's photo has an address (eight letters and digits) that opens that one photo for anyone who has it. This gives the
     // owner the address (the page already carries it, so this is for a folder that has no id yet and for "fresh"), and with "fresh" a new one:
     // the old stops working at once (a random string kept on the photo changes the code).
     if ($action === 'photo_address') {
-        if ($adminFolderPath === null || !folder_is_unlisted($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'Only a photo in a Not listed folder has an address like this.'];
+        if ($adminFolderPath === null || !folder_is_unlisted($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'Only a photo in an Only me folder has an address like this.'];
         $name = basename((string) ($_POST['file'] ?? ''));
         $rel = $adminFolderPath . '/' . $name;
         if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo\'s link is switched off, so it has none. Switch it on first (its lock).'];
         if (install_secret(true) === '') return ['type' => 'error', 'text' => install_secret_damaged()
-            ? 'The gallery\'s secret key file (.gallery-secret.php) is there but holds no key (it may have been cut short or changed in an editor), so it cannot make an address. Put the file back from the backup, or delete it so a new key is made (a new key changes every Not listed photo\'s address), then try again. Nothing was changed.'
+            ? 'The gallery\'s secret key file (.gallery-secret.php) is there but holds no key (it may have been cut short or changed in an editor), so it cannot make an address. Put the file back from the backup, or delete it so a new key is made (a new key changes every Only me photo\'s address), then try again. Nothing was changed.'
             : 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
         $fid = folder_id_stamp($adminFolderReal);
         if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
@@ -995,7 +1020,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'toggle_folder_own_gallery') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['owngallery']);
-        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['ownGallery'] = true; else unset($data['ownGallery']); });
+        items_update($adminFolderReal, function (&$data) use ($on) {
+            if ($on) $data['ownGallery'] = true;
+            elseif (($data['quiet'] ?? null) === true) $data['ownGallery'] = false;   // (an Unlisted folder is one by default: switching it off is a choice to keep)
+            else unset($data['ownGallery']);
+        });
         own_galleries_recompute($dir, $files);
         return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.'];
     }
@@ -1042,7 +1071,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'n' => count($targets), 'html' => $row, 'short' => ($mode === 'on' ? 'Switched on in ' : 'Switched off in ') . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . '.', 'text' => ($mode === 'on' ? 'Switched on in ' : 'Switched off in ') . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . ': ' . $names . '.' . ($mode === 'on' && $inPriv ? ' ' . count($inPriv) . ' private folder' . (count($inPriv) === 1 ? '' : 's') . ' skipped.' : '')];
     }
 
-    // What a Not listed folder's photo addresses open: off, the photo in the gallery's viewer; on, the bare picture or video.
+    // What an Only me folder's photo addresses open: off, the photo in the gallery's viewer; on, the bare picture or video.
     if ($action === 'toggle_folder_address_file') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['addrfile']);

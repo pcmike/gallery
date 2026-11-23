@@ -97,13 +97,13 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = [], $
     $amb = link_ambiguous_set();
     $cover = ''; $viaCollection = '';
     foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
-        if ($cid[0] !== 'c' || $fromDepth !== null || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // ($fromDepth: asked for an Unlisted folder's photo, which no collection brings along)   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
+        if ($cid[0] !== 'c' || $fromDepth !== null || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // ($fromDepth: asked for an Unlisted folder's photo, which no collection brings along)   // (an Only me folder's photos come through no collection, as through no folder above it: it has to be picked itself)
         if (!isset($pub[$cid])) return 'all';
         $viaCollection = 'public';
     }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
-    $from = $fromDepth ?? max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
+    $from = $fromDepth ?? max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above an Only me one does not bring it along; the Only me folder, or one inside it, has to be picked)
     $n = 0;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
@@ -121,7 +121,7 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = [], $
 /** May the link $l show this item? */
 function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
-    if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out a Not listed folder: that one is shared only by picking it)
+    if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out an Only me folder: that one is shared only by picking it)
     if ($type === 'folders' || $type === 'mixed') {
         $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? []);
         if ($cover === 'all') return true;
@@ -150,7 +150,7 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     return link_allows_item($l, $dir, $file, $itemsData);
 }
 
-/** The topmost Not listed folder $file sits in ('' when it is in none): the one whose own choices (downloads) cover everything beneath it. */
+/** The topmost Only me folder $file sits in ('' when it is in none): the one whose own choices (downloads) cover everything beneath it. */
 function unlisted_root_path($dir, $file) {
     $depth = unlisted_root_depth($dir, $file);
     return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
@@ -171,11 +171,11 @@ function photo_code_chars($raw) {
     return $out;
 }
 
-/** A photo's address when the photo is in a Not listed folder: eight letters and digits (for example Ab3x9Qz2, used as /photos/Ab3x9Qz2 or
+/** A photo's address when the photo is in an Only me folder: eight letters and digits (for example Ab3x9Qz2, used as /photos/Ab3x9Qz2 or
  *  /photos/?Ab3x9Qz2) worked out from the folder's hidden id, the file name, a secret of this install and, once the owner has asked for a new address,
  *  a random string kept on the photo. Nothing else is stored, so there is no list of codes and nothing to press: the folder can be renamed or moved
  *  and its photos keep their addresses, while renaming the photo ends its address. '' when it can't be worked out (no secret yet, or the folder has
- *  no id yet, which switching Not listed on gives it): nothing then matches. */
+ *  no id yet, which switching Only me on gives it): nothing then matches. */
 function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
     $secret = install_secret();
     $slash = strrpos((string) $file, '/');
@@ -186,18 +186,18 @@ function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
     return photo_code_chars(hash_hmac('sha256', 'photo|' . $fid . '|' . basename($file) . '|' . $salt, $secret, true));
 }
 
-/** The photo an address (eight letters and digits) belongs to, or null. Only photos in Not listed folders have one, so only those are worked out
+/** The photo an address (eight letters and digits) belongs to, or null. Only photos in Only me folders have one, so only those are worked out
  *  (about a microsecond each), and a folder whose id is carried by a copy of it is left out until that is sorted. Nothing is read for an address of
  *  the wrong shape. */
 function photo_address_resolve($dir, $files, $itemsData, $token) {
     if (!is_string($token) || preg_match('/^[A-Za-z0-9]{8}$/D', $token) !== 1 || install_secret() === '') return null;
     link_scan_ambiguity($dir, $files);   // (looking an address up keeps the list of copied ids current: the pictures of the page this opens are refused or served by it)
     $amb = link_ambiguous_set();
-    $folderId = []; $carriers = [];   // folder => its id (only a Not listed folder with one), and id => how many such folders carry it
+    $folderId = []; $carriers = [];   // folder => its id (only an Only me folder with one), and id => how many such folders carry it
     foreach ($files as $f) {
         $folder = dirname($f);
         if ($folder === '.' || $folder === '' || isset($folderId[$folder])) continue;
-        $fid = folder_is_unlisted($dir, $folder) ? folder_id_cached($dir, $folder) : '';   // (only a Not listed folder's id is read)
+        $fid = folder_is_unlisted($dir, $folder) ? folder_id_cached($dir, $folder) : '';   // (only an Only me folder's id is read)
         $folderId[$folder] = $fid;
         if ($fid !== '') $carriers[$fid] = ($carriers[$fid] ?? 0) + 1;
     }
@@ -210,7 +210,7 @@ function photo_address_resolve($dir, $files, $itemsData, $token) {
     return null;
 }
 
-/** A request for /photos/<something> (or /photos/?<something>) reaches the script as ?link=<something>. When that something is a Not listed photo's
+/** A request for /photos/<something> (or /photos/?<something>) reaches the script as ?link=<something>. When that something is an Only me photo's
  *  address, the request becomes the photo's own page (?photo=<path>&k=<code>) and true is returned; otherwise nothing is changed and the request goes
  *  on as a share link's (where a wrong one is counted). A closed gallery shows a stranger no photo, by an address or otherwise, and a visitor held
  *  back for guessing gets no answer, a right one included. */
@@ -249,9 +249,9 @@ function photo_address_translate($dir, $files, $itemsData) {
     return true;
 }
 
-/** A Not listed photo's own page asks for the photo by its code (see photo_ref): ?img=<code>&k=<code>, and likewise ?video, ?original, ?strip and ?track. Here the
+/** An Only me photo's own page asks for the photo by its code (see photo_ref): ?img=<code>&k=<code>, and likewise ?video, ?original, ?strip and ?track. Here the
  *  request is turned back into the photo's own (?img=<path>&k=<code>) so everything after this reads it as it always has. The code has to be the one in k=, and
- *  to belong to a photo in a Not listed folder; anything else is left as it is (and is counted as a wrong guess like any other). A visitor held back for guessing
+ *  to belong to a photo in an Only me folder; anything else is left as it is (and is counted as a wrong guess like any other). A visitor held back for guessing
  *  gets no answer, a right code included, and a closed gallery shows a stranger no photo. */
 function photo_code_params_translate($dir, $mediaExtensions, $self) {
     $k = $_GET['k'] ?? null;
@@ -262,7 +262,7 @@ function photo_code_params_translate($dir, $mediaExtensions, $self) {
     if (!$params) return;   // (an ordinary request names a path, never its own code: nothing is scanned for it)
     if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return;
     if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return;
-    // These routes answer before the tree is scanned, so it is scanned here, for this request only (a Not listed photo's page has a few: one for each picture it asks for)
+    // These routes answer before the tree is scanned, so it is scanned here, for this request only (an Only me photo's page has a few: one for each picture it asks for)
     $files = flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self));
     $inUnlisted = []; $unlisted = [];
     foreach ($files as $f) {
@@ -278,7 +278,7 @@ function photo_code_params_translate($dir, $mediaExtensions, $self) {
     $GLOBALS['__photo_coded'] = $rel;   // (the reply to a view count then answers by the code too)
 }
 
-/** A Not listed photo's address answered with the file itself: what the viewer shows at full size (a picture is the file with its location removed for a
+/** An Only me photo's address answered with the file itself: what the viewer shows at full size (a picture is the file with its location removed for a
  *  visitor, a HEIC photo its converted JPEG) or, for a video, the video, with no page around it. It is counted and logged as the page would be. */
 function photo_address_bare($dir, $rel, $itemsData) {
     header('X-Robots-Tag: noindex, nofollow');
@@ -313,7 +313,7 @@ function photo_code_is_right_for_request($dir) {
     return false;
 }
 
-/** Does this request carry the right code for this very photo, and is the photo one that has an address (in a Not listed folder, and not
+/** Does this request carry the right code for this very photo, and is the photo one that has an address (in an Only me folder, and not
  *  marked private on its own)? The code is for that one photo: it opens nothing else. */
 function photo_pass_valid($dir, $file, $itemsData) {
     static $held = null;
@@ -326,7 +326,7 @@ function photo_pass_valid($dir, $file, $itemsData) {
     if (item_restriction(is_array($itemsData) ? ($itemsData[$file] ?? null) : null) === 'private') return false;
     $fid = folder_id_cached($dir, (string) dirname($file));
     if ($fid !== '' && isset(link_ambiguous_set()[$fid])) return false;   // (a folder copied with its id: its photos' addresses open nothing until that is sorted, as at /photos/<code>)
-    // The code can be tried here as well as at /photos/<code> (any request that names a Not listed photo and carries one), so a visitor held back for
+    // The code can be tried here as well as at /photos/<code> (any request that names an Only me photo and carries one), so a visitor held back for
     // guessing is not asked at all. (A wrong code is counted at the end of the request, see 003, whether or not the photo it came with exists.)
     if ($held === null) $held = !is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip());
     if ($held) return false;
@@ -339,8 +339,8 @@ function photo_pass_valid($dir, $file, $itemsData) {
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
-    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return true;   // (a Not listed photo, by its own address)
-    if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except a Not listed folder, which is the owner's alone)
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return true;   // (an Only me photo, by its own address)
+    if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except an Only me folder, which is the owner's alone)
     $l = link_viewer();
     if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
     if (!file_is_hidden($dir, $file, $itemsData)) return true;
@@ -366,7 +366,7 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
 function viewer_may_download($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
-    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Not listed folder's own choice, not the gallery's)
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Only me folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
@@ -645,7 +645,7 @@ function run_link_route($dir) {
         if (ENABLE_SHARE_LINKS && link_token_format_ok($token)) { $all = links_read(); $isLink = link_find_by_token($all, $token) !== null || link_find_by_alias($all, $token) !== null; }
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
-        if ($mayLook && !is_admin_browser() && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
+        if ($mayLook && !is_admin_browser() && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say an Only me folder is there: it answers as for a name that isn't)
         $isFolder = is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]);
         if ($isFolder && $mayLook && !is_admin_browser()) {
             // Sent on only to a folder this visitor could open (it holds something they may see): a private folder, an empty one and a directory that is not
@@ -659,8 +659,8 @@ function run_link_route($dir) {
             return;
         }
     }
-    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the check that the tidy address works (the admin's, and the owner's Copy address on a photo): not a guess, and not a 404, which a browser would log in its console. Before the switches below: a Not listed photo's short address needs the server rule whether or not share links are on
-    if (!ENABLE_SHARE_LINKS) { if (link_guess_locked($dir)) return; link_guess_failed($dir, $token); render_link_invalid_page(); return; }   // (still counted: a Not listed photo's address is guessed here too)
+    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the check that the tidy address works (the admin's, and the owner's Copy address on a photo): not a guess, and not a 404, which a browser would log in its console. Before the switches below: an Only me photo's short address needs the server rule whether or not share links are on
+    if (!ENABLE_SHARE_LINKS) { if (link_guess_locked($dir)) return; link_guess_failed($dir, $token); render_link_invalid_page(); return; }   // (still counted: an Only me photo's address is guessed here too)
     if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
     $ip = client_ip();
     $allLinks = links_read();

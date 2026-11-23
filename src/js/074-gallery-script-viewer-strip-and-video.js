@@ -16,7 +16,7 @@
     const copyBtn = document.getElementById('lightbox-copy-btn');
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     const newAddrBtn = document.getElementById('lightbox-newaddr');
-    if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
+    if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (an Only me photo has an address of its own, and the owner can replace it)
     if (copyBtn) { copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link'; copyBtn.setAttribute('aria-label', copyBtn.title); }
     applyZoom();
     updateLightboxExtras();

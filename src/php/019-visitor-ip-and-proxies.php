@@ -322,7 +322,7 @@ function public_log_wanted() {
 }
 
 /** How this page was reached, for the public address's log: an arrival (an address typed or pasted, a bookmark, a link from another site or an app: the
- *  browser says it was not a click inside the gallery) as [folder path ('' is the front page) or, for a Not listed photo opened by its address, the photo,
+ *  browser says it was not a click inside the gallery) as [folder path ('' is the front page) or, for an Only me photo opened by its address, the photo,
  *  how, whether it was that photo (then the folder is '': the photo is the code's)]; null for a click inside the gallery, or a browser that doesn't say. */
 function public_log_arrival() {
     if (!public_log_wanted()) return null;
@@ -330,7 +330,7 @@ function public_log_arrival() {
     if ($site === '' || $site === 'same-origin') return null;
     $how = $site === 'none' ? 'typed' : (in_array($site, ['cross-site', 'same-site'], true) ? 'link' : 'other');
     $pass = $GLOBALS['photoPass'] ?? null;
-    if ($pass !== null) return ['f' => '', 'h' => $how, 'u' => true];   // (a Not listed photo's page never names the photo: the log route works out which it is from the code on the request)
+    if ($pass !== null) return ['f' => '', 'h' => $how, 'u' => true];   // (an Only me photo's page never names the photo: the log route works out which it is from the code on the request)
     $folder = $GLOBALS['currentFolderPath'] ?? null;
     return ['f' => $folder === null ? '' : $folder, 'h' => $how];
 }

@@ -48,7 +48,7 @@
   // private folder) or none (an ordinary public photo).
   function lockKind(f) {
     const o = ownerState.own[f] || '';
-    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'aoff' : 'aon';   // a photo in a Not listed folder: there is no public or private, only whether its address works
+    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'aoff' : 'aon';   // a photo in an Only me folder: there is no public or private, only whether its address works
     if (o === 'private') return 'own';
     if (o === 'public' && ownerState.inh[f]) return 'pub';
     return o === '' && ownerState.inh[f] ? 'inh' : 'none';

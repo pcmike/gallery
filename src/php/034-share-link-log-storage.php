@@ -502,7 +502,7 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
 
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
  *  showed, what played, which folder page. Answers nothing (204). Anything the person couldn't see is ignored: a photo they may not see, a folder whose page
- *  would not answer them, a post that is not the gallery's own page's, and a line repeated in the same post (it counts once). A Not listed photo's own page
+ *  would not answer them, a post that is not the gallery's own page's, and a line repeated in the same post (it counts once). An Only me photo's own page
  *  names its photo by the code (k= on this address, and in the lines): the photo is the code's, and the page's own word of where it lives is not asked for. */
 function run_linklog_route($dir, $mediaExtensions, $self) {
     header('Cache-Control: no-store');
@@ -537,7 +537,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
     if (is_array($in) && is_array($in['a'] ?? null) && link_is_public_log($link)) {
         $a = $in['a']; $af = $a['f'] ?? null; $ah = $a['h'] ?? '';
         if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
-            if (!empty($a['u'])) {   // a Not listed photo opened by its own address: the photo is the code's, whatever the page says
+            if (!empty($a['u'])) {   // an Only me photo opened by its own address: the photo is the code's, whatever the page says
                 if ($coded !== null) $arrive = ['f' => $coded, 'h' => $ah, 'u' => 1];
             } elseif ($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) $arrive = ['f' => $af, 'h' => $ah];
         }

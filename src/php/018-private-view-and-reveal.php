@@ -74,7 +74,7 @@ function item_restriction($entry) {
 function file_is_hidden($dir, $file, $itemsData) {
     $own = item_restriction($itemsData[$file] ?? null);
     if ($own === 'private') return true;
-    if ($own === 'public') return file_is_unlisted($dir, $file);   // (inside a Not listed folder a public mark changes nothing: the folder is the owner's alone)
+    if ($own === 'public') return file_is_unlisted($dir, $file);   // (inside an Only me folder a public mark changes nothing: the folder is the owner's alone)
     return folder_above_is_private($dir, $file);
 }
 
@@ -93,14 +93,14 @@ function folder_above_is_private($dir, $file) {
     return false;
 }
 
-/** Whether any folder $file sits in, at any depth, is Not listed: private, with the owner's "not listed" flag (a folder the owner keeps for
+/** Whether any folder $file sits in, at any depth, is Only me: private, with the owner's "not listed" flag (a folder the owner keeps for
  *  themselves and shares from one photo at a time). It is stored as private plus the flag, so a version that doesn't know the flag
- *  still treats the folder as private. Anything beneath a Not listed folder is Not listed too. */
+ *  still treats the folder as private. Anything beneath an Only me folder is Only me too. */
 function folder_above_is_unlisted($dir, $file) {
     return unlisted_root_depth($dir, $file) > 0;
 }
 
-/** How many path segments of $file's folders it takes to reach the topmost Not listed folder above it (1 for a top-level folder), or 0
+/** How many path segments of $file's folders it takes to reach the topmost Only me folder above it (1 for a top-level folder), or 0
  *  when none of them is. */
 function unlisted_root_depth($dir, $file) {
     if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
@@ -114,17 +114,17 @@ function unlisted_root_depth($dir, $file) {
     return 0;
 }
 
-/** Is the item in a Not listed folder? (Its own marks make no difference: see file_is_hidden.) */
+/** Is the item in an Only me folder? (Its own marks make no difference: see file_is_hidden.) */
 function file_is_unlisted($dir, $file) {
     return folder_above_is_unlisted($dir, $file);
 }
 
-/** Is this folder Not listed, on its own or because a folder above it is? */
+/** Is this folder Only me, on its own or because a folder above it is? */
 function folder_is_unlisted($dir, $folderPath) {
     return folder_unlisted_cached($dir, $folderPath) || folder_above_is_unlisted($dir, $folderPath . '/x');
 }
 
-/** One folder's own Not listed flag, read once per request like folder_restriction_cached (and reset with it). True only while the
+/** One folder's own Only me flag, read once per request like folder_restriction_cached (and reset with it). True only while the
  *  folder is also private, so removing the privacy removes this too. */
 function folder_unlisted_cached($dir, $folderRel, $reset = false) {
     static $cache = [];
@@ -148,7 +148,11 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
     }
     if (!isset($cache[$folderRel])) {
         $coll = $folderRel !== '' && collections_any() ? collection_at($dir, $folderRel) : null;   // (a collection keeps its own mark in its own record)
-        $cache[$folderRel] = $coll !== null ? !empty($coll['ownGallery']) : (items_read(resolve_real_path($dir, $folderRel))['ownGallery'] ?? null) === true;
+        if ($coll !== null) { $cache[$folderRel] = !empty($coll['ownGallery']); }
+        else {
+            $own = items_read(resolve_real_path($dir, $folderRel));
+            $cache[$folderRel] = is_bool($own['ownGallery'] ?? null) ? $own['ownGallery'] : ($own['quiet'] ?? null) === true;   // (the folder's own choice; with none, an Unlisted folder is a gallery of its own)
+        }
     }
     return $cache[$folderRel];
 }
@@ -204,7 +208,7 @@ function nav_top($dir, $folderPath) {
     if (($fresh || $cookieTop === null) && !headers_sent()) {
         setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
     }
-    if (!headers_sent()) { if (($GLOBALS['photoPass'] ?? null) === null) header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }   // (a Not listed photo's own page keeps its no-store)
+    if (!headers_sent()) { if (($GLOBALS['photoPass'] ?? null) === null) header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }   // (an Only me photo's own page keeps its no-store)
     return $top;
 }
 
@@ -296,7 +300,7 @@ function folder_is_private($dir, $folderPath) {
 
 /** May this visitor read what was written about a folder (its description, its dates, its notes file)? Only when they may see the whole folder:
  *  the folder is not private (nor is one above it), or they have the private-view password, or their link covers the folder itself (an Everything
- *  link covers every folder but a Not listed one), or they are the owner. Someone who reaches only something inside it (a subfolder, a photo,
+ *  link covers every folder but an Only me one), or they are the owner. Someone who reaches only something inside it (a subfolder, a photo,
  *  a photo switched to public inside a private folder) is shown the folder's name and the pictures they may see, not what was written about all of it.
  *  Judged for the viewer the page is for (the owner previewing a link is the link's guest). */
 function folder_words_visible($dir, $folderRel) {

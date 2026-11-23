@@ -41,7 +41,7 @@ function item_web_link($entry) {
 }
 
 /** The words a screen reader says for a photo or a video: its caption when it has one, else its file name without the folder it sits in
- *  (a picture's name, "Europe/France/eiffel.jpg", is read out whole otherwise). A Not listed photo's own page ($nameless) says "Photo":
+ *  (a picture's name, "Europe/France/eiffel.jpg", is read out whole otherwise). An Only me photo's own page ($nameless) says "Photo":
  *  its name and folder are not on that page. */
 function photo_alt_text($file, $entry, $nameless = false) {
     $cap = is_array($entry) ? trim((string) ($entry['caption'] ?? '')) : '';
@@ -63,7 +63,7 @@ function photo_alt_text($file, $entry, $nameless = false) {
  *  spoken for, when $videoDuration is known. */
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
-    $nameless = photo_ref($file) !== $file;   // (a Not listed photo's own page: the photo is its code, and nothing on the page says what it is called or where it lives)
+    $nameless = photo_ref($file) !== $file;   // (an Only me photo's own page: the photo is its code, and nothing on the page says what it is called or where it lives)
     if ($nameless) $anchorId = null;
     $hidden = (view_counts_shown() && ($views > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';   // the owner sees every count, a zero too
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars(photo_ref($file), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
@@ -114,7 +114,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
         $lockTitle = owner_lock_title($ps);
-        $addrLock = file_is_unlisted($GLOBALS['dir'], $file);   // (a photo in a Not listed folder: its lock is whether its address works, there is no public or private for it)
+        $addrLock = file_is_unlisted($GLOBALS['dir'], $file);   // (a photo in an Only me folder: its lock is whether its address works, there is no public or private for it)
         if ($addrLock) {
             $isPriv = $ps['own'] === 'private'; $isFolder = false;
             $lockTitle = $isPriv ? 'Link off: this photo can\'t be opened by its link. Press to switch it on' : 'Link on: anyone with this photo\'s link can open it. Press to switch it off';
@@ -130,7 +130,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
         $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
             . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
-        // A photo in a Not listed folder has an address of its own (see photo_address_code): beside the pencil, a button that makes a new one
+        // A photo in an Only me folder has an address of its own (see photo_address_code): beside the pencil, a button that makes a new one
         // (the old stops working) and one that copies the present one.
         if (file_is_unlisted($GLOBALS['dir'], $file)) {
             $hasAddr = true;
@@ -140,7 +140,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
-    // What a screen reader says about the picture: the caption when the photo has one, else its file name (a Not listed photo's own page says "Photo": its name is not on that page).
+    // What a screen reader says about the picture: the caption when the photo has one, else its file name (an Only me photo's own page says "Photo": its name is not on that page).
     $altText = photo_alt_text($file, $itemEntry ?? [], $nameless);
     // A keyboard (and a screen reader) opens the viewer through a real button laid over the picture. It is a sibling of the badges and the owner's
     // buttons, never their parent: Tab stops on it first, Enter or Space presses it, and the press reaches the tile's own click handler, which opens the
@@ -334,7 +334,13 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     $slug = slugify($idKey ?? $folderPath);
     // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
     $style = $accentColor ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($accentColor, ENT_QUOTES, 'UTF-8') . ';"' : '';
-    $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
+    // Unlisted (public, left out of every list): only the owner is told on the card, in amber, dashed when it is a folder above that makes it so.
+    $quietPill = '';
+    if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && $priv['state'] === '') {
+        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<span class="folder-priv own quiet" title="Unlisted: anyone with the address can open this folder, but it is left out of every list">Unlisted</span>';
+        elseif (quiet_root_depth($dir, $folderPath . '/x') > 0) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted because a folder above it is">Unlisted</span>';
+    }
+    $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' || $quietPill !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
     $coverParts = $coverFile !== null ? video_tile_parts($coverFile) : ['attrs' => '', 'inner' => ''];
     $html .= '<a class="folder-cover-link' . ($coverParts['inner'] !== '' ? ' vtile' : '') . '" href="' . $folderUrl . '">';
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
@@ -342,9 +348,10 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
     $pill = '';
     if ($priv['state'] === 'own') $pill = folder_unlisted_cached($dir, $folderPath)
-        ? '<span class="folder-priv own unlisted" title="Not listed: only you can open this folder">' . ui_icon('lock') . 'Not listed</span>'   // (it says so; it is not a button: making a Not listed folder public is in its settings)
+        ? '<span class="folder-priv own unlisted" title="Only me: only you can open this folder">' . ui_icon('lock') . 'Only me</span>'   // (it says so; it is not a button: making an Only me folder public is in its settings)
         : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
+    elseif ($quietPill !== '') $pill = $quietPill;
     elseif (is_admin_browser() && collections_any() && ($pillColl = collection_at($dir, $folderPath)) !== null) $pill = '<span class="folder-priv own coll-pill' . ($pillColl['private'] ? ' is-private' : '') . '" title="' . ($pillColl['private'] ? 'Private collection: visitors see nothing of it (its folders and photos stay as they are)' : 'A collection: a hand-picked set') . '">' . ($pillColl['private'] ? ui_icon('lock') . 'Private' : 'Collection') . '</span>';   // (the owner is told which cards are collections)
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and

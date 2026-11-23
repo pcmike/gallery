@@ -27,12 +27,12 @@ function password_for_storage($plain) {
 /** A random secret that belongs to this install, kept in its own small data
  *  file (.gallery-secret.php, answers 404 like the others). It keys four
  *  things only: the names of the thumbnails and clips, the cookies of people
- *  on a share link (and of Preview as a link), every Not listed photo's own
+ *  on a share link (and of Preview as a link), every Only me photo's own
  *  address, and the mark on Tidy up's backups. (Sign-ins and private-view
  *  sign-ins are stored tokens and do not use it.) $create makes it if it
  *  doesn't exist; without it, a missing secret is just ''. A file that is
  *  there but holds no key is never replaced (a new key would change every
- *  Not listed address without a word): see install_secret_damaged(). */
+ *  Only me address without a word): see install_secret_damaged(). */
 function install_secret($create = false) {
     static $secret = null;
     if ($secret !== null && ($secret !== '' || !$create)) return $secret;
@@ -52,7 +52,7 @@ function install_secret($create = false) {
     return $secret = $read();
 }
 
-/** Is the secret key's file there but without a key in it (cut short, or changed in an editor)? It is left as it is: replacing it would change every Not listed photo's address. */
+/** Is the secret key's file there but without a key in it (cut short, or changed in an editor)? It is left as it is: replacing it would change every Only me photo's address. */
 function install_secret_damaged() {
     $path = __DIR__ . '/.gallery-secret.php';
     return is_file($path) && !is_link($path) && install_secret() === '';

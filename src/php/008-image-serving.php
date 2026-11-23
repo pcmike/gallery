@@ -204,7 +204,7 @@ function file_version($file) {
     return $seen[$file] = $stat ? substr(hash('sha256', $stat['mtime'] . '|' . $stat['size']), 0, 10) : '';
 }
 
-/** What a page calls a photo in the addresses and attributes it prints: its path, except on a Not listed photo's own page, where it is the photo's code
+/** What a page calls a photo in the addresses and attributes it prints: its path, except on an Only me photo's own page, where it is the photo's code
  *  (k=). That page, its pictures and its previews never carry the folder's name or the file's name: a request for ?img=<code>&k=<code> (or ?video, ?original,
  *  ?strip, ?track) is turned back into the photo's own at the top of the request (see photo_code_params_translate). */
 function photo_ref($file) {

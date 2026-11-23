@@ -1,4 +1,4 @@
-  // Not listed folders (the owner only): a photo in one has an address of its own that opens that one photo for anyone who has it. These
+  // Only me folders (the owner only): a photo in one has an address of its own that opens that one photo for anyone who has it. These
   // copy it, and make a new one (the old stops working). The server makes the address; this puts it on the clipboard.
   function ownerIsUnlisted(file) { return !!(ownerState && ownerState.unl && ownerState.unl[file]); }
   // Does the server's one-word rule reach the gallery (so /photos/<code> works), or only /photos/?<code>? Asked once, with the fixed probe address.
@@ -11,8 +11,8 @@
     const root = new URL(galleryRootHref, window.location.href); root.search = ''; root.hash = '';
     return copyToClipboard(root.href + (shortAddressOk ? '' : '?') + code).then(() => { btn.classList.remove('busy'); flashCopied(btn); });
   }
-  // The address of a photo in a Not listed folder is already worked out for the owner's page, so Copy is just a copy. Only a folder with no id yet
-  // (one marked Not listed before the address existed, or a folder inside one) and "New address" ask the server.
+  // The address of a photo in an Only me folder is already worked out for the owner's page, so Copy is just a copy. Only a folder with no id yet
+  // (one marked Only me before the address existed, or a folder inside one) and "New address" ask the server.
   function ownerAddress(file, fresh, btn) {
     const known = ownerState && ownerState.unl ? ownerState.unl[file] : null;
     if (!fresh && typeof known === 'string' && known !== '') { copyAddress(known, btn); return Promise.resolve(); }

@@ -46,7 +46,7 @@
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
       bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;
-      // In a Not listed folder there is no public or private: the bar says Link off / Link on (on = back to following the folder).
+      // In an Only me folder there is no public or private: the bar says Link off / Link on (on = back to following the folder).
       const inAddr = !!(ctx && ownerState.unl && ownerState.unl[ctx]);
       bar.classList.toggle('in-addr', inAddr);
       const sbn = bar.querySelector('.sb-private .sb-n'), sbp = bar.querySelector('.sb-private .sb-p'), sbf = bar.querySelector('.sb-folder .sb-lab');

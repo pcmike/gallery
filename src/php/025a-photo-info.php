@@ -364,7 +364,7 @@ function photo_info_rows($dir, $file, $entry) {
 }
 
 /** ?photoinfo=<file>: the panel's rows for one photo, as JSON. Answered exactly as ?img= answers for who may see the file (anything else is a 404),
- *  and only for a folder whose info is on; a Not listed photo's own address has no panel. */
+ *  and only for a folder whose info is on; an Only me photo's own address has no panel. */
 function serve_photo_info($dir, $mediaExtensions, $self) {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: private, no-store');

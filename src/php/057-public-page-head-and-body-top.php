@@ -204,7 +204,7 @@ if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
     $ogUrl = $photoPass !== null ? $baseUrl . '/?' . rawurlencode((string) $_GET['k']) : $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
     $photoGroupKey = group_key($requestedPhoto);
-    if (isset($groups[$photoGroupKey]) && $photoPass === null) {   // (a Not listed photo's own page is previewed by the gallery's title: the photo's name says where it lives)
+    if (isset($groups[$photoGroupKey]) && $photoPass === null) {   // (an Only me photo's own page is previewed by the gallery's title: the photo's name says where it lives)
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;
     }
 }

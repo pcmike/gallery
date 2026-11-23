@@ -336,7 +336,7 @@ function collection_member_rows($dir, $rec, $files) {
 }
 
 function collection_pill($state) {
-    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Not listed'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
+    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Only me'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
     return '<span class="cm-pill' . $t[0] . '">' . $t[1] . '</span>';
 }
 

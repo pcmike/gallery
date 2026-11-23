@@ -206,13 +206,13 @@ function update_undo() {
 function update_undo_offer($recent) {
     $back = update_backup_version();
     if ($back === '' || !version_compare($back, GALLERY_VERSION, '<')) return ['', ''];
-    // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
+    // Going back to a version from before Only me (2.6.4 and older) turns every Only me folder into an ordinary private one, which anyone holding an
     // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
     $warn = '';
     if (version_compare($back, '2.6.4', '<=')) {
         $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
         foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
-        if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
+        if ($n > 0) $warn = 'You have ' . $n . ' Only me folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Only me: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Only me mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
     }
     if (!$recent) $warn = ($warn !== '' ? $warn . "\n\n" : '') . 'Put version ' . $back . ' back? It is the file this gallery was running before it was updated. Your photos, captions and settings stay as they are, but anything this version has saved since may not be understood by the older one (new kinds of settings, the visitor log, share links made since). Going back is for when something does not work after an update.';
     return ['Go back to ' . $back, $warn];

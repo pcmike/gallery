@@ -58,7 +58,7 @@ function slugify($text) {
 // traversal attempt never matches anything the scan itself produced,
 // with or without that extra step. See serve_image() below for the same
 // reasoning applied to ?img=.
-// A Not listed photo's own address arrives as /photos/<8 letters and digits> or /photos/?<8 letters and digits>, which is ?link=<them> to the script: when it
+// An Only me photo's own address arrives as /photos/<8 letters and digits> or /photos/?<8 letters and digits>, which is ?link=<them> to the script: when it
 // is one, the request becomes that photo's page (?photo=<path>&k=<code>) here; when it is not, it goes on as a share link's address below.
 if (request_route() === 'link') photo_address_translate($dir, $files, $itemsData);
 $requestedPhoto = null;
@@ -76,7 +76,7 @@ if ($requestedPhoto !== null && !isset($_GET['folder']) && request_route() === '
     header('Location: ?folder=' . rawurlencode(dirname($requestedPhoto)) . '&photo=' . rawurlencode($requestedPhoto), true, 302);
     exit;
 }
-// A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
+// An Only me photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
 // "GROUPING" below), kept out of search engines and not passed on in a Referer.
 $photoPass = null;
 if ($requestedPhoto !== null && request_route() === '' && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {   // (the photo's page only: a right code does not show on the other routes either)

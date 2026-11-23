@@ -408,7 +408,7 @@
         var b = ev.target.closest ? ev.target.closest('[data-update]') : null;
         if (!b || b.disabled) return;
         var what = b.getAttribute('data-update'), was = b.textContent;
-        if (what === 'undo' && b.getAttribute('data-warn') && !window.confirm(b.getAttribute('data-warn'))) return;   // (going back to a version that doesn't know Not listed: asked first)
+        if (what === 'undo' && b.getAttribute('data-warn') && !window.confirm(b.getAttribute('data-warn'))) return;   // (going back to a version that doesn't know Only me: asked first)
         b.disabled = true;
         if (what === 'dismiss') {   // (Hide this: the note that the gallery was just updated goes now, not after a day; the kept file stays)
           post({ action: 'update_dismiss' }, function (j) { if (j && j.ok) { var r = b.closest('.health-row'); if (r) r.remove(); if (window.__healthRecount) window.__healthRecount(); } else b.disabled = false; }, function () { b.disabled = false; });
@@ -580,10 +580,10 @@
             wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.');
             return;
           }
-          // With a private or Not listed folder, the missing rule is more than a tidiness: the web server answers an address of a folder that exists itself (a redirect,
+          // With a private or Only me folder, the missing rule is more than a tidiness: the web server answers an address of a folder that exists itself (a redirect,
           // a 403 or a file list) and a missing one with a 404, so a stranger can tell which private names exist, and the gallery's own identical "not found" never gets asked.
           const hiddenLeak = state === 'no' && probe.getAttribute('data-any-hidden-folder') === '1';
-          const leakSay = 'A private or Not listed folder can be told from a missing one by anyone who asks for its address: your web server answers a folder that exists by itself (a redirect, a 403 or a file list) and a missing one with a 404, so the gallery never gets to give both the same answer. Add the "tidy folder links" rule (in the block below).';
+          const leakSay = 'A private or Only me folder can be told from a missing one by anyone who asks for its address: your web server answers a folder that exists by itself (a redirect, a 403 or a file list) and a missing one with a 404, so the gallery never gets to give both the same answer. Add the "tidy folder links" rule (in the block below).';
           mirror('tidy', state === 'works' ? 'ok-text' : hiddenLeak ? 'warn-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
             : hiddenLeak ? leakSay : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
           if (state === 'works') wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' opens that folder (checked just now from this browser).');
@@ -1277,7 +1277,7 @@
     function folderList(form) { try { return JSON.parse(form.getAttribute('data-folders') || '[]'); } catch (x) { return []; } }
     function labelOf(form, path) { var f = folderList(form).filter(function (o) { return o.p === path; })[0]; return f ? f.l : path; }
     function parentOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
-    // The Not listed folders that sit in no other Not listed folder: a folder picked above one does not bring it along (it has to be picked itself), as the server reads it.
+    // The Only me folders that sit in no other Only me folder: a folder picked above one does not bring it along (it has to be picked itself), as the server reads it.
     function topUnlisted(form) {
       var all = {}, top = {};
       folderList(form).forEach(function (o) { if (o.u && !o.c) all[o.p] = true; });
@@ -1285,7 +1285,7 @@
       return top;
     }
     // Is this folder (a path) covered by what the link holds now? The nearest folder listed above it, itself included, decides: one that is picked takes it in with everything inside it,
-    // one that is left out (an exception) puts it out, and a Not listed folder is not taken in by a folder above it.
+    // one that is left out (an exception) puts it out, and an Only me folder is not taken in by a folder above it.
     function covered(form, p) {
       var un = topUnlisted(form), parts = p.split('/'), pre = '', on = false;
       for (var i = 0; i < parts.length; i++) {
@@ -1546,7 +1546,7 @@
       }
       syncForm(form);
     });
-    // The folder picker: a list of check boxes, as a tree. Ticking a folder ticks everything inside it (a Not listed folder is not brought along: it has to be ticked itself), and any
+    // The folder picker: a list of check boxes, as a tree. Ticking a folder ticks everything inside it (an Only me folder is not brought along: it has to be ticked itself), and any
     // of those can then be unticked. What is kept is the folders that are the top of a ticked part, and the folders left out of a ticked one (the link remembers those as exceptions).
     // The pickers for downloads and ZIPs are the same list with the folders inside a ticked one shown ticked and fixed: they take in everything inside, as they always did.
     function pickFolders(form, kind) {
@@ -1557,12 +1557,12 @@
       var byP = {}; list.forEach(function (o) { byP[o.p] = o; });
       var un = topUnlisted(form);
       var below = function (p) { return list.filter(function (o) { return !o.c && o.p.indexOf(p + '/') === 0; }); };   // everything under a folder, in this list
-      var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in a Not listed folder that is itself under p)
+      var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in an Only me folder that is itself under p)
       var tick = {};
       if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
       else st[kind].forEach(function (p) { tick[p] = true; });
       var rows = list.map(function (o) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : '') + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
       var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
         : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
@@ -1597,12 +1597,12 @@
             var t = !!tick[o.p];
             if (o.c) { if (t) tops.push(o.p); return; }
             var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
-            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; a Not listed folder is always its own top)
+            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; an Only me folder is always its own top)
             else if (!t && pt && !o.u) left.push(o.p);   // (left out of a ticked folder above it)
           });
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
-        // A Not listed folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
+        // An Only me folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
         var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
           if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
@@ -1611,7 +1611,7 @@
         };
         if (!newlyUnlisted.length) return finish();
         var names = newlyUnlisted.map(function (o) { return '<strong>' + esc(o.n || o.l) + '</strong>'; }).join(', ');
-        return ask('Include a Not listed folder?', '<p>' + names + (newlyUnlisted.length === 1 ? ' is' : ' are') + ' Not listed: only you can open ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '. Everyone with this link will see all of ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '.</p>', 'Include ' + (newlyUnlisted.length === 1 ? 'it' : 'them'), true).then(function (answer) {
+        return ask('Include an Only me folder?', '<p>' + names + (newlyUnlisted.length === 1 ? ' is' : ' are') + ' Only me: only you can open ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '. Everyone with this link will see all of ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '.</p>', 'Include ' + (newlyUnlisted.length === 1 ? 'it' : 'them'), true).then(function (answer) {
           if (answer !== true) { var drop = newlyUnlisted.map(function (o) { return o.p; }); st[kind] = st[kind].filter(function (p) { return drop.indexOf(p) < 0; }); }
           return finish();
         });
@@ -1929,25 +1929,36 @@
       if (draft) { sessionStorage.removeItem('galleryShareDraft'); var dv = JSON.parse(draft); dv.id = ''; setTimeout(function () { openForm(dv, dv.focusAddress ? 'address' : undefined); }, 300); }
     } catch (x) {}
   })();
-  // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
-  // photos stay private, how many become public) and waits for a yes.
-  [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
-    form.addEventListener('submit', function (ev) { ev.preventDefault(); });
-    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]');
-    var node = form.querySelector('.rowstate'), modal = document.getElementById('priv-modal');
-    var counts = { stay: +form.getAttribute('data-stay') || 0, open: +form.getAttribute('data-open') || 0 };
-    var noun = form.getAttribute('data-noun') || 'photo';
+  // Who can see this folder: four buttons (Public, Unlisted, Private, Only me), each saved the moment it is pressed. Opening a folder up (leaving Private or Only
+  // me for Public or Unlisted) first says what will happen (how many photos stay private, how many become public) and waits for a yes; closing it needs none.
+  [].forEach.call(document.querySelectorAll('.vis-choice'), function (wrap) {
+    var csrf = wrap.getAttribute('data-csrf'), node = wrap.querySelector('.rowstate'), desc = wrap.querySelector('.vis-desc'), modal = document.getElementById('priv-modal');
+    var radios = [].slice.call(wrap.querySelectorAll('input[name=vis]')), level = wrap.getAttribute('data-level');
+    var counts = { stay: +wrap.getAttribute('data-stay') || 0, open: +wrap.getAttribute('data-open') || 0 }, noun = wrap.getAttribute('data-noun') || 'photo', pending = null, descs = {};
+    try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
-    function paint() {
-      var dlBlock = document.querySelector('.dl-block'); if (dlBlock) dlBlock.hidden = box.checked;   // (a private folder offers visitors nothing: the download switch is for a public one)
-    }
     function say(text, kind) {
       node.textContent = text; node.className = 'rowstate ' + (kind || ''); clearTimeout(node._t);
       if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
     }
-    function send(hide, done) {
+    function paintOwn(own) {   // the Gallery of its own row follows the level: on by itself for Unlisted unless chosen, moot for Only me
+      var row = document.getElementById('own-gallery-row'); if (!row) return;
+      var box = row.querySelector('input[type=checkbox]'), note = row.querySelector('.own-note');
+      if (box) { if (own) box.checked = !!own.on; box.disabled = level === 'me'; }
+      row.classList.toggle('is-moot', level === 'me');
+      if (note && own) note.textContent = own.note || '';
+    }
+    function paint(l, own) {
+      level = l; wrap.setAttribute('data-level', l);
+      radios.forEach(function (r) { r.checked = r.value === l; });
+      if (desc) desc.textContent = descs[l] || '';
+      var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = l === 'private' || l === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
+      var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
+      paintOwn(own);
+    }
+    function send(to, done) {
       var body = new URLSearchParams();
-      body.set('csrf_token', csrf); body.set('action', 'toggle_folder_restriction'); if (hide) body.set('hidden', '1');
+      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to);
       say('Saving…', 'busy');
       fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
@@ -1955,43 +1966,45 @@
         .then(function (j) {
           if (!j.ok) { say(j.text, 'err'); done(false); return; }
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
-          box.checked = hide; paint(); say('Saved', 'ok'); window.__siteDirty = true; done(true);
+          paint(to, j.own); say('Saved', 'ok'); window.__siteDirty = true; done(true);
         })
         .catch(function (e) { say(e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); done(false); });
     }
-    function closeModal() { if (modal) modal.hidden = true; box.focus(); }
-    function ask() {
-      say('', '');
+    function closeModal() { pending = null; if (modal) modal.hidden = true; var c = wrap.querySelector('input[name=vis]:checked'); if (c) c.focus(); }
+    function ask(to) {
+      say('', ''); pending = to;
       fetch(location.href.replace(/#.*$/, '') + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
           document.getElementById('pm-stay').textContent = word(counts.stay); document.getElementById('pm-open').textContent = word(counts.open);
           document.getElementById('pm-stay-v').textContent = counts.stay === 1 ? 'stays' : 'stay'; document.getElementById('pm-open-v').textContent = counts.open === 1 ? 'becomes' : 'become';
+          var unl = to === 'unlisted';
+          document.getElementById('priv-modal-title').textContent = unl ? 'Open this folder to anyone with its address?' : 'Make this folder public?';
+          document.getElementById('pm-hint').textContent = unl ? 'Anyone who has the folder\'s address will see those, though it is left out of every list. Not right? Cancel, mark more photos private first, then come back.' : 'Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.';
+          document.getElementById('pm-ok').textContent = unl ? 'Open it' : 'Make public';
           modal.hidden = false; document.getElementById('pm-cancel').focus();
         })
-        .catch(function () { say('Couldn\'t check: reload the page and try again.', 'err'); });
+        .catch(function () { pending = null; say('Couldn\'t check: reload the page and try again.', 'err'); });
     }
-    // The Not listed switch below this one makes the folder private as well, and making the folder public ends it: keep the two in step.
-    document.addEventListener('instant-saved', function (ev) {
-      var d = ev.detail || {};
-      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = !d.unlisted; }
-    });
-    box.addEventListener('change', function () {
-      if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
-      box.checked = true;   // stays on until it is confirmed
-      if (modal) ask();
+    radios.forEach(function (r) {
+      r.addEventListener('change', function () {
+        if (!r.checked) return;
+        var to = r.value, opening = (level === 'private' || level === 'me') && (to === 'public' || to === 'unlisted');
+        if (opening && modal) { paint(level, null); ask(to); return; }   // (stays where it was until it is confirmed)
+        send(to, function (ok) { if (!ok) paint(level, null); });
+      });
     });
     if (modal) {
       document.getElementById('pm-cancel').addEventListener('click', closeModal);
       modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
       modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
       document.getElementById('pm-ok').addEventListener('click', function () {
-        modal.hidden = true;
-        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = true; box.focus(); });
+        var to = pending; modal.hidden = true; pending = null; if (!to) return;
+        send(to, function () { var c = wrap.querySelector('input[name=vis]:checked'); if (c) c.focus(); });
       });
     }
-    paint();
+    paint(level, null);
   });
   // "Use the folder above's choice": the folder drops its own choice for a switch it can take from the folder above it. The screen is drawn again, because
   // the switch's state, and the words under it, now come from somewhere else.
@@ -2636,7 +2649,7 @@
         function words() {
           var n = nm.value.trim(), t = [];
           if (n !== oldName) t.push(oldName === '' ? 'Giving it a name shows the whole place as one folder with that name.' : (n === '' ? 'With no name, its folders appear at the top of the gallery.' : 'Addresses with the old name (\u201c?folder=' + oldName + '/\u2026\u201d) stop working.'));
-          if (n !== oldName && oldName !== '' && n !== '') t.push('Its view counts follow it. Share links and Not listed addresses are not affected.');
+          if (n !== oldName && oldName !== '' && n !== '') t.push('Its view counts follow it. Share links and Only me addresses are not affected.');
           hint.textContent = t.join(' '); hint.hidden = !t.length;
         }
         nm.addEventListener('input', words); words();
@@ -2958,7 +2971,7 @@
       var chosenF = {}, chosenP = {};
       function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
       var rows = folders.map(function (o) {
-        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Not listed</small>' : '') + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
+        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Only me</small>' : '') + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
       }).join('');
       box.innerHTML = '<div class="cm-pick"><strong>Add to ' + esc(members.getAttribute('data-title')) + '</strong><p class="hint" style="margin:2px 0 8px">Tick a folder to add all of it, or open a folder’s photos to pick single ones.</p><ul>' + rows + '</ul><div class="cm-foot"><button type="button" class="primary" data-pick-add disabled>Add</button><button type="button" class="secondary" data-pick-cancel>Cancel</button><span class="rowstate" role="status" aria-live="polite"></span></div></div>';
       box.hidden = false;

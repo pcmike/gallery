@@ -300,7 +300,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_string($d['description'] ?? null) && $d['description'] !== '') $set[] = ['', 'Description'];
         if (is_string($d['dates'] ?? null) && $d['dates'] !== '') $set[] = ['', 'Dates: ' . $d['dates']];
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
-        if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
+        if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Only me'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
         if (($d['quiet'] ?? null) === true) $set[] = ['', 'Unlisted: public, left out of every list'];
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
@@ -626,16 +626,40 @@ function admin_downloads_inside_html($dir, $files, $folderPath, $list = null) {
     return '<span class="dl-inside-text">' . $k . ' of the ' . $n . ' folders inside it allow downloads: ' . $names . '.</span> ' . $btnOn . '<span class="dl-sep"> &middot; </span>' . $btnOff;
 }
 
-/** A folder's switches, in one run under the folder's description and its Cards/Flat choice: Gallery of its own, Private folder
- *  (contents included) and Not listed (with, once it is on, Allow downloading originals). Each is saved the moment it is pressed.
- *  The gallery's own top has none of them. */
+/** A folder's visibility, in one run under the folder's description and its Cards/Flat choice: "Who can see this folder" (Public, Unlisted, Private, Only me:
+ *  one choice, each button wearing the colour of the badge on the folder's card), then Gallery of its own and, for a public folder, Visitors can download
+ *  originals; for Only me, its own two switches. Each is saved the moment it is pressed. The gallery's own top has none of them. */
 function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts) {
     if ($adminFolderPath === null) return;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $private = !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private';
+    $me = $private && ($itemsHere['unlisted'] ?? null) === true;
+    $quiet = !$private && ($itemsHere['quiet'] ?? null) === true;
+    $level = $me ? 'me' : ($private ? 'private' : ($quiet ? 'unlisted' : 'public'));
+    $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
+    $descs = visibility_descriptions();
+    $ownExplicit = array_key_exists('ownGallery', $itemsHere) && is_bool($itemsHere['ownGallery']) ? $itemsHere['ownGallery'] : null;
+    $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
     <div class="folder-switches">
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', !empty($itemsHere['ownGallery']), 'Gallery of its own', '', ' <small class="muted">(limits navigation)</small>', 'unlisted-form'); ?>
+    <div class="vis-choice" id="vis-choice" data-level="<?= $esc($level) ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
+      <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
+      <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
+        <?php foreach ($names as $v => $nm): ?><label data-v="<?= $esc($v) ?>"><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $level === $v ? ' checked' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
+      </div>
+      <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$level]) ?></p>
+      <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
+        <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
+      </form>
+    </div>
+    <div class="unlisted-sub"<?= $me ? '' : ' hidden' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_address_file', 'addrfile', !empty($itemsHere['addressFile']), !empty($itemsHere['addressFile']) ? 'Links send the bare file' : 'Links open in the gallery', '', '', 'unlisted-form'); ?>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s link</small>', 'unlisted-form'); ?>
+    </div>
+    <div class="own-gallery-row<?= $me ? ' is-moot' : '' ?>" id="own-gallery-row">
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', $ownOn, 'Gallery of its own', '', ' <small class="muted">(limits navigation)</small>', 'unlisted-form'); ?>
+      <p class="hint own-note" data-own-explicit="<?= $ownExplicit === null ? '' : ($ownExplicit ? '1' : '0') ?>"><?= $esc(own_gallery_note($level, $ownExplicit)) ?></p>
+    </div>
     <?php if (!gallery_is_closed()): $dlFolders = public_download_current()[0]; ?>
     <div class="dl-block"<?= $private ? ' hidden' : '' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_downloads', 'dl', in_array($adminFolderPath, $dlFolders, true), 'Visitors can download originals', '', '', 'unlisted-form'); ?>
@@ -647,34 +671,34 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
       <?php endif; ?>
     </div>
     <?php endif; ?>
-    <form method="post" class="priv-folder-form" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="toggle_folder_restriction">
-      <input type="hidden" name="hidden" value="<?= $private ? '0' : '1' ?>">   <?php // what the Save button (no JavaScript) sends; the page's script sends its own request ?>
-      <div class="instant-row">
-        <label class="switch"><input type="checkbox" <?= $private ? 'checked' : '' ?> aria-label="Private folder"><span class="slider"></span></label>
-        <span class="instant-label">Private folder <small class="muted">(contents included)</small></span>
-        <span class="rowstate" role="status" aria-live="polite"></span>
-      </div>
-      <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
-    </form>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
-    <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_address_file', 'addrfile', !empty($itemsHere['addressFile']), !empty($itemsHere['addressFile']) ? 'Links send the bare file' : 'Links open in the gallery', '', '', 'unlisted-form'); ?>
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s link</small>', 'unlisted-form'); ?>
-    </div>
-    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own link, or make a share link that picks this folder.</p>
     </div>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
         <h3 id="priv-modal-title">Make this folder public?</h3>
         <div class="pm-row pm-stay"><?= ui_icon('lock') ?><span><strong id="pm-stay">0 photos</strong> <span id="pm-stay-v">stay</span> private</span></div>
         <div class="pm-row pm-open"><?= ui_icon('unlock') ?><span><strong id="pm-open">0 photos</strong> <span id="pm-open-v">become</span> public</span></div>
-        <p class="hint">Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.</p>
+        <p class="hint" id="pm-hint">Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.</p>
         <div class="pm-btns"><button type="button" class="secondary" id="pm-cancel">Cancel</button><button type="button" id="pm-ok">Make public</button></div>
       </div>
     </div>
 <?php
+}
+
+/** What each level of "Who can see this folder" means, in one plain sentence (shown under the buttons, and kept in step by the page's script). */
+function visibility_descriptions() {
+    return [
+        'public' => 'Everyone can open it, and it shows in the gallery.',
+        'unlisted' => 'Anyone with the address can open it, but it is not shown anywhere: not on the gallery\'s page, among the folders, on the map or in counts, and search engines are asked to skip it.',
+        'private' => 'Only you, people with the private-view password, and share links that include it. Everyone else gets "not found".',
+        'me' => 'Only you. Not even the private-view password opens it. You share it one photo at a time, with each photo\'s own address, or with a share link that picks this folder; an "Everything" share link leaves it out.',
+    ];
+}
+
+/** The line under "Gallery of its own": why it is on when the folder is Unlisted and the owner has not chosen, and that it does nothing for Only me. */
+function own_gallery_note($level, $explicit) {
+    if ($level === 'me') return 'No effect: only you can open this folder.';
+    if ($level === 'unlisted' && $explicit === null) return 'On because this folder is Unlisted: someone who types the address sees only this folder, with no way up or across to the rest of your gallery. Switch it off if you want them to find their way to the rest.';
+    return 'Someone who arrives here by a typed or pasted address sees only this folder, with no way up or across.';
 }
 
 /** Under a switch a folder takes from the folder above it: where its setting comes from (this folder's own choice, or the folder it is taken from), and

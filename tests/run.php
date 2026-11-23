@@ -1736,6 +1736,64 @@ check('[unlisted] Flat: the folder above lists its own photo and none of the Unl
 file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
 
 check('[unlisted] the Unlisted folder\'s own map page (typed, no sign-in) shows its place, and the folder above\'s map page shows only its own', str_contains(http_get("$baseQu/?map&folder=Trips%2FQuietBox")[1], '48.85') && str_contains(http_get("$baseQu/?map&folder=Trips")[1], '41.9') && !str_contains(http_get("$baseQu/?map&folder=Trips")[1], '48.85'));
+// (the settings file was rewritten for the Flat part: the owner signs in again)
+[, , $quH1] = http_post("$baseQu/?admin", ['access_code' => 'qu-admin-pw-1'], [], false);
+$quOwn = ['Cookie: ' . extract_cookie_header($quH1)];
+$quCsrf = (string) extract_csrf_token(http_get("$baseQu/?admin", $quOwn)[1]);
+[, , $quH2 ] = http_post("$baseQu/?reveal", ['access_code' => 'qu-view-pw-1'], [], false); $quView = ['Cookie: ' . extract_cookie_header($quH2)];
+$quAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseQu/?admin$q", $f + ['csrf_token' => $quCsrf], array_merge($quOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+// ---- the one action behind the four-way choice: each level is the whole of what is stored for it
+$quSet = fn (string $folder, string $level) => $quAdmin(['action' => 'set_folder_visibility', 'level' => $level], '&folder=' . rawurlencode($folder));
+$quItems = fn (string $folder) => read_data_file("$fxQu/$folder/.gallery-items.php");
+$quShape = function (string $folder) use ($quItems) { $d = $quItems($folder); return ['private' => ($d['restriction'] ?? '') === 'private', 'me' => ($d['unlisted'] ?? null) === true, 'quiet' => ($d['quiet'] ?? null) === true]; };
+$quR = $quSet('Open', 'unlisted');
+check('[visibility] Unlisted: stored as the folder\'s own `quiet` flag and nothing else (not private, not Only me); the answer says so', ($quR['ok'] ?? null) === true && ($quR['level'] ?? '') === 'unlisted' && $quShape('Open') === ['private' => false, 'me' => false, 'quiet' => true] && ($quR['quiet'] ?? null) === true && ($quR['private'] ?? null) === false, json_encode([$quR, $quShape('Open')]));
+check('[visibility] ...and a stranger no longer finds it listed on the front page, but opens it by its address', !str_contains(http_get("$baseQu/")[1], 'open-1.jpg') && str_contains(http_get("$baseQu/?folder=Open")[1], 'open-1.jpg'));
+$quR = $quSet('Open', 'me');
+check('[visibility] Only me: private plus the `unlisted` flag (as Not listed always was), and no `quiet`; the folder is closed to a stranger and to the private-view password', ($quR['ok'] ?? null) === true && $quShape('Open') === ['private' => true, 'me' => true, 'quiet' => false] && http_get("$baseQu/?folder=Open")[0] === 404 && http_get("$baseQu/?folder=Open", $quView)[0] === 404 && ($quR['unlisted'] ?? null) === true);
+$quR = $quSet('Open', 'private');
+check('[visibility] Private: the restriction only (no Only me, no Unlisted); the private-view password opens it, a stranger does not', ($quR['ok'] ?? null) === true && $quShape('Open') === ['private' => true, 'me' => false, 'quiet' => false] && http_get("$baseQu/?folder=Open")[0] === 404 && str_contains(http_get("$baseQu/?folder=Open", $quView)[1], 'open-1.jpg'));
+$quR = $quSet('Open', 'public');
+check('[visibility] Public: nothing stored for it at all (every flag cleared), and it is on the front page again', ($quR['ok'] ?? null) === true && $quShape('Open') === ['private' => false, 'me' => false, 'quiet' => false] && str_contains(http_get("$baseQu/")[1], 'open-1.jpg'));
+$quSet('Open', 'unlisted'); $quR = $quSet('Open', 'private');
+check('[visibility] Unlisted to Private leaves no `quiet` behind (the stricter level stands alone)', $quShape('Open') === ['private' => true, 'me' => false, 'quiet' => false]);
+$quSet('Open', 'me'); $quSet('Open', 'unlisted');
+check('[visibility] Only me to Unlisted leaves no restriction and no Only me flag behind: the folder is public again, and only unlisted', $quShape('Open') === ['private' => false, 'me' => false, 'quiet' => true] && http_get("$baseQu/?folder=Open")[0] === 200);
+$quSet('Open', 'public');
+check('[visibility] an unknown level, a missing level and the gallery\'s own top change nothing and say so', ($quSet('Open', 'secret')['ok'] ?? null) === false && ($quAdmin(['action' => 'set_folder_visibility'], '&folder=Open')['ok'] ?? null) === false && ($quAdmin(['action' => 'set_folder_visibility', 'level' => 'unlisted'])['ok'] ?? null) === false && $quShape('Open') === ['private' => false, 'me' => false, 'quiet' => false]);
+// the older lock button (the shell's, the pill, the viewer's) still works, and a private folder is not left Unlisted
+$quSet('Open', 'unlisted'); $quAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '1'], '&folder=Open');
+check('[visibility] the older "make this folder private" button on an Unlisted folder makes it Private and takes the Unlisted flag away', $quShape('Open') === ['private' => true, 'me' => false, 'quiet' => false]);
+$quAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=Open');
+$quSet('Open', 'unlisted'); $quAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=Open');
+check('[visibility] the older "Not listed" switch (now Only me) on an Unlisted folder likewise leaves only Only me', $quShape('Open') === ['private' => true, 'me' => true, 'quiet' => false]);
+$quSet('Open', 'public');
+// the Edited tab says so
+$quSet('Trips/QuietBox/Deep', 'unlisted');
+check('[visibility] the Edited tab lists an Unlisted folder', str_contains(http_get("$baseQu/?admin&classic=1", $quOwn)[1], 'Unlisted: public, left out of every list'));
+$quSet('Trips/QuietBox/Deep', 'public');
+// ---- Gallery of its own: on by itself for an Unlisted folder, until the owner says otherwise; nothing to do for Only me
+$quCrumb = fn (string $body) => preg_match('~<p class="breadcrumb">(.*?)</p>~s', $body, $m) ? $m[1] : null;
+$quTyped = fn (string $q) => http_get("$baseQu/$q", ['Sec-Fetch-Site: none', 'User-Agent: Mozilla/5.0 test'], false)[1];
+$quSetR = $quSet('Trips/QuietBox', 'unlisted');   // (through the action: it also notes that a gallery of its own exists, so the pages look)
+check('[own gallery default] the answer to choosing Unlisted says Gallery of its own is on, by default (not chosen by the owner), with the words for it', ($quSetR['own']['on'] ?? null) === true && ($quSetR['own']['explicit'] ?? null) === -1 && str_contains((string) ($quSetR['own']['note'] ?? ''), 'On because this folder is Unlisted'), json_encode($quSetR['own'] ?? null));
+$quBoxTyped = $quTyped('?folder=Trips%2FQuietBox');
+check('[own gallery default] arriving on an Unlisted folder by a typed address: no way up and no folder beside it, though no switch was pressed', $quCrumb($quBoxTyped) === null && !str_contains($quBoxTyped, 'href="?folder=Trips"') && str_contains($quBoxTyped, 'QUIET-SENTINEL'));
+check('[own gallery default] ...and arriving on a folder inside it: the way back stops at the Unlisted folder (nothing above it)', str_contains((string) $quCrumb($quTyped('?folder=Trips%2FQuietBox%2FDeep')), 'folder=Trips%2FQuietBox"') && !str_contains((string) $quCrumb($quTyped('?folder=Trips%2FQuietBox%2FDeep')), 'href="?folder=Trips"'));
+$quOff = $quAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=Trips%2FQuietBox');
+check('[own gallery default] switching it off on an Unlisted folder is a choice that is kept (stored as an explicit "no"), and the folder then has its way up again', ($quOff['ok'] ?? null) === true && ($quItems('Trips/QuietBox')['ownGallery'] ?? null) === false && str_contains((string) $quCrumb($quTyped('?folder=Trips%2FQuietBox')), 'href="?folder=Trips"'), json_encode($quItems('Trips/QuietBox')['ownGallery'] ?? 'unset'));
+$quOn = $quAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], '&folder=Trips%2FQuietBox');
+check('[own gallery default] switching it on again stores the choice and limits the way up again', ($quOn['ok'] ?? null) === true && ($quItems('Trips/QuietBox')['ownGallery'] ?? null) === true && $quCrumb($quTyped('?folder=Trips%2FQuietBox')) === null);
+$quAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=Trips%2FQuietBox'); $quSet('Trips/QuietBox', 'public'); $quAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=Trips%2FQuietBox');
+check('[own gallery default] for a Public folder the switch is as it always was: off stores nothing (no "no" is kept)', !array_key_exists('ownGallery', $quItems('Trips/QuietBox')));
+$quSet('Trips/QuietBox', 'unlisted');
+check('[own gallery default] ...and an Unlisted folder with no choice of its own is a gallery of its own again, from the moment it is Unlisted', $quCrumb($quTyped('?folder=Trips%2FQuietBox')) === null);
+$quMe = $quSet('Trips/QuietBox/Deep', 'me');
+check('[own gallery default] for Only me the answer says it has no effect (only the owner can open the folder), and the owner is not limited either way', ($quMe['own']['note'] ?? '') === 'No effect: only you can open this folder.' && str_contains((string) $quCrumb(http_get("$baseQu/?folder=Trips%2FQuietBox%2FDeep", array_merge($quOwn, ['Sec-Fetch-Site: none']))[1]), 'href="?folder=Trips"'));
+$quSet('Trips/QuietBox/Deep', 'public');
+// the folder settings page shows it as it is
+$quPageUnl = http_get("$baseQu/?admin&folder=Trips%2FQuietBox", $quOwn)[1];
+check('[own gallery default] the folder\'s settings show the switch ON with the note "On because this folder is Unlisted" and the Unlisted button chosen', preg_match('~<label class="switch"><input type="checkbox" name="owngallery" value="1"[^>]*checked~', $quPageUnl) === 1 && str_contains($quPageUnl, 'On because this folder is Unlisted') && str_contains($quPageUnl, '<input type="radio" name="vis" value="unlisted" checked>'));
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
@@ -1779,7 +1837,7 @@ check('[photo info] a folder nothing above has chosen for is off: the gallery-wi
 // who may see the photo at all
 check('[photo info] a private folder\'s photo is a 404 to a stranger (as the photo itself is), and gets its rows when the owner or the private-view password asks', $piGet('Italy/Priv/d.jpg')['status'] === 404 && $piGet('Italy/Priv/d.jpg', [$piOwner])['status'] === 200 && $piGet('Italy/Priv/d.jpg', [$piReveal])['status'] === 200);
 check('[photo info] a made-up file, a path that climbs out of the gallery, a bare folder name and no name at all answer 404 with nothing to learn from', $piGet('Italy/nothere.jpg')['status'] === 404 && $piGet('../index.php')['status'] === 404 && $piGet('Italy')['status'] === 404 && $piGet('')['status'] === 404 && $piGet('Italy/../Spain/c.jpg')['status'] === 404);
-check('[photo info] a photo\'s own code (?k=) gets nothing: a Not listed photo\'s page has no panel', $piGet('Italy/a.jpg', [], '&k=AbCdEfGh')['status'] === 404);
+check('[photo info] a photo\'s own code (?k=) gets nothing: an Only me photo\'s page has no panel', $piGet('Italy/a.jpg', [], '&k=AbCdEfGh')['status'] === 404);
 // the location gate: the folder, the photo, the gallery, who is looking
 $piItems = fn ($path) => json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxPi/$path/.gallery-items.php")), true);
 $pb = $piGet('Italy/Rome/hide.jpg'); $ps = $piGet('Italy/Rome/show.jpg');
@@ -3042,10 +3100,10 @@ check('[privacy] the owner\'s folder buttons carry a lock in each private folder
 check('[privacy] "private first" puts the photos kept private on their own first, even in a private folder where everything is hidden', preg_match_all('#class="card[^"]*"[^>]*data-file="([^"]+)"#', $p3PrivFirst, $p3Order) && ($p3Order[1][0] ?? '') === 'Europe/France/Paris/eiffel.jpg');
 // Folder settings that save field by field
 [, $p3Settings] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
-check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Metadata section with the location switch, the photo info switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'class="priv-folder-form"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Metadata</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
+check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Metadata section with the location switch, the photo info switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'id="vis-choice"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Metadata</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
 $p3Pos = function ($needle) use ($p3Settings) { $at = strpos($p3Settings, $needle); return $at === false ? PHP_INT_MAX : $at; };
-check('[settings order] a folder\'s settings run: name, dates, position, description, Cards/Flat, then Gallery of its own, Private folder, Not listed, then the order of the photos, then Metadata', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('class="priv-folder-form"') && $p3Pos('class="priv-folder-form"') < $p3Pos('name="unlisted"') && $p3Pos('name="unlisted"') < $p3Pos('class="field wide sort-details"') && $p3Pos('class="field wide sort-details"') < $p3Pos('<h3 class="subhead">Metadata</h3>') && $p3Pos('<h3 class="subhead">Metadata</h3>') < $p3Pos('id="map-under"'));
-check('[settings order] ...the order of the photos is a form of its own (so the switches can sit above it), sharing the one fingerprint, and the words beside the switches are short', substr_count($p3Settings, 'class="identity-form') === 2 && substr_count($p3Settings, 'name="loaded_hash"') === 2 && str_contains($p3Settings, 'Private folder <small class="muted">(contents included)</small>') && str_contains($p3Settings, 'Gallery of its own <small class="muted">(limits navigation)</small>') && !str_contains($p3Settings, 'class="hint priv-folder-note"') && !str_contains($p3Settings, 'visitors who arrive here can go no higher') && str_contains($p3Settings, 'To share it, send a photo'));
+check('[settings order] a folder\'s settings run: name, dates, position, description, Cards/Flat, then Who can see this folder (Public, Unlisted, Private, Only me), Gallery of its own, then the order of the photos, then Metadata', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('id="vis-choice"') && $p3Pos('id="vis-choice"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('class="field wide sort-details"') && $p3Pos('class="field wide sort-details"') < $p3Pos('<h3 class="subhead">Metadata</h3>') && $p3Pos('<h3 class="subhead">Metadata</h3>') < $p3Pos('id="map-under"'));
+check('[settings order] ...the order of the photos is a form of its own (so the switches can sit above it), sharing the one fingerprint, and the words beside the switches are short (the sentence under the four buttons says what each means)', substr_count($p3Settings, 'class="identity-form') === 2 && substr_count($p3Settings, 'name="loaded_hash"') === 2 && str_contains($p3Settings, 'Gallery of its own <small class="muted">(limits navigation)</small>') && !str_contains($p3Settings, 'class="hint priv-folder-note"') && !str_contains($p3Settings, 'visitors who arrive here can go no higher') && str_contains($p3Settings, 'each photo&#039;s own address') && !str_contains($p3Settings, 'Private folder <small'));
 check('[settings] ...each field has its own save note, and the Save buttons are only for a browser without JavaScript', substr_count($p3Settings, 'class="rowstate"') >= 8 && preg_match('#<div class="nojs-only"><button type="submit">Save folder settings</button></div>#', $p3Settings) === 1);
 $p3Hash = preg_match('/name="loaded_hash" value="([0-9a-f]{32})"/', $p3Settings, $m3) ? $m3[1] : '';
 $p3Desc = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'description' => 'Typed on its own', 'loaded_hash' => $p3Hash]);
@@ -4398,7 +4456,7 @@ check('[instant] the folder location switch works in place too: off answers JSON
 $jLocOn = $locAjax('&folder=Lisbon', true);
 check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 7);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", the two a collection asks (delete one; adding what a link would gain access to), Go back's question when a folder is Not listed, and one more elsewhere)
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 7);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", the two a collection asks (delete one; adding what a link would gain access to), Go back's question when a folder is Only me, and one more elsewhere)
 
 // Locations off for the whole gallery (the map is part of that): nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => false]));
@@ -4850,7 +4908,7 @@ check('[family] switching "Private" on for kids.jpg works, in place', ($r['ok'] 
 [, $famHome2] = http_get("$baseFam/");
 check('[family] kids.jpg is gone from the public page, the lightbox list and the photo count (4 now)', !str_contains($famHome2, 'kids.jpg') && str_contains($famHome2, '4 photos'));
 [, $bAdmin] = http_get("$baseFam/?admin&folder=Birthday", $famHdrs);
-[, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'value="toggle_folder_restriction"', [], $famHdrs);
+[, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'value="set_folder_visibility"', ['level' => 'private'], $famHdrs);
 check('[family] the "Hide this entire folder from public view" button works', str_contains($r, 'class="flash ok"'));
 [, $famHome3] = http_get("$baseFam/");
 check('[family] the Birthday folder disappears entirely (no card, count now 2), and typing its address gives a 404', !str_contains($famHome3, 'birthday') && !str_contains($famHome3, 'Birthday') && str_contains($famHome3, '2 photos') && http_get("$baseFam/?folder=Birthday")[0] === 404);
@@ -4955,7 +5013,7 @@ item_save("$baseArc/?admin&folder=OldTrip2020", $arcHdrs, 'old1.jpg', ['caption'
 [, $arcHome2] = http_get("$baseArc/"); [, $arcPage2] = http_get("$baseArc/?folder=OldTrip2020");
 check('[archive] display name, description and a caption can be saved on it; the data is kept with the archive itself, on that disk', str_contains($arcHome2, 'folder-cover-label">2020 Archive<') && str_contains($arcPage2, 'caption-badge" title="Before everything"') && is_file("$arcDisk/.gallery-items.php"));
 [, $arcAdm] = http_get("$baseArc/?admin&folder=OldTrip2020", $arcHdrs);
-user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'value="toggle_folder_restriction"', [], $arcHdrs);
+user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'value="set_folder_visibility"', ['level' => 'private'], $arcHdrs);
 check('[archive] it can be hidden like any folder: gone for the public, back for a viewer with the password', http_get("$baseArc/?folder=OldTrip2020")[0] === 404 && !str_contains(http_get("$baseArc/")[1], 'oldtrip2020'));
 [, , $arcViewHd] = http_get("$baseArc/?reveal", ['Authorization: Basic ' . base64_encode('v:arc-view')], false);
 check('[archive] ...(viewer password)', http_get("$baseArc/?folder=OldTrip2020", ['Cookie: ' . extract_cookie_header($arcViewHd)])[0] === 200);
@@ -5340,7 +5398,7 @@ check('[download] the files on the server were not changed by any of it', (strin
 check('[download] Settings has no "Let visitors download originals" row any more: it is each folder\'s own switch, and the main page\'s settings have one for the photos lying directly on it', !str_contains($dlSettings, 'id="setting-PUBLIC_DOWNLOAD_MODE"') && !str_contains($dlSettings, 'name="set_PUBLIC_DOWNLOAD_MODE"') && str_contains($dlSettings, 'Visitors can download the photos on this page') && str_contains($dlSettings, 'name="dl"'));
 // "Scrub location data" (on to start with): the location is taken out of every original a visitor is sent, shown or hidden on the page.
 $dlScrubTag = fn ($page) => preg_match('#<div class="site-row[^>]*id="setting-SCRUB_LOCATION_DATA"[^>]*>#', $page, $m) ? $m[0] : '';
-check('[scrub switch] Settings has Scrub location data as a setting of its own: always shown, a plain row (not indented under a download setting: there is none in Settings now), since it is in force wherever an original is sent (the viewer, a download, a Not listed photo\'s address, a link)', str_contains($dlScrubTag($dlSettings), 'id="setting-SCRUB_LOCATION_DATA"') && !str_contains($dlScrubTag($dlSettings), 'data-shown-when') && !str_contains($dlScrubTag($dlSettings), 'sub-row') && !str_contains($dlScrubTag($dlSettings), 'data-requires') && preg_match('/\\shidden[\\s>]/', $dlScrubTag($dlSettings)) === 0);
+check('[scrub switch] Settings has Scrub location data as a setting of its own: always shown, a plain row (not indented under a download setting: there is none in Settings now), since it is in force wherever an original is sent (the viewer, a download, an Only me photo\'s address, a link)', str_contains($dlScrubTag($dlSettings), 'id="setting-SCRUB_LOCATION_DATA"') && !str_contains($dlScrubTag($dlSettings), 'data-shown-when') && !str_contains($dlScrubTag($dlSettings), 'sub-row') && !str_contains($dlScrubTag($dlSettings), 'data-requires') && preg_match('/\\shidden[\\s>]/', $dlScrubTag($dlSettings)) === 0);
 file_put_contents("$fxDl/.gallery-config.php", $dlCfg(true, true));
 [, , $dlAdminHd] = http_post("$baseDl/?admin", ['login_password' => 'download-admin-1'], [], false);
 $dlAdmin = ['Cookie: ' . extract_cookie_header($dlAdminHd)];
@@ -6611,7 +6669,7 @@ $exViewers = [
     'a link to Trip, leaving Rome out' => [$ckX2, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg'])],
     'a link to Trip, leaving Rome out but taking Rome/Old in again' => [$ckX3, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Rome/Old/o1.jpg'])],
     'a link to Trip, leaving Rome and Nice out' => [$ckX4, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg'])],
-    'a link to Trip and the Not listed Hidden, leaving Rome out' => [$ckX5, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Hidden/h1.jpg'])],
+    'a link to Trip and the Only me Hidden, leaving Rome out' => [$ckX5, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Hidden/h1.jpg'])],
     'a link to Trip, leaving Rome out, only that' => [$ckX6, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg']],
     'a link to Trip, leaving Rome out, and one photo from Rome by name (mixed)' => [$ckX7, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Rome/r1.jpg'])],
 ];
@@ -6669,7 +6727,7 @@ $fwWords('Vault', 'VT', ['restriction' => 'private']);                          
 $fwWords('Vault/Inner', 'IN', []);
 $fwWords('Topsecret', 'TS', ['restriction' => 'private', 'items' => ['t1.jpg' => ['restriction' => 'public']]]);   // (one photo switched to public inside a private folder)
 $fwWords('Open', 'OP', []);                                                                  // (an ordinary public folder)
-$fwWords('Hid', 'HD', ['restriction' => 'private', 'unlisted' => true]);                    // (Not listed)
+$fwWords('Hid', 'HD', ['restriction' => 'private', 'unlisted' => true]);                    // (Only me)
 file_put_contents("$fxFw/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'fw-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'fw-reveal-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
 copy($indexSrc, "$fxFw/index.php");
 $portFw = find_free_port(); start_server($fxFw, $portFw); $baseFw = "http://127.0.0.1:$portFw";
@@ -6690,7 +6748,7 @@ $fwL1 = $fwMake('FW one subfolder', ['scope_type' => 'folders', 'scope_folders' 
 $fwL2 = $fwMake('FW one photo', ['scope_type' => 'photos', 'scope_photos' => $fwJ(['Vault/v1.jpg'])]);
 $fwL3 = $fwMake('FW the whole Vault', ['scope_type' => 'folders', 'scope_folders' => $fwJ(['Vault'])]);
 $fwL4 = $fwMake('FW everything', ['scope_type' => 'all']);
-$fwL5 = $fwMake('FW one photo of the Not listed folder', ['scope_type' => 'photos', 'scope_photos' => $fwJ(['Hid/h1.jpg'])]);
+$fwL5 = $fwMake('FW one photo of the Only me folder', ['scope_type' => 'photos', 'scope_photos' => $fwJ(['Hid/h1.jpg'])]);
 $fwReveal = extract_cookie_header(http_get("$baseFw/?reveal", ['Authorization: Basic ' . base64_encode('x:fw-reveal-pw-1')], false)[2]);
 check('[folder words] the links and the private-view sign-in for the test can be made', $fwL1 && $fwL2 && $fwL3 && $fwL4 && $fwL5 && $fwReveal);
 // For each viewer: the status of each folder's page (200 or 404) and whether it may read that folder's words (description, dates, notes). A folder
@@ -6701,7 +6759,7 @@ $fwViewers = [
     'a link to one photo of Vault'            => [$fwL2,          ['Vault' => [200, false], 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
     'a link to the whole of Vault'            => [$fwL3,          ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
     'an Everything link'                      => [$fwL4,          ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => 404]],
-    'a link to one photo of a Not listed folder' => [$fwL5,       ['Vault' => 404, 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => [200, false]]],
+    'a link to one photo of an Only me folder' => [$fwL5,       ['Vault' => 404, 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => [200, false]]],
     'someone with the private-view password'  => [$fwReveal,      ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => 404]],
     'the owner'                               => [$fwAdminCookie, ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => [200, true]]],
 ];
@@ -6729,7 +6787,7 @@ check('[folder words] a link preview (the page description) holds the public fol
 // The Flat folder style (names and notes on) prints each folder's description, dates and notes in its section: the same rule.
 file_put_contents("$fxFw/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'fw-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'fw-reveal-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'FOLDER_FLAT_NOTES' => true]));
 $fwFlatNot = ['a stranger' => ['TS', 'VT', 'IN', 'HD'], 'a link to one subfolder (Vault/Inner)' => ['VT', 'TS', 'HD'], 'a link to one photo of Vault' => ['VT', 'IN', 'TS', 'HD'], 'a link to the whole of Vault' => ['TS', 'HD'],
-    'an Everything link' => ['HD'], 'a link to one photo of a Not listed folder' => ['VT', 'IN', 'TS', 'HD'], 'someone with the private-view password' => ['HD'], 'the owner' => []];
+    'an Everything link' => ['HD'], 'a link to one photo of an Only me folder' => ['VT', 'IN', 'TS', 'HD'], 'someone with the private-view password' => ['HD'], 'the owner' => []];
 foreach ($fwFlatNot as $name => $not) {
     $hdr = ($ck = $fwViewers[$name][0]) ? ["Cookie: $ck"] : [];
     $page = http_get("$baseFw/", $hdr)[1]; $problems = [];
@@ -7926,7 +7984,7 @@ $portC3 = find_free_port(); start_server($fxC3, $portC3); $baseC3 = "http://127.
 $cOffR = http_get("$baseC3/?link=Rome", [], false);
 check('[folder redirect] with share links off the folder redirect and the sign-in address still work (the rule is in place whatever the setting), and any other name is the invalid page', $cOffR[0] === 302 && str_contains($cLoc($cOffR), 'Rome/') && http_get("$baseC3/?link=admin", [], false)[0] === 302 && http_get("$baseC3/?link=no-such-place", [], false)[0] === 404);
 for ($i = 0; $i < 10; $i++) http_get("$baseC3/?link=Wr0ngCod$i", [], false);
-check('[lockout] with share links switched off wrong addresses are still counted (a Not listed photo\'s address is guessed there too): the eleventh try is paused', http_get("$baseC3/?link=Wr0ngCodZ", [], false)[0] === 429);
+check('[lockout] with share links switched off wrong addresses are still counted (an Only me photo\'s address is guessed there too): the eleventh try is paused', http_get("$baseC3/?link=Wr0ngCodZ", [], false)[0] === 429);
 $cMiss = []; for ($cI = 0; $cI < 11; $cI++) $cMiss[] = http_get("$baseC/?link=guess-number-$cI", [], false)[0];
 check('[custom address] guessing names is held back like guessing tokens: a run of wrong names ends in a short lockout (429) that holds even for a name that exists', $cMiss[0] === 404 && end($cMiss) === 429 && http_get("$baseC/?link=later-folder", [], false)[0] === 429, json_encode($cMiss));
 
@@ -8412,7 +8470,7 @@ check('[collections] ...a real folder wins an address a collection also has: Ita
 check('[collections] ...the card carries the collection\'s own title, and no name of a file the visitor may not see is anywhere on the page', str_contains($coFront, 'Best Of') && !str_contains($coFront, 'SECRET-SENTINEL') && !str_contains($coFront, 'DRAWER-SENTINEL') && !str_contains($coFront, 'PRIVATE-I2'));
 [$coB, $coBody] = http_get("$baseCo/?folder=best-of");
 $coBCards = $coCards($coBody);
-check('[collections] a collection\'s page opens, with its member folders as cards that lead to the real folders (France/paris, France/lyon, Italy), and nothing of the private or Not listed folders', $coB === 200 && in_array('France/paris', $coBCards, true) && in_array('France/lyon', $coBCards, true) && in_array('Italy', $coBCards, true) && !in_array('Secret', $coBCards, true) && !in_array('Drawer', $coBCards, true) && !str_contains($coBody, 'SECRET-SENTINEL') && !str_contains($coBody, 'DRAWER-SENTINEL') && !str_contains($coBody, 'PRIVATE-I2'), json_encode($coBCards));
+check('[collections] a collection\'s page opens, with its member folders as cards that lead to the real folders (France/paris, France/lyon, Italy), and nothing of the private or Only me folders', $coB === 200 && in_array('France/paris', $coBCards, true) && in_array('France/lyon', $coBCards, true) && in_array('Italy', $coBCards, true) && !in_array('Secret', $coBCards, true) && !in_array('Drawer', $coBCards, true) && !str_contains($coBody, 'SECRET-SENTINEL') && !str_contains($coBody, 'DRAWER-SENTINEL') && !str_contains($coBody, 'PRIVATE-I2'), json_encode($coBCards));
 check('[collections] ...it counts only what the visitor may see: Paris 3, Lyon 1, Italy 1 (its private photo is not counted) and the title is the collection\'s', str_contains($coBody, 'Best Of') && preg_match('#\b5 photos\b#', $coBody) === 1, '');
 [$coHl] = http_get("$baseCo/?folder=Italy"); [$coMiss, $coMissBody] = http_get("$baseCo/?folder=nope");
 [$coSecretOnly, $coSecretOnlyBody] = http_get("$baseCo/?folder=locked-away"); [$coFam, $coFamBody] = http_get("$baseCo/?folder=family"); [$coOrph, $coOrphBody] = http_get("$baseCo/?folder=orphan");
@@ -8420,9 +8478,9 @@ check('[collections] a collection with nothing this visitor may see, a private o
 [$coFamV, $coFamVBody] = http_get("$baseCo/?folder=family", $coView); [, $coFrontV] = http_get("$baseCo/", $coView);
 check('[collections] someone with the private-view password sees the private collection (its card and its page)', $coFamV === 200 && in_array('family', $coCards($coFrontV), true));
 [, $coBV] = http_get("$baseCo/?folder=best-of", $coView);
-check('[collections] ...Best Of for them holds the Secret folder (private) and still not the Not listed one', in_array('Secret', $coCards($coBV), true) && !in_array('Drawer', $coCards($coBV), true) && !str_contains($coBV, 'DRAWER-SENTINEL'));
+check('[collections] ...Best Of for them holds the Secret folder (private) and still not the Only me one', in_array('Secret', $coCards($coBV), true) && !in_array('Drawer', $coCards($coBV), true) && !str_contains($coBV, 'DRAWER-SENTINEL'));
 [, $coBO] = http_get("$baseCo/?folder=best-of", $coOwn);
-check('[collections] the owner sees everything in it, the Not listed folder too', in_array('Secret', $coCards($coBO), true) && in_array('Drawer', $coCards($coBO), true));
+check('[collections] the owner sees everything in it, the Only me folder too', in_array('Secret', $coCards($coBO), true) && in_array('Drawer', $coCards($coBO), true));
 [$coF, $coFranceBody] = http_get("$baseCo/?folder=France");
 check('[collections] a collection that lives in a folder is a card on that folder\'s page, beside the real folders', $coF === 200 && in_array('France/highlights', $coCards($coFranceBody), true) && in_array('France/paris', $coCards($coFranceBody), true) && in_array('France/france-fav', $coCards($coFranceBody), true));
 [$coH, $coHighBody] = http_get("$baseCo/?folder=France/highlights");
@@ -8435,7 +8493,7 @@ check('[collections] renaming a member folder on disk keeps it in the collection
 shell_exec('rm -rf ' . escapeshellarg("$fxCo/France/paris-renamed"));
 [, $coAfterGone] = http_get("$baseCo/?folder=best-of");
 check('[collections] a member folder that is gone is simply missing from it: the page still opens with the rest', in_array('Italy', $coCards($coAfterGone), true) && !str_contains($coAfterGone, 'paris'));
-// A crawl: the sentinel names must not turn up for a stranger anywhere a collection could carry them, nor the Not listed one for the private-view password.
+// A crawl: the sentinel names must not turn up for a stranger anywhere a collection could carry them, nor the Only me one for the private-view password.
 $coLeak = [];
 $coRoutes = ['strip', 'preview', 'download', 'about', 'mapicon', 'manifest', 'track', 'original', 'img', 'video', 'archive', 'map', 'photo', 'folder'];
 foreach ($coRoutes as $coR) foreach (['', '=best-of', '=France%2Fhighlights', '=Secret', '=Drawer'] as $coArg) foreach (['', '&folder=best-of', '&size=full&folder=best-of'] as $coExtra) {
@@ -8447,8 +8505,8 @@ foreach ($coRoutes as $coR) foreach (['', '=best-of', '=France%2Fhighlights', '=
         if ($coWho !== 'view' && (str_contains($coBd, 'SECRET-SENTINEL') || str_contains($coBd, 'PRIVATE-I2'))) $coLeak[] = "secret in ?$coR$coArg$coExtra";
     }
 }
-check('[collections leak] a crawl of the gallery\'s routes aimed at collections and at the private folders never turns up a sentinel name for a stranger (private, Not listed) or for the private-view password (Not listed), and nothing answers 500', $coLeak === [], implode('; ', array_slice($coLeak, 0, 6)));
-check('[collections leak] ...and the private and Not listed photos are not served at all through any collection', http_get("$baseCo/?img=Secret%2FSECRET-SENTINEL.jpg&size=thumb")[0] === 404 && http_get("$baseCo/?original=Drawer%2FDRAWER-SENTINEL.jpg", $coView)[0] === 404 && http_get("$baseCo/?img=Drawer%2FDRAWER-SENTINEL.jpg&size=full", $coView)[0] === 404);
+check('[collections leak] a crawl of the gallery\'s routes aimed at collections and at the private folders never turns up a sentinel name for a stranger (private, Only me) or for the private-view password (Only me), and nothing answers 500', $coLeak === [], implode('; ', array_slice($coLeak, 0, 6)));
+check('[collections leak] ...and the private and Only me photos are not served at all through any collection', http_get("$baseCo/?img=Secret%2FSECRET-SENTINEL.jpg&size=thumb")[0] === 404 && http_get("$baseCo/?original=Drawer%2FDRAWER-SENTINEL.jpg", $coView)[0] === 404 && http_get("$baseCo/?img=Drawer%2FDRAWER-SENTINEL.jpg&size=full", $coView)[0] === 404);
 // Gallery of its own, on a collection: someone who arrives at the collection is offered no way above it and no folders beside it; one who clicks into a member folder keeps a way back to it.
 $coWrite([$coRec('00000000000a', '', 'best-of', 'Best Of', [['fid' => $coIds['France/lyon'], 'mode' => 'all'], ['fid' => $coIds['Italy'], 'mode' => 'all']], ['ownGallery' => true])]);
 file_put_contents("$fxCo/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['ownGalleries' => true]));
@@ -8535,7 +8593,7 @@ check('[collections admin] ...and so do the gallery\'s own settings, for the col
 [, $caCollPage] = http_get("$baseCa/?admin&folder=France%2Fhighlights", $caOwn);
 $caPos = function ($needle) use ($caCollPage) { $at = strpos($caCollPage, $needle); return $at === false ? PHP_INT_MAX : $at; };
 check('[collections admin] a collection\'s settings page: Display name with Address under it, Dates, Position, Description, Cards/Flat, then Show on front page, Gallery of its own (limits navigation), Private collection, then the order of the photos, then Members; headed "Collection" with a "Collection settings" tab and no Notes tab', $caPos('name="display_name"') < $caPos('name="coll_address"') && $caPos('name="coll_address"') < $caPos('name="dates"') && $caPos('name="dates"') < $caPos('name="sort_order"') && $caPos('name="sort_order"') < $caPos('name="description"') && $caPos('name="description"') < $caPos('name="subfolder_style"') && $caPos('name="subfolder_style"') < $caPos('name="front"') && $caPos('name="front"') < $caPos('name="owngallery"') && $caPos('name="owngallery"') < $caPos('name="private"') && $caPos('name="private"') < $caPos('class="field wide sort-details"') && $caPos('class="field wide sort-details"') < $caPos('<h3 class="subhead">Members</h3>') && str_contains($caCollPage, '<span class="muted">Collection</span>') && str_contains($caCollPage, 'Collection settings') && !str_contains($caCollPage, 'role="tab" data-tab="notes"') && !str_contains($caCollPage, '<div class="tab-panel" data-tab="notes">') && !str_contains($caCollPage, 'name="unlisted"') && !str_contains($caCollPage, 'id="map-under"'), json_encode([str_contains($caCollPage, '<span class="muted">Collection</span>'), str_contains($caCollPage, 'Collection settings'), !str_contains($caCollPage, 'role="tab" data-tab="notes"'), !str_contains($caCollPage, 'name="unlisted"'), !str_contains($caCollPage, 'id="map-under"')]));
-check('[collections admin] ...its switches say only their name (and "(limits navigation)"), there is no Not listed, no locations, no downloads, and Show on front page is offered because it lives in a folder', str_contains($caCollPage, 'Show on front page') && str_contains($caCollPage, 'Gallery of its own <small class="muted">(limits navigation)</small>') && str_contains($caCollPage, 'Private collection</span>') && !str_contains($caCollPage, '<span class="instant-label">Not listed') && !str_contains($caCollPage, 'Allow downloading originals'));
+check('[collections admin] ...its switches say only their name (and "(limits navigation)"), there is no Only me, no locations, no downloads, and Show on front page is offered because it lives in a folder', str_contains($caCollPage, 'Show on front page') && str_contains($caCollPage, 'Gallery of its own <small class="muted">(limits navigation)</small>') && str_contains($caCollPage, 'Private collection</span>') && !str_contains($caCollPage, '<span class="instant-label">Only me') && !str_contains($caCollPage, 'Allow downloading originals'));
 check('[collections admin] ...a collection on the front page has no "Show on front page" switch (it is there already)', !str_contains(http_get("$baseCa/?admin&folder=paris-best", $caOwn)[1], 'name="front"'));
 $caHighHash = preg_match('/name="loaded_hash" value="([0-9a-f]{32})"/', $caCollPage, $caM) ? $caM[1] : '';
 $caHs1 = $caPost(['action' => 'save_folder_identity', 'display_name' => 'Highlights of France', 'loaded_hash' => $caHighHash], '&folder=France%2Fhighlights');
@@ -8574,7 +8632,7 @@ $clItems = fn (string $f, array $x = []) => file_put_contents("$fxCl/$f/.gallery
 foreach (array_keys($clIds) as $clFo) $clItems($clFo);
 $clItems('Pics/b', ['items' => ['PRIV-OWN.jpg' => ['restriction' => 'private']]]);
 $clItems('Hidden', ['restriction' => 'private']);
-$clItems('Pics/a/Drawer', ['restriction' => 'private', 'unlisted' => true]);   // (a Not listed folder inside a folder that a collection holds with everything in it)
+$clItems('Pics/a/Drawer', ['restriction' => 'private', 'unlisted' => true]);   // (an Only me folder inside a folder that a collection holds with everything in it)
 $clRec = fn (string $id, string $name, string $title, array $items, array $more = []) => ['id' => 'c' . $id, 'parent' => '', 'name' => $name, 'title' => $title, 'items' => $items, 'at' => 1] + $more;
 file_put_contents("$fxCl/.gallery-collections.php", data_file_guard_line_for_tests() . json_encode(['collections' => [
     $clRec('0000000000a1', 'mix', 'Mix', [['fid' => $clIds['Pics/a'], 'mode' => 'all'], ['fid' => $clIds['Hidden'], 'mode' => 'all'], ['fid' => $clIds['Pics/b'], 'file' => 'pub.jpg']]),
@@ -8614,9 +8672,9 @@ $clDrawerSeen = function (array $hdr) use ($baseCl) {
     if (http_get("$baseCl/?original=Pics%2Fa%2FDrawer%2FDRAWER-SENTINEL.jpg", $hdr)[0] === 200) $seen[] = 'original';
     return $seen;
 };
-check('[collections links] a Not listed folder inside a folder that a collection holds is not given by a link that names the collection (nor by the folder above it, nor by Everything): it has to be picked by itself', $clDrawerSeen($clNamesMix) === [] && $clDrawerSeen($clNamesA) === [] && $clDrawerSeen($clEverything) === [] && $clDrawerSeen($clNamesDrafty) === [], json_encode([$clDrawerSeen($clNamesMix), $clDrawerSeen($clEverything)]));
+check('[collections links] an Only me folder inside a folder that a collection holds is not given by a link that names the collection (nor by the folder above it, nor by Everything): it has to be picked by itself', $clDrawerSeen($clNamesMix) === [] && $clDrawerSeen($clNamesA) === [] && $clDrawerSeen($clEverything) === [] && $clDrawerSeen($clNamesDrafty) === [], json_encode([$clDrawerSeen($clNamesMix), $clDrawerSeen($clEverything)]));
 [$clNamesDrawer] = $clMake('Names the drawer', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Pics/a/Drawer'])]);
-check('[collections links] ...and a link that picks the Not listed folder itself still opens it', $clNamesDrawer !== null && str_contains(http_get("$baseCl/?folder=Pics%2Fa%2FDrawer", $clNamesDrawer)[1], 'DRAWER-SENTINEL'));
+check('[collections links] ...and a link that picks the Only me folder itself still opens it', $clNamesDrawer !== null && str_contains(http_get("$baseCl/?folder=Pics%2Fa%2FDrawer", $clNamesDrawer)[1], 'DRAWER-SENTINEL'));
 [, $clPubMix] = http_get("$baseCl/?folder=mix", $clMixPublic);
 check('[collections links] "Public items only" on the collection applies to its members: the private folder in it gives them nothing, its folders\' public photos are theirs', http_get("$baseCl/?folder=Hidden", $clMixPublic)[0] === 404 && !in_array('Hidden', $clCards($clPubMix), true) && in_array('Pics/a', $clCards($clPubMix), true));
 check('[collections links] a link that does not name the collection never shows it (a link for one folder, even a folder the collection holds)', !in_array('mix', $clCards(http_get("$baseCl/", $clNamesA)[1]), true) && http_get("$baseCl/?folder=mix", $clNamesA)[0] === 404);
@@ -9235,11 +9293,11 @@ check('[update] without the page\'s own token (a forged request) nothing is done
 check('[update] the two new files are on the list of files the gallery made (so "remove what this gallery made" knows them, and nothing else is touched)', str_contains($upOld, "'.gallery-update.php' => 'update'") && str_contains($upOld, "'.gallery-previous.php' => 'previous'"));
 
 /* --------------------------------------------------------------------- *
- * Not listed folders: the owner's own drawer. A folder with a sentinel name and sentinel files is requested every way there is, as a
+ * Only me folders: the owner's own drawer. A folder with a sentinel name and sentinel files is requested every way there is, as a
  * stranger, as someone with the private-view password, on share links and as the owner. The sentinel must turn up for the owner (and for
  * a link that names the folder) and nowhere else.
  * --------------------------------------------------------------------- */
-echo "== Not listed folders ==\n";
+echo "== Only me folders ==\n";
 $fxNl = new_fixture_dir('notlisted');
 foreach (['Open', 'Open/Hid', 'SecretDrawer', 'Plain'] as $nlD) mkdir("$fxNl/$nlD", 0777, true);
 foreach (['front.jpg' => 1, 'Open/open-1.jpg' => 2, 'Open/Hid/NOTLISTED-DEEP.jpg' => 3, 'SecretDrawer/NOTLISTED-SENTINEL.jpg' => 4, 'SecretDrawer/NOTLISTED-TWO.jpg' => 5, 'Plain/PRIVATE-PLAIN.jpg' => 6] as $nlF => $nlC) make_jpeg("$fxNl/$nlF", 60, 60, $nlC * 20, 40, 90);
@@ -9259,7 +9317,7 @@ $nlCsrf = (string) extract_csrf_token(http_get("$baseNl/?admin", $nlOwn)[1]);
 $nlFormFolders = (function () use ($baseNl, $nlOwn) { $page = http_get("$baseNl/?admin", $nlOwn)[1]; return preg_match('/id="sl-form"[^>]*data-folders="([^"]*)"/', $page, $m) ? (json_decode(html_entity_decode($m[1], ENT_QUOTES), true) ?: []) : []; })();
 $nlFormU = []; foreach ($nlFormFolders as $nlFo) if (!empty($nlFo['u'])) $nlFormU[] = $nlFo['p'];
 sort($nlFormU);
-check('[not listed] the new link form is told which folders are Not listed (the one marked, and the folder inside it), so it can ask before one is picked', $nlFormU === ['Open/Hid', 'SecretDrawer'] && count(array_filter($nlFormFolders, fn ($f) => $f['p'] === 'Plain' && empty($f['u']))) === 1);
+check('[not listed] the new link form is told which folders are Only me (the one marked, and the folder inside it), so it can ask before one is picked', $nlFormU === ['Open/Hid', 'SecretDrawer'] && count(array_filter($nlFormFolders, fn ($f) => $f['p'] === 'Plain' && empty($f['u']))) === 1);
 $nlAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseNl/?admin$q", $f + ['csrf_token' => $nlCsrf], array_merge($nlOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
 $nlLinks = fn () => read_data_file("$fxNl/.gallery-links.php");
 $nlMake = function (string $label, array $f) use ($nlAdmin, $nlLinks, $baseNl, $fxNl) {
@@ -9292,38 +9350,38 @@ $nlCrawl = function (array $hdr) use ($baseNl, $nlPaths, $nlMedia) {
     foreach ($nlMedia as $q) { [$st, $body, $hd] = http_get("$baseNl$q", $hdr, true); if ($st === 200 && (str_starts_with($body, "\xFF\xD8") || preg_grep('~^Content-Type: *image~i', $hd))) $leaks[] = "media $q"; if (str_contains($body, 'NOTLISTED')) $leaks[] = "body $q"; }
     return $leaks;
 };
-$nlWho = ['a stranger' => [], 'someone with the private-view password' => $nlView, 'a link to Everything' => $nlLinkAll ?? [], 'a link to the Open folder (which has a Not listed folder inside)' => $nlLinkOpen ?? []];
+$nlWho = ['a stranger' => [], 'someone with the private-view password' => $nlView, 'a link to Everything' => $nlLinkAll ?? [], 'a link to the Open folder (which has an Only me folder inside)' => $nlLinkOpen ?? []];
 foreach ($nlWho as $nlName => $nlHdr) {
     $nlLeaks = $nlCrawl($nlHdr);
     check("[not listed] $nlName never meets the drawer or its photos, on any page or media address (" . (count($nlPaths) + count($nlMedia)) . " addresses)", $nlLeaks === []);
     if ($nlLeaks) echo "    leaks: " . implode('; ', $nlLeaks) . "\n";
 }
 $nlOwnFront = http_get("$baseNl/", $nlOwn)[1];
-check('[not listed] the owner sees the drawer, with the Not listed pill, and its photos open', str_contains($nlOwnFront, 'SecretDrawer') && str_contains($nlOwnFront, 'Not listed') && http_get("$baseNl/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=thumb", $nlOwn)[0] === 200 && str_contains(http_get("$baseNl/?folder=SecretDrawer", $nlOwn)[1], 'NOTLISTED-SENTINEL'));
-check('[not listed] the Not listed pill on the drawer\'s card says so and is not a button (a press must not offer to make the folder public)', str_contains($nlOwnFront, '<span class="folder-priv own unlisted"') && !str_contains($nlOwnFront, '<button type="button" class="folder-priv own unlisted"'));
+check('[not listed] the owner sees the drawer, with the Only me pill, and its photos open', str_contains($nlOwnFront, 'SecretDrawer') && str_contains($nlOwnFront, 'Only me') && http_get("$baseNl/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=thumb", $nlOwn)[0] === 200 && str_contains(http_get("$baseNl/?folder=SecretDrawer", $nlOwn)[1], 'NOTLISTED-SENTINEL'));
+check('[not listed] the Only me pill on the drawer\'s card says so and is not a button (a press must not offer to make the folder public)', str_contains($nlOwnFront, '<span class="folder-priv own unlisted"') && !str_contains($nlOwnFront, '<button type="button" class="folder-priv own unlisted"'));
 $nlOwnPage = http_get("$baseNl/?folder=SecretDrawer", $nlOwn)[1];
 $nlEdited = http_get("$baseNl/?admin&classic=1", $nlOwn)[1];
 $nlFramed = http_get("$baseNl/?folder=SecretDrawer&inframe=1", $nlOwn)[1];
 check('[shell] a gallery page inside the shell tells it after an owner action (a lock, a star, the editor, Select) so the sidebar\'s numbers (Edited...) move without waiting for the window to come back; one that is not framed carries nothing of it', str_contains($nlFramed, 'galleryShell:1,tick:1') && str_contains($nlFramed, '.priv-toggle,.cover-toggle,.addr-toggle') && !str_contains($nlOwnPage, 'galleryShell:1,tick:1'));
 check('[edited] a folder card\'s summary counts the photos that were given a new address too (it counted private, captions, links, locations and folder settings, and left them out)', str_contains($nlEdited, "location: 0, address: 0 }") && str_contains($nlEdited, "counts.address, 'new link', 'new links'"));
-check('[not listed] in the drawer the owner gets one quiet line that says so (nothing to press, no counts, no Make it public), and each photo\'s lock says whether its link is on or off (there is no public or private for it)', str_contains($nlOwnPage, 'id="folder-unlisted-note"') && str_contains($nlOwnPage, 'Not listed: only you can open this folder') && !str_contains($nlOwnPage, 'id="folder-priv-banner"') && !str_contains($nlOwnPage, '<span class="fpb-counts"') && !str_contains($nlOwnPage, '<em class="fpb-hint">') && str_contains($nlOwnPage, 'priv-toggle is-addr') && !str_contains($nlOwnPage, '<span>Folder</span></button>') && str_contains($nlOwnPage, 'Link on: anyone with this photo'), json_encode([str_contains($nlOwnPage, 'id="folder-unlisted-note"'), !str_contains($nlOwnPage, 'id="folder-priv-banner"'), str_contains($nlOwnPage, 'priv-toggle is-addr'), str_contains($nlOwnPage, '<span>Address on</span>'), !str_contains($nlOwnPage, '<span>Folder</span></button>'), str_contains($nlOwnPage, 'Link on: anyone with this photo')]));
+check('[not listed] in the drawer the owner gets one quiet line that says so (nothing to press, no counts, no Make it public), and each photo\'s lock says whether its link is on or off (there is no public or private for it)', str_contains($nlOwnPage, 'id="folder-unlisted-note"') && str_contains($nlOwnPage, 'Only me: only you can open this folder') && !str_contains($nlOwnPage, 'id="folder-priv-banner"') && !str_contains($nlOwnPage, '<span class="fpb-counts"') && !str_contains($nlOwnPage, '<em class="fpb-hint">') && str_contains($nlOwnPage, 'priv-toggle is-addr') && !str_contains($nlOwnPage, '<span>Folder</span></button>') && str_contains($nlOwnPage, 'Link on: anyone with this photo'), json_encode([str_contains($nlOwnPage, 'id="folder-unlisted-note"'), !str_contains($nlOwnPage, 'id="folder-priv-banner"'), str_contains($nlOwnPage, 'priv-toggle is-addr'), str_contains($nlOwnPage, '<span>Address on</span>'), !str_contains($nlOwnPage, '<span>Folder</span></button>'), str_contains($nlOwnPage, 'Link on: anyone with this photo')]));
 // a Private folder is not changed by any of this: the private-view password still opens it, a stranger still meets nothing
 check('[not listed] a plain Private folder is unchanged: the private-view viewer sees it and its photos, a stranger does not', str_contains(http_get("$baseNl/?folder=Plain", $nlView)[1], 'PRIVATE-PLAIN') && !str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN') && http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb", $nlView)[0] === 200 && http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb")[0] !== 200);
-// a folder that is not there and one that is Not listed answer alike, so the answer says nothing
+// a folder that is not there and one that is Only me answer alike, so the answer says nothing
 [$nlS1, $nlB1] = http_get("$baseNl/?folder=SecretDrawer", [], false); [$nlS2, $nlB2] = http_get("$baseNl/?folder=NoSuchFolder", [], false);
-check('[not listed] the page of a Not listed folder answers a stranger exactly as a folder that is not there does (same status, same body)', $nlS1 === $nlS2 && $nlB1 === $nlB2 && $nlS1 === 404);
+check('[not listed] the page of an Only me folder answers a stranger exactly as a folder that is not there does (same status, same body)', $nlS1 === $nlS2 && $nlB1 === $nlB2 && $nlS1 === 404);
 [$nlS3, $nlB3, $nlH3] = http_get("$baseNl/?link=SecretDrawer", [], false); [$nlS4, $nlB4, $nlH4] = http_get("$baseNl/?link=NoSuchFolder", [], false);
 check('[not listed] ...and the folder\'s name typed as an address is sent nowhere, just as a name that is not a folder is (no redirect that gives it away)', $nlS3 === $nlS4 && $nlB3 === $nlB4 && !preg_grep('~^Location:~i', $nlH3));
 [$nlS5, , $nlH5] = http_get("$baseNl/?link=SecretDrawer", $nlOwn, false);
 check('[not listed] ...while the owner is sent on to it', $nlS5 === 302 && (bool) preg_grep('~^Location: .*SecretDrawer/~', $nlH5));
 // a link that names the folder opens it, and only it
 $nlDrawerPage = http_get("$baseNl/?folder=SecretDrawer", $nlLinkDrawer ?? []);
-check('[not listed] a link that names the drawer shows it (its photos are there), but not the Open folder\'s Not listed folder', str_contains($nlDrawerPage[1], 'NOTLISTED-SENTINEL') && !str_contains(http_get("$baseNl/?folder=Open", $nlLinkDrawer ?? [])[1], 'NOTLISTED-DEEP'));
+check('[not listed] a link that names the drawer shows it (its photos are there), but not the Open folder\'s Only me folder', str_contains($nlDrawerPage[1], 'NOTLISTED-SENTINEL') && !str_contains(http_get("$baseNl/?folder=Open", $nlLinkDrawer ?? [])[1], 'NOTLISTED-DEEP'));
 // the folder control
 $nlOn = $nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=Plain');
 $nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
 $nlParts = [($nlOn['ok'] ?? null) === true, ($nlOn['private'] ?? null) === true, ($nlPlainItems['restriction'] ?? '') === 'private', ($nlPlainItems['unlisted'] ?? null) === true, !str_contains(http_get("$baseNl/?folder=Plain", $nlView)[1], 'PRIVATE-PLAIN'), http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb", $nlView)[0] !== 200];
-check('[not listed] the switch makes a folder Not listed: it is saved as private plus the flag, and the viewer who saw it a moment ago no longer does', !in_array(false, $nlParts, true));
+check('[not listed] the switch makes a folder Only me: it is saved as private plus the flag, and the viewer who saw it a moment ago no longer does', !in_array(false, $nlParts, true));
 if (in_array(false, $nlParts, true)) echo '    parts: ' . json_encode($nlParts) . ' reply: ' . json_encode($nlOn) . "\n";
 $nlOff = $nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=Plain');
 $nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
@@ -9331,15 +9389,15 @@ check('[not listed] switching it off leaves the folder private (the viewer sees 
 $nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=Plain');
 $nlPub = $nlAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=Plain');
 $nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
-check('[not listed] making the folder public again ends Not listed too (neither flag is left behind)', ($nlPub['ok'] ?? null) === true && !isset($nlPlainItems['restriction']) && !isset($nlPlainItems['unlisted']) && str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'));
+check('[not listed] making the folder public again ends Only me too (neither flag is left behind)', ($nlPub['ok'] ?? null) === true && !isset($nlPlainItems['restriction']) && !isset($nlPlainItems['unlisted']) && str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'));
 check('[not listed] a flag on a folder that is not private does nothing (public folders stay public)', (function () use ($nlWrite, $baseNl) { $nlWrite('Plain', ['unlisted' => true]); return str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'); })());
-check('[not listed] the folder\'s settings page offers the switch', str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'aria-label="Not listed"') && str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'toggle_folder_unlisted'));
+check('[not listed] the folder\'s settings page offers the choice (Only me is the one chosen)', str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], '<label data-v="me"><input type="radio" name="vis" value="me" checked>') && str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'set_folder_visibility'));
 $nlUnlock = fn () => file_put_contents("$fxNl/.gallery-login-attempts.php", data_file_guard_line_for_tests() . '{}');   // (wrong codes are counted; these checks send many on purpose, so each starts from a clean count)
 // ---- a photo's own address
 $nlAddr = fn (string $folder, string $file, bool $fresh = false) => $nlAdmin(['action' => 'photo_address', 'file' => $file] + ($fresh ? ['fresh' => '1'] : []), '&folder=' . rawurlencode($folder));
 $nlA = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg'); $nlB = $nlAddr('SecretDrawer', 'NOTLISTED-TWO.jpg');
 $nlUnlock();
-check('[photo address] the owner gets an address for a photo in a Not listed folder: eight letters and digits, a different one for each photo', ($nlA['ok'] ?? null) === true && preg_match('/^[A-Za-z0-9]{8}$/', $nlA['code'] ?? '') === 1 && preg_match('/^[A-Za-z0-9]{8}$/', $nlB['code'] ?? '') === 1 && $nlA['code'] !== $nlB['code']);
+check('[photo address] the owner gets an address for a photo in an Only me folder: eight letters and digits, a different one for each photo', ($nlA['ok'] ?? null) === true && preg_match('/^[A-Za-z0-9]{8}$/', $nlA['code'] ?? '') === 1 && preg_match('/^[A-Za-z0-9]{8}$/', $nlB['code'] ?? '') === 1 && $nlA['code'] !== $nlB['code']);
 $nlAQ = '?' . ($nlA['code'] ?? '-'); $nlBQ = '?' . ($nlB['code'] ?? '-');   // (the address as typed where the server has no rule: /photos/?<code>)
 $nlUnlock();
 check('[photo address] asking again gives the same address (nothing is stored to make it)', '?' . ($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg')['code'] ?? '') === $nlAQ && !str_contains((string) file_get_contents("$fxNl/SecretDrawer/.gallery-items.php"), '"addr"'));
@@ -9356,7 +9414,7 @@ $nlImg = fn (string $file, ?string $k, array $h = []) => http_get("$baseNl/?img=
 $nlUnlock();
 check('[photo address] its picture opens with the code, and not without it or with a wrong one', $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', $nlK)[0] === 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', null)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', 'AAAAAAAAAAAA')[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', substr($nlK, 0, 7))[0] !== 200);
 $nlUnlock();
-check('[photo address] one photo\'s code opens no other photo (not its neighbour, not the one in the Not listed folder inside Open)', $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', $nlK)[0] !== 200 && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', $nlK)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', substr($nlBQ, -8))[0] === 200);
+check('[photo address] one photo\'s code opens no other photo (not its neighbour, not the one in the Only me folder inside Open)', $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', $nlK)[0] !== 200 && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', $nlK)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', substr($nlBQ, -8))[0] === 200);
 [$nlSw, $nlBw] = http_get("$baseNl/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=AAAAAAAAAAAA", [], false); [$nlSn, $nlBn] = http_get("$baseNl/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg", [], false);
 $nlUnlock();
 check('[photo address] a wrong code is answered exactly like no code (the ordinary page, nothing of the photo)', $nlSw === $nlSn && $nlBw === $nlBn && !str_contains($nlBw, 'NOTLISTED-SENTINEL'));
@@ -9374,7 +9432,7 @@ $nlUnlock();
 check('[photo address] ...and asking afterwards gives the new address again', ($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg')['code'] ?? '') === ($nlFresh['code'] ?? 'x'));
 $nlDeep = $nlAddr('Open/Hid', 'NOTLISTED-DEEP.jpg');
 $nlUnlock();
-check('[photo address] a photo in a Not listed folder inside a public one has an address too, and it opens', ($nlDeep['ok'] ?? null) === true && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', (string) ($nlDeep['code'] ?? ''))[0] === 200);
+check('[photo address] a photo in an Only me folder inside a public one has an address too, and it opens', ($nlDeep['ok'] ?? null) === true && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', (string) ($nlDeep['code'] ?? ''))[0] === 200);
 $nlUnlock();
 check('[photo address] a photo in a public folder has none (the request is refused), and neither does a name that is not a photo', ($nlAddr('Open', 'open-1.jpg')['ok'] ?? null) === false && ($nlAddr('SecretDrawer', 'nothere.jpg')['ok'] ?? null) === false);
 $nlUnlock();
@@ -9405,9 +9463,9 @@ check('[short address] the owner\'s page already carries each address, so Copy n
 $nlUnlock();
 $nlWrong = [http_get("$baseNl/?Zz9Zz9Zz", [], false), http_get("$baseNl/?link=Zz9Zz9Zz", [], false), http_get("$baseNl/?x", [], false), http_get("$baseNl/?photo=nope.jpg", [], false), http_get("$baseNl/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg", [], false)];
 $nlUnlock();
-check('[short address] a wrong code, a wrong bare word, an unknown photo and a Not listed photo without its code all answer 404 with the same page, saying nothing of the photo', count(array_unique(array_map(fn ($r) => $r[0], $nlWrong))) === 1 && $nlWrong[0][0] === 404 && count(array_unique(array_map(fn ($r) => $r[1], $nlWrong))) === 1 && !str_contains($nlWrong[0][1], 'NOTLISTED'));
+check('[short address] a wrong code, a wrong bare word, an unknown photo and an Only me photo without its code all answer 404 with the same page, saying nothing of the photo', count(array_unique(array_map(fn ($r) => $r[0], $nlWrong))) === 1 && $nlWrong[0][0] === 404 && count(array_unique(array_map(fn ($r) => $r[1], $nlWrong))) === 1 && !str_contains($nlWrong[0][1], 'NOTLISTED'));
 $nlUnlock();
-check('[short address] a code is for the photo the request names: added to another page it opens nothing there (no Not listed folder card on the front page, no photo in the folder above, nothing from the drawer)', !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'SecretDrawer') && !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'NOTLISTED') && !str_contains(http_get("$baseNl/?folder=Open&k=$nlCode", [], false)[1], 'NOTLISTED') && http_get("$baseNl/?folder=SecretDrawer&k=$nlCode", [], false)[0] === 404);
+check('[short address] a code is for the photo the request names: added to another page it opens nothing there (no Only me folder card on the front page, no photo in the folder above, nothing from the drawer)', !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'SecretDrawer') && !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'NOTLISTED') && !str_contains(http_get("$baseNl/?folder=Open&k=$nlCode", [], false)[1], 'NOTLISTED') && http_get("$baseNl/?folder=SecretDrawer&k=$nlCode", [], false)[0] === 404);
 check('[short address] extra parameters a chat app adds to a shared address (?<code>&fbclid=…, ?link=<code>&utm_source=…) are ignored: the photo still opens; and on any other page they change nothing', str_contains(http_get("$baseNl/?$nlCode&fbclid=abc", [], false)[1], 'const files = ["' . $nlCode . '"]') && str_contains(http_get("$baseNl/?link=$nlCode&utm_source=x", [], false)[1], 'const files = ["' . $nlCode . '"]') && http_get("$baseNl/?utm_source=x&fbclid=abc", [], false)[0] === 200);
 $nlUnlock();
 check('[short address] the gallery\'s own bare words still mean what they did (?map, ?about)', http_get("$baseNl/?about", [], false)[0] === 200);
@@ -9435,14 +9493,14 @@ $nlUnlock();
 http_get("$baseNl/", $nlOwn);   // (the owner looking at the gallery keeps the list of copied ids current)
 check('[short address] the long form (?img=…&k=…) is refused too while a copy of the folder carries the same id, and serves again when the copy is gone', $nlLongImg() !== 200 && (function () use ($nlCopyDir, $baseNl, $nlOwn, $nlLongImg) { rrmdir($nlCopyDir); http_get("$baseNl/", $nlOwn); $ok = $nlLongImg() === 200; mkdir($nlCopyDir); foreach (dir_files("$GLOBALS[fxNl]/SecretDrawer") as $f) copy($f, $nlCopyDir . '/' . basename($f)); http_get("$baseNl/", $nlOwn); return $ok; })());
 check('[short address] a copy of the folder (it has the same hidden id) makes its photos\' addresses open nothing until the copy is gone, and they open again after', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]') && (function () use ($nlCopyDir, $baseNl, $nlCode) { rrmdir($nlCopyDir); return str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'); })());
-// the folder is not Not listed any more: nothing opens
+// the folder is not Only me any more: nothing opens
 $nlSavedDrawer = read_data_file("$fxNl/SecretDrawer/.gallery-items.php");   // (the folder's own file, with the random string "New address" kept on a photo)
 $nlWrite('SecretDrawer', array_diff_key($nlSavedDrawer, ['unlisted' => 1]));
 $nlUnlock();
-check('[short address] when the folder stops being Not listed its photos\' addresses open nothing', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
+check('[short address] when the folder stops being Only me its photos\' addresses open nothing', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
 $nlWrite('SecretDrawer', $nlSavedDrawer);
 $nlUnlock();
-check('[short address] ...and when it is Not listed again they open again, with the same address', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
+check('[short address] ...and when it is Only me again they open again, with the same address', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
 // "New address": a different one, the old stops
 $nlUnlock();
 $nlNewCode = (string) (($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg', true))['code'] ?? '');
@@ -9471,7 +9529,7 @@ http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlNewCode",
 check('[lockout] a right code that is turned away for another reason (the folder\'s downloads are switched off) is not counted as a wrong guess', $nlCountFor() === 0);
 // the long form (?img=…&k=…, what the page itself uses) is the same guess, at the same counter
 file_put_contents($nlLockPath, data_file_guard_line_for_tests() . '{}');
-for ($i = 0; $i < 10; $i++) http_get("$baseNl/?img=Nowhere%2Fnothing-here.jpg&size=thumb&k=Wr0ng$i", [], false);   // (a path that is not there: a wrong code counts all the same, or who is paused would say which Not listed photos exist)
+for ($i = 0; $i < 10; $i++) http_get("$baseNl/?img=Nowhere%2Fnothing-here.jpg&size=thumb&k=Wr0ng$i", [], false);   // (a path that is not there: a wrong code counts all the same, or who is paused would say which Only me photos exist)
 check('[lockout] guessing the code on a picture\'s own address counts the same (once per request, whether or not the photo it names exists)', (read_data_file($nlLockPath)['link|127.0.0.1']['lockUntil'] ?? 0) > time());
 check('[lockout] ...the right code is refused while paused', $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', $nlNewCode)[0] !== 200);
 file_put_contents($nlLockPath, data_file_guard_line_for_tests() . '{}');
@@ -9562,7 +9620,7 @@ check('[own gallery] a gallery that marks no folder sets no cookie at all, on it
 check('[own gallery] the folder\'s settings page has the switch (not at the gallery\'s own settings)', str_contains(http_get("$baseNv/?admin&folder=Eurotrip", $nvOwn)[1], 'toggle_folder_own_gallery') && !str_contains(http_get("$baseNv/?admin", $nvOwn)[1], 'toggle_folder_own_gallery'));
 
 /* --------------------------------------------------------------------- *
- * The public address's log: where each visit came in (an arrival, not a click inside the gallery), and Not listed photos opened by their address.
+ * The public address's log: where each visit came in (an arrival, not a click inside the gallery), and Only me photos opened by their address.
  * --------------------------------------------------------------------- */
 echo "== public log: came in at ==\n";
 $fxLg = new_fixture_dir('arrivelog');
@@ -9594,28 +9652,28 @@ $lgBeacon(['e' => [['f', '']], 'a' => ['f' => 'Open', 'h' => 'carrier pigeon']])
 $lgBeacon(['e' => [['f', '']], 'a' => ['f' => str_repeat('a', 700), 'h' => 'typed']]);
 $lgBeacon(['e' => [['f', '']], 'a' => ['f' => 'NoSuchFolder', 'h' => 'typed']]);
 $lgV2 = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
-check('[came in at] an arrival at a Not listed folder, a path with .., an unknown way of arriving, a long one and a folder that is not there are all ignored (nothing is kept for them)', ($lgV2['entry'] ?? null) === ['f' => 'Open', 'h' => 'typed'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive')) === 1);
+check('[came in at] an arrival at an Only me folder, a path with .., an unknown way of arriving, a long one and a folder that is not there are all ignored (nothing is kept for them)', ($lgV2['entry'] ?? null) === ['f' => 'Open', 'h' => 'typed'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive')) === 1);
 $lgBeacon(['e' => [], 'a' => ['f' => '', 'h' => 'link']]);
 check('[came in at] a later arrival (the front page, from a link) replaces where they came in and adds a line', (array_values($lgLog()['visitors'] ?? [])[0]['entry'] ?? null) === ['f' => '', 'h' => 'link'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive')) === 2);
-// a Not listed photo opened by its address
+// an Only me photo opened by its address
 $lgQ = '?' . ($lgAdmin(['action' => 'photo_address', 'file' => 'secret1.jpg'], '&folder=Drawer')['code'] ?? '-');
 $lgCode = substr($lgQ, -8);
-check('[came in at] the page of a Not listed photo\'s address says it was reached that way (the photo, not a folder) and does not say which photo: the route works that out from the code', str_contains($lgPage($lgQ, 'none'), 'galleryEntry = {"f":"","h":"typed","u":true}') && !str_contains($lgPage($lgQ, 'none'), 'secret1'));
+check('[came in at] the page of an Only me photo\'s address says it was reached that way (the photo, not a folder) and does not say which photo: the route works that out from the code', str_contains($lgPage($lgQ, 'none'), 'galleryEntry = {"f":"","h":"typed","u":true}') && !str_contains($lgPage($lgQ, 'none'), 'secret1'));
 $lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]]);
 check('[came in at] ...without its code (the beacon asks without it) neither the arrival nor the open is kept', ($lgV3 = array_values($lgLog()['visitors'] ?? [])[0] ?? []) && ($lgV3['entry'] ?? null) === ['f' => '', 'h' => 'link'] && !preg_grep('~Drawer~', array_map(fn ($e) => (string) ($e['f'] ?? ''), $lgLog()['events'] ?? [])));
 $lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]], "&photo=Drawer%2Fsecret1.jpg&k=$lgCode");
 $lgV4 = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
-check('[came in at] with its code the arrival and the open are kept, and the arrival is marked as a Not listed photo', ($lgV4['entry'] ?? null) === ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'opened' && ($e['f'] ?? '') === 'Drawer/secret1.jpg')) === 1);
+check('[came in at] with its code the arrival and the open are kept, and the arrival is marked as an Only me photo', ($lgV4['entry'] ?? null) === ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'opened' && ($e['f'] ?? '') === 'Drawer/secret1.jpg')) === 1);
 $lgVis = $lgView('visits=1&tab=visitors&src=public'); $lgTl = $lgView('visits=1&tab=timeline&src=public');
-check('[came in at] the Visitors view has a Came in at column (a Not listed photo is named as one, as a link to it), and the timeline says "Arrived at" and how', str_contains($lgVis, '<th scope="col">Came in at</th>') && str_contains($lgVis, 'Not listed photo') && str_contains($lgTl, 'Arrived at') && str_contains($lgTl, 'an address typed or pasted') && str_contains($lgTl, 'a link on another site') && str_contains($lgTl, 'Not listed'));
+check('[came in at] the Visitors view has a Came in at column (an Only me photo is named as one, as a link to it), and the timeline says "Arrived at" and how', str_contains($lgVis, '<th scope="col">Came in at</th>') && str_contains($lgVis, 'Only me photo') && str_contains($lgTl, 'Arrived at') && str_contains($lgTl, 'an address typed or pasted') && str_contains($lgTl, 'a link on another site') && str_contains($lgTl, 'Only me'));
 $lgCsv = $lgView('visitsexport=visitors&src=public'); $lgCsvE = $lgView('visitsexport=events&src=public');
-check('[came in at] the CSVs carry it (a came_in_at column; "arrived" lines)', str_contains($lgCsv, '"came_in_at"') && str_contains($lgCsv, 'Not listed photo secret1.jpg') && str_contains($lgCsvE, 'arrived'));
+check('[came in at] the CSVs carry it (a came_in_at column; "arrived" lines)', str_contains($lgCsv, '"came_in_at"') && str_contains($lgCsv, 'Only me photo secret1.jpg') && str_contains($lgCsvE, 'arrived'));
 check('[came in at] a gallery that does not log its public address records nothing of this (no script, no entry)', (function () use ($baseNl) { return !str_contains(http_get("$baseNl/?folder=Open", ['Sec-Fetch-Site: none'], false)[1], 'galleryEntry'); })());
 
 
 /* --------------------------------------------------------------------- *
  * Mapped folders: a place elsewhere on the server (EXTRA_FOLDERS) that ANOTHER gallery already uses, with that gallery's files in it.
- * What this gallery must do with them: honour what is in them, hide what it is told to hide (Not listed, private), add nothing a visitor can
+ * What this gallery must do with them: honour what is in them, hide what it is told to hide (Only me, private), add nothing a visitor can
  * see, never touch a photo, never delete or change the other gallery's own files (settings, links, secret, sign-ins, index.php), keep the
  * other gallery's thumbnails, and keep working when the place cannot be written. A copy of release 2.6.2 is run on the same folder to see that
  * the two live together.
@@ -9638,7 +9696,7 @@ $mpGuard = fn (string $path, array $data) => file_put_contents($path, data_file_
 $mpBuild = function (string $src) use ($mpGuard) {
     foreach (['Italy/Florence', 'France/Paris', 'MapDrawer/Deep'] as $d) mkdir("$src/$d", 0777, true);
     foreach (['top.jpg' => 1, 'Italy/rome.jpg' => 2, 'Italy/Florence/MAPPED-PRIVATE.jpg' => 3, 'France/Paris/tower.jpg' => 4, 'France/nice-private.jpg' => 5, 'MapDrawer/MAPSENTINEL-ONE.jpg' => 6, 'MapDrawer/Deep/MAPSENTINEL-DEEP.jpg' => 7] as $f => $c) make_jpeg("$src/$f", 60, 60, $c * 30, 50, 90);
-    // what a gallery of release 2.6.2 left in these folders: titles, captions, a private folder, a private photo, a Not listed drawer
+    // what a gallery of release 2.6.2 left in these folders: titles, captions, a private folder, a private photo, an Only me drawer
     $mpGuard("$src/.gallery-items.php", ['displayName' => 'Old trip', 'description' => 'ROOT-DESC', 'items' => ['top.jpg' => ['caption' => 'Top caption']]]);
     $mpGuard("$src/Italy/.gallery-items.php", ['displayName' => 'Bella Italia', 'cover' => 'rome.jpg', 'items' => ['rome.jpg' => ['caption' => 'Colosseum']]]);
     $mpGuard("$src/Italy/Florence/.gallery-items.php", ['restriction' => 'private']);
@@ -9674,7 +9732,7 @@ $mpFront = http_get("$baseMp/")[1];
 $mpEuro = http_get("$baseMp/?folder=Eurotrip")[1];
 check('[mapped] the place shows as one folder under its name, with the title and notes the other gallery left in it', str_contains($mpFront, 'id="group-eurotrip"') && str_contains($mpFront, 'Old trip') && str_contains($mpEuro, 'OLD-NOTES-LINE') && str_contains($mpEuro, 'Bella Italia'));
 check('[mapped] its private folder and private photo stay hidden from a stranger (the folder is not found, the photo is not on its page or served), and open for the private-view password', http_get("$baseMp/?folder=Eurotrip%2FItaly%2FFlorence")[0] === 404 && http_get("$baseMp/?img=Eurotrip%2FItaly%2FFlorence%2FMAPPED-PRIVATE.jpg&size=thumb")[0] === 404 && !str_contains(http_get("$baseMp/?folder=Eurotrip%2FFrance")[1], 'nice-private') && str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly%2FFlorence", $mpView)[1], 'MAPPED-PRIVATE'));
-check('[mapped] the other gallery\'s caption shows (the Colosseum), and its Not listed drawer is not found by a stranger or the private-view password', str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly")[1], 'Colosseum') && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404 && str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpOwn)[1], 'MAPSENTINEL-ONE'));
+check('[mapped] the other gallery\'s caption shows (the Colosseum), and its Only me drawer is not found by a stranger or the private-view password', str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly")[1], 'Colosseum') && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404 && str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpOwn)[1], 'MAPSENTINEL-ONE'));
 
 // 3. visitors, and the owner browsing, change nothing in the mapped place (but thumbnails and view counts)
 foreach (['/', '/?folder=Eurotrip', '/?folder=Eurotrip%2FItaly', '/?folder=Eurotrip%2FFrance%2FParis', '/?img=Eurotrip%2FItaly%2Frome.jpg&size=thumb'] as $mpQ) { http_get("$baseMp$mpQ"); http_get("$baseMp$mpQ", $mpView); http_get("$baseMp$mpQ", $mpOwn); }
@@ -9683,7 +9741,7 @@ $mpWasFresh = array_filter($mpFresh, fn ($k) => !preg_match('~(^|/)\.gallery-(ca
 check('[mapped] stranger, private-view and owner browsing changed none of the other gallery\'s files or photos (only thumbnails and view counts may appear)', $mpNow === $mpWasFresh);
 check('[mapped] the other gallery\'s thumbnail is still there after this gallery showed the folder (a place that is not this gallery\'s own is never swept)', is_file("$fxMpSrc/Italy/.gallery-cache/" . str_repeat('ab', 16) . '.jpg'));
 
-// 2. the sentinel crawl, as in the Not listed block, through the mapped name (and the same name in other letters)
+// 2. the sentinel crawl, as in the Only me block, through the mapped name (and the same name in other letters)
 $mpLink = function (string $label, array $f) use ($mpAdmin, $baseMp, $fxMpSite) {
     $made = $mpAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
     if (!($made['ok'] ?? false)) return null;
@@ -9715,17 +9773,17 @@ $mpCrawl = function (array $hdr) use ($baseMp, $mpPaths, $mpMedia) {
 };
 foreach (['a stranger' => [], 'someone with the private-view password' => $mpView, 'a link to Everything' => $mpLinkAll ?? [], 'a link to one folder (Italy)' => $mpLinkItaly ?? [], 'a link to the whole mapped place' => $mpLinkEuro ?? []] as $mpName => $mpHdr) {
     $mpLeaks = $mpCrawl($mpHdr);
-    check("[mapped] $mpName never meets the Not listed drawer inside the mapped place, on any page or media address (" . (count($mpPaths) + count($mpMedia)) . " addresses, the name also in other letters)", $mpLeaks === []);
+    check("[mapped] $mpName never meets the Only me drawer inside the mapped place, on any page or media address (" . (count($mpPaths) + count($mpMedia)) . " addresses, the name also in other letters)", $mpLeaks === []);
     if ($mpLeaks) echo "    leaks: " . implode('; ', $mpLeaks) . "\n";
 }
-check('[mapped] a link that names the drawer opens it, and the owner sees it with its pill', str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpLinkMapDrawer ?? [])[1], 'MAPSENTINEL-ONE') && str_contains(http_get("$baseMp/?folder=Eurotrip", $mpOwn)[1], 'Not listed'));
+check('[mapped] a link that names the drawer opens it, and the owner sees it with its pill', str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpLinkMapDrawer ?? [])[1], 'MAPSENTINEL-ONE') && str_contains(http_get("$baseMp/?folder=Eurotrip", $mpOwn)[1], 'Only me'));
 [$mpS1, $mpB1] = http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", [], false); [$mpS2, $mpB2] = http_get("$baseMp/?folder=Eurotrip%2FNoSuch", [], false);
 check('[mapped] the drawer inside the mapped place answers a stranger exactly as a folder that is not there does', $mpS1 === $mpS2 && $mpB1 === $mpB2 && $mpS1 === 404);
 
 // 4. the owner's switches on a mapped folder: stored in the folder, with the gallery's own note of it beside index.php
 $mpOn = $mpAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], $mpFolder('Eurotrip/France/Paris'));
 $mpParis = read_data_file("$fxMpSrc/France/Paris/.gallery-items.php");
-check('[mapped] Not listed on a folder in the mapped place is saved in that folder (private plus the mark), and a stranger then meets nothing of it', ($mpOn['ok'] ?? null) === true && ($mpParis['restriction'] ?? null) === 'private' && ($mpParis['unlisted'] ?? null) === true && http_get("$baseMp/?folder=Eurotrip%2FFrance%2FParis")[0] === 404 && http_get("$baseMp/?img=Eurotrip%2FFrance%2FParis%2Ftower.jpg&size=thumb")[0] === 404);
+check('[mapped] Only me on a folder in the mapped place is saved in that folder (private plus the mark), and a stranger then meets nothing of it', ($mpOn['ok'] ?? null) === true && ($mpParis['restriction'] ?? null) === 'private' && ($mpParis['unlisted'] ?? null) === true && http_get("$baseMp/?folder=Eurotrip%2FFrance%2FParis")[0] === 404 && http_get("$baseMp/?img=Eurotrip%2FFrance%2FParis%2Ftower.jpg&size=thumb")[0] === 404);
 $mpGo = $mpAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], $mpFolder('Eurotrip/Italy'));
 check('[mapped] Gallery of its own on a mapped folder is saved in the folder, and the gallery notes beside its own index.php (not in the mapped place) that one is marked', ($mpGo['ok'] ?? null) === true && (read_data_file("$fxMpSrc/Italy/.gallery-items.php")['ownGallery'] ?? null) === true && (read_data_file("$fxMpSite/.gallery-items.php")['ownGalleries'] ?? null) === true && !isset(read_data_file("$fxMpSrc/.gallery-items.php")['ownGalleries']));
 $mpUA = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
@@ -9741,7 +9799,7 @@ $mpQ1 = '?' . ($mpAddr['code'] ?? '-'); $mpK1 = substr($mpQ1, -8);
 $mpUnlock();
 $mpPage = http_get("$baseMp/$mpQ1", [$mpUA, 'Sec-Fetch-Site: none']);
 $mpUnlock();
-check('[mapped] a photo in a Not listed folder of the mapped place opens alone by its address (no neighbours, no folder, no way in), with its picture', ($mpAddr['ok'] ?? null) === true && $mpPage[0] === 200 && str_contains($mpPage[1], 'const files = ["' . $mpK1 . '"]') && !str_contains($mpPage[1], 'MAPSENTINEL') && !preg_match('~href="\?folder=~', $mpPage[1]) && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=$mpK1")[0] === 200 && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=AAAAAAAAAAAA")[0] === 404);
+check('[mapped] a photo in an Only me folder of the mapped place opens alone by its address (no neighbours, no folder, no way in), with its picture', ($mpAddr['ok'] ?? null) === true && $mpPage[0] === 200 && str_contains($mpPage[1], 'const files = ["' . $mpK1 . '"]') && !str_contains($mpPage[1], 'MAPSENTINEL') && !preg_match('~href="\?folder=~', $mpPage[1]) && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=$mpK1")[0] === 200 && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=AAAAAAAAAAAA")[0] === 404);
 $mpUnlock();
 check('[mapped] ...its original needs the folder\'s own downloads switch (off to start with), and follows it', http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] !== 200
     && (($mpAdmin(['action' => 'toggle_folder_originals', 'originals' => '1'], $mpFolder('Eurotrip/MapDrawer'))['ok'] ?? null) === true) && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] === 200 && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg")[0] !== 200);
@@ -9751,7 +9809,7 @@ $mpUnlock();
 check('[mapped] New address on a photo in the mapped place stops the old address at once and the new one opens it', '?' . ($mpFresh2['code'] ?? '') !== $mpQ1 && !str_contains(http_get("$baseMp/$mpQ1")[1], 'const files = ["' . substr($mpQ1, -8) . '"]') && str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'const files = ["' . ($mpFresh2['code'] ?? '-') . '"]')
     && (read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '');
 
-// 6. the public log: where a visitor came in, with a Not listed photo of the mapped place
+// 6. the public log: where a visitor came in, with an Only me photo of the mapped place
 $mpLogFile = "$fxMpSite";
 $mpK2 = (string) ($mpFresh2['code'] ?? '');
 $mpBeacon = function (array $payload, string $query = '') use ($baseMp, $mpUA) {
@@ -9761,7 +9819,7 @@ $mpUnlock();
 $mpBeacon(['e' => [['o', 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg']], 'a' => ['f' => 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg', 'h' => 'typed', 'u' => 1]], "&photo=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK2");
 $mpEv = vl_log($mpLogFile, 'ffffffffff')['events'] ?? [];
 $mpUnlock();
-check('[mapped] the public log keeps where a visitor came in at a Not listed photo of the mapped place (with its code), and not without the code', count(array_filter($mpEv, fn ($e) => ($e['k'] ?? '') === 'arrive' && str_contains((string) ($e['f'] ?? ''), 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg'))) === 1);
+check('[mapped] the public log keeps where a visitor came in at an Only me photo of the mapped place (with its code), and not without the code', count(array_filter($mpEv, fn ($e) => ($e['k'] ?? '') === 'arrive' && str_contains((string) ($e['f'] ?? ''), 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg'))) === 1);
 $mpUnlock();
 $mpBeacon(['e' => [['o', 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg']], 'a' => ['f' => 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg', 'h' => 'typed', 'u' => 1]]);
 $mpUnlock();
@@ -9786,7 +9844,7 @@ if (str_starts_with($mpOldIndex, '<?php')) {
     $mpOldAdmin(['action' => 'save_item', 'file' => 'MAPSENTINEL-ONE.jpg', 'caption' => 'a caption typed in the other gallery'], '&folder=MapDrawer');
     $mpMapDrawer = read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php");
     $mpUnlock();
-    check('[mapped] a caption saved in the other gallery keeps this gallery\'s Not listed mark, the photo\'s own address and the downloads switch (they are not dropped)', ($mpMapDrawer['unlisted'] ?? null) === true && ($mpMapDrawer['restriction'] ?? null) === 'private' && ($mpMapDrawer['allowOriginals'] ?? null) === true && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') === ($mpFresh2['code'] ?? false ? read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] : '') && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '' && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['caption'] ?? '') === 'a caption typed in the other gallery');
+    check('[mapped] a caption saved in the other gallery keeps this gallery\'s Only me mark, the photo\'s own address and the downloads switch (they are not dropped)', ($mpMapDrawer['unlisted'] ?? null) === true && ($mpMapDrawer['restriction'] ?? null) === 'private' && ($mpMapDrawer['allowOriginals'] ?? null) === true && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') === ($mpFresh2['code'] ?? false ? read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] : '') && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '' && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['caption'] ?? '') === 'a caption typed in the other gallery');
     $mpUnlock();
     check('[mapped] ...and the photo\'s address still opens it here after that save', str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'const files = ["' . ($mpFresh2['code'] ?? '-') . '"]'));
     $mpOldAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=MapDrawer');
@@ -9795,7 +9853,7 @@ if (str_starts_with($mpOldIndex, '<?php')) {
     check('[mapped] if the other gallery makes the drawer public, this gallery shows it as public (what it says is followed)', $mpSeen === 200);
     $mpOldAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '1'], '&folder=MapDrawer');
     $mpUnlock();
-    check('[mapped] ...and when the other gallery makes it private again the old Not listed mark is still in the file, so here it is Not listed again (documented)', http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404);
+    check('[mapped] ...and when the other gallery makes it private again the old Only me mark is still in the file, so here it is Only me again (documented)', http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404);
     $mpUnlock();
     check('[mapped] the other gallery\'s own pages and admin still work after all this', http_get("$baseMo/")[0] === 200 && http_get("$baseMo/?admin&folder=Italy", $mpOldOwn)[0] === 200 && http_get("$baseMo/?folder=Italy")[0] === 200);
     $mpUnlock();
@@ -9841,13 +9899,13 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     $mpRo1 = $mpAdmin3(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=' . rawurlencode('Eurotrip/France'));
     $mpRo2 = $mpAdmin3(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], '&folder=' . rawurlencode('Eurotrip/France'));
     $mpRo3 = $mpAdmin3(['action' => 'toggle_folder_originals', 'originals' => '1'], '&folder=' . rawurlencode('Eurotrip/MapDrawer'));
-    check('[mapped read-only] Not listed, Gallery of its own and the downloads switch say they could not be saved (nothing is claimed), and nothing in the place changed', ($mpRo1['ok'] ?? null) === false && str_contains((string) ($mpRo1['text'] ?? ''), 'writable') && ($mpRo2['ok'] ?? null) === false && ($mpRo3['ok'] ?? null) === false
+    check('[mapped read-only] Only me, Gallery of its own and the downloads switch say they could not be saved (nothing is claimed), and nothing in the place changed', ($mpRo1['ok'] ?? null) === false && str_contains((string) ($mpRo1['text'] ?? ''), 'writable') && ($mpRo2['ok'] ?? null) === false && ($mpRo3['ok'] ?? null) === false
         && (read_data_file("$fxMpSrc3/France/.gallery-items.php")['unlisted'] ?? null) === null && (read_data_file("$fxMpSrc3/France/.gallery-items.php")['ownGallery'] ?? null) === null);
     [, $mpHealth3] = http_get("$baseMp3/?admin", $mpOwn3);
     check('[mapped read-only] the Health check looks at the place itself (it holds only folders, so it was never reached before) and says it is not writable, by its real path', str_contains($mpHealth3, 'not writable by the web server') && str_contains($mpHealth3, htmlspecialchars((string) realpath($fxMpSrc3), ENT_QUOTES)));
     $mpRo4 = $mpAdmin3(['action' => 'save_folder_identity', 'display_name' => 'Nope'], '&folder=' . rawurlencode('Eurotrip/France'));
     check('[mapped read-only] a save in the place says which folder is not writable, by its real path (the owner may not know where a place is)', ($mpRo4['ok'] ?? null) === false && str_contains((string) ($mpRo4['text'] ?? ''), 'the folder ' . realpath($fxMpSrc3) . '/France') && str_contains((string) ($mpRo4['text'] ?? ''), 'isn\'t writable'), json_encode($mpRo4));
-    check('[mapped read-only] the drawer that was already Not listed in the place is still Not listed (a stranger and the private-view password still meet nothing)', http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer", [])[0] === 404);
+    check('[mapped read-only] the drawer that was already Only me in the place is still Only me (a stranger and the private-view password still meet nothing)', http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer", [])[0] === 404);
     shell_exec('chmod -R u+w ' . escapeshellarg($fxMpSrc3));
     proc_terminate($mpProc3);
 } else {
@@ -9861,7 +9919,7 @@ file_put_contents("$fxMpSite4/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' =
 copy($indexSrc, "$fxMpSite4/index.php");
 $portMp4 = find_free_port(); $mpProc4 = start_server($fxMpSite4, $portMp4); $baseMp4 = "http://127.0.0.1:$portMp4";
 $mpTop = http_get("$baseMp4/")[1];
-check('[mapped, no name] the place\'s folders appear at the top (Italy; France has nothing a stranger may see), and its Not listed drawer does not, for a stranger', str_contains($mpTop, 'id="group-italy"') && !str_contains($mpTop, 'MAPSENTINEL') && stripos($mpTop, 'drawer') === false);
+check('[mapped, no name] the place\'s folders appear at the top (Italy; France has nothing a stranger may see), and its Only me drawer does not, for a stranger', str_contains($mpTop, 'id="group-italy"') && !str_contains($mpTop, 'MAPSENTINEL') && stripos($mpTop, 'drawer') === false);
 check('[mapped, no name] the drawer at the top is not found by a stranger, its photos are not served, and its name typed as an address goes nowhere', http_get("$baseMp4/?folder=MapDrawer")[0] === 404 && http_get("$baseMp4/?img=MapDrawer%2FMAPSENTINEL-ONE.jpg&size=thumb")[0] === 404 && http_get("$baseMp4/?original=MapDrawer%2FMAPSENTINEL-ONE.jpg")[0] !== 200
     && http_get("$baseMp4/?link=MapDrawer", [], false)[0] === http_get("$baseMp4/?link=NoSuchFolder", [], false)[0] && http_get("$baseMp4/?folder=mapdrawer")[0] === 404);
 // the Health check says what is not shown here (loose photos, a copied folder); the first can be set aside, the second cannot
@@ -9871,7 +9929,7 @@ make_jpeg("$fxMpSite4/CopyA/x.jpg", 60, 50, 1, 2, 3); make_jpeg("$fxMpSite4/Copy
 foreach (['CopyA', 'CopyB'] as $mpCopy) write_data_file("$fxMpSite4/$mpCopy/.gallery-items.php", ['items' => [], 'groups' => [], 'folderId' => 'abcdef012345', 'restriction' => 'private', 'unlisted' => true]);
 $mpHp4 = http_get("$baseMp4/?admin&classic=1", $mpOwn4)[1];
 check('[left behind] a photo lying directly in a place added without a name is a Health row (amber, with Set aside), since it is not shown', str_contains($mpHp4, 'lying directly in a place added without a name') && str_contains($mpHp4, 'data-aside="loose-photos"'));
-check('[left behind] two folders carrying the same hidden id are a Health row that says what stops working (links and a Not listed one\'s photo links), and it has no Set aside', str_contains($mpHp4, 'is carried by more than one folder (a copy)') && str_contains($mpHp4, 'photo links of a Not listed one') && substr_count($mpHp4, 'data-aside="') === 1 && !preg_match('~is carried by more than one folder.{0,900}data-aside~s', $mpHp4));
+check('[left behind] two folders carrying the same hidden id are a Health row that says what stops working (links and an Only me one\'s photo links), and it has no Set aside', str_contains($mpHp4, 'is carried by more than one folder (a copy)') && str_contains($mpHp4, 'photo links of an Only me one') && substr_count($mpHp4, 'data-aside="') === 1 && !preg_match('~is carried by more than one folder.{0,900}data-aside~s', $mpHp4));
 proc_terminate($mpProc4);
 
 // 11. through all of it, no photo anywhere in the mapped place was changed
@@ -9982,7 +10040,7 @@ $cvPost(['action' => 'photo_address', 'file' => 'a.jpg', 'fresh' => '1'], 'trip/
 $cvPost(['action' => 'set_folder_cover', 'mode' => 'follow', 'child' => 'florence'], 'trip');
 write_data_file("$fxCv/trip/florence/.gallery-items.php", array_replace($cvItems('trip/florence'), ['subfolderStyle' => 'flat', 'flatNames' => false, 'flatNotes' => true, 'stacks' => [['anchor' => 'a.jpg', 'files' => ['a.jpg', 'b.jpg']]]]));
 $cvEd = http_get("$baseCv/?admin&classic=1", $cvOwn)[1];
-foreach (['Gallery of its own', 'Not listed', 'Originals can be downloaded from a photo&#039;s link', 'Folders under it: Flat', 'Folder names hidden (Flat)', 'Folder notes shown (Flat)', '1 stack of photos', 'Cover: follows florence', 'new address', 'A new link was made for it'] as $cvPhrase) {
+foreach (['Gallery of its own', 'Only me', 'Originals can be downloaded from a photo&#039;s link', 'Folders under it: Flat', 'Folder names hidden (Flat)', 'Folder notes shown (Flat)', '1 stack of photos', 'Cover: follows florence', 'new address', 'A new link was made for it'] as $cvPhrase) {
     check("[edited] the Edited tab lists: " . html_entity_decode($cvPhrase, ENT_QUOTES), str_contains($cvEd, $cvPhrase) || str_contains($cvEd, str_replace('Cover: follows florence', 'Cover photo: follows florence', $cvPhrase)));
 }
 check('[edited] ...and has a chip for photos with a new address', str_contains($cvEd, 'data-k="address"'));
@@ -10010,7 +10068,7 @@ proc_terminate($cvProc);
 
 /* --------------------------------------------------------------------- */
 
-echo "== A Not listed photo's own page: no folder name and no file name anywhere, and everything on it still works ==\n";
+echo "== An Only me photo's own page: no folder name and no file name anywhere, and everything on it still works ==\n";
 $fxNn = new_fixture_dir('nolnames');
 mkdir("$fxNn/SecretDrawer", 0777, true);
 make_jpeg("$fxNn/front.jpg", 60, 60, 20, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-SENTINEL.jpg", 60, 60, 80, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-TWO.jpg", 60, 60, 100, 40, 90);
@@ -10083,7 +10141,7 @@ $nnHeld = http_get("$baseNn/?$nnKp", [], false);
 check('[photo page] wrong codes tried on those routes are counted like any other: after eighteen the address is held back, and even the right code gets no answer for a while', in_array($nnHeld[0], [404, 429], true) && !str_contains($nnHeld[1], 'const files'), json_encode([$nnHeld[0]]));
 $nnUnlock();
 
-echo "== A Not listed photo's address: the bare file ==\n";
+echo "== An Only me photo's address: the bare file ==\n";
 $fxBf = new_fixture_dir('barefile');
 mkdir("$fxBf/shelf", 0777, true);
 make_gps_jpeg("$fxBf/shelf/a.jpg", 'N', [[48, 1], [51, 1], [3024, 100]], 'E', [[2, 1], [17, 1], [402, 10]]);
@@ -10107,7 +10165,7 @@ $bfHas = function (array $h, string $name, string $needle = '') { foreach ($h as
 [$stV, $bV, $hV] = http_get("$baseBf/?$cA");
 check('[bare file] to start with a photo\'s address opens the photo in the gallery\'s viewer (a page), as before', $stV === 200 && str_contains($bV, '<!DOCTYPE html>') && str_contains($bfType($hV), 'text/html'));
 $tg = $bfAdmin(['action' => 'toggle_folder_address_file', 'addrfile' => '1']);
-check('[bare file] the folder has a switch for it (Not listed folders only show it), saved in the folder\'s own record', ($tg['ok'] ?? null) === true && (json_decode(http_post("$baseBf/?admin", ['action' => 'toggle_folder_address_file', 'addrfile' => '1', 'csrf_token' => $bfCsrf], array_merge($bfOwn, ['X-Requested-With: gallery-fetch']))[1], true)['ok'] ?? null) === false && (cfg_read("$fxBf/shelf/.gallery-items.php")['addressFile'] ?? null) === true && str_contains(http_get("$baseBf/?admin&classic=1&folder=shelf", $bfOwn)[1], 'name="addrfile"'));
+check('[bare file] the folder has a switch for it (Only me folders only show it), saved in the folder\'s own record', ($tg['ok'] ?? null) === true && (json_decode(http_post("$baseBf/?admin", ['action' => 'toggle_folder_address_file', 'addrfile' => '1', 'csrf_token' => $bfCsrf], array_merge($bfOwn, ['X-Requested-With: gallery-fetch']))[1], true)['ok'] ?? null) === false && (cfg_read("$fxBf/shelf/.gallery-items.php")['addressFile'] ?? null) === true && str_contains(http_get("$baseBf/?admin&classic=1&folder=shelf", $bfOwn)[1], 'name="addrfile"'));
 [$stF, $bF, $hF] = http_get("$baseBf/?$cA");
 check('[bare file] switched on, the address answers with the picture itself (no page), with the location blanked out for a stranger', $stF === 200 && str_contains($bfType($hF), 'image/jpeg') && !str_contains($bF, '<html') && strlen($bF) > 500 && !$bfGps($bF) && $bfGps(file_get_contents("$fxBf/shelf/a.jpg")));
 check('[bare file] ...not indexed, no referrer, and it stays the photo\'s original file for a picture (the same bytes the viewer\'s full-size view sends, minus the location)', $bfHas($hF, 'X-Robots-Tag', 'noindex') && $bfHas($hF, 'Referrer-Policy', 'no-referrer') && strlen($bF) === filesize("$fxBf/shelf/a.jpg"));
@@ -10134,11 +10192,11 @@ $bfViews = (int) $bfDb->query("SELECT views FROM photo_views_k WHERE key = '" . 
 $bfLogRec = vl_log($fxBf, 'ffffffffff');
 $bfOpened = count(array_filter($bfLogRec['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'opened' && ($e['f'] ?? '') === 'shelf/b.jpg'));
 $bfEntry = array_values($bfLogRec['visitors'] ?? [])[0]['entry'] ?? [];
-check('[bare file] each open is counted as a view (3: the one from a link-preview robot is not), and logged in the public address\'s log as a Not listed photo opened by its address', $bfViews === 3 && $bfOpened >= 3 && ($bfEntry['u'] ?? null) === 1 && ($bfEntry['f'] ?? '') === 'shelf/b.jpg', "views=$bfViews opened=$bfOpened entry=" . json_encode($bfEntry));
+check('[bare file] each open is counted as a view (3: the one from a link-preview robot is not), and logged in the public address\'s log as an Only me photo opened by its address', $bfViews === 3 && $bfOpened >= 3 && ($bfEntry['u'] ?? null) === 1 && ($bfEntry['f'] ?? '') === 'shelf/b.jpg', "views=$bfViews opened=$bfOpened entry=" . json_encode($bfEntry));
 $bfEd = http_get("$baseBf/?admin&classic=1", $bfOwn)[1];
 check('[bare file] the Edited tab lists it', str_contains($bfEd, 'Photo links send the bare file'));
 $bfAdmin(['action' => 'save_item', 'file' => 'b.jpg', 'caption' => 'x', 'private' => '1']);
-// a photo private on its own has no address; a closed gallery turns a stranger away; Not listed off kills the code
+// a photo private on its own has no address; a closed gallery turns a stranger away; Only me off kills the code
 $bfPriv = $bfAdmin(['action' => 'toggle_item_restriction', 'file' => 'b.jpg', 'hidden' => '1']);
 if (($bfPriv['ok'] ?? null) === true) check('[bare file] a photo that is private on its own sends nothing by its old address', http_get("$baseBf/?$cB")[0] === 404 && !str_contains($bfType(http_get("$baseBf/?$cB")[2]), 'image'));
 $cfgBf = cfg_read("$fxBf/.gallery-config.php"); $cfgBf['CLOSE_PUBLIC_GALLERY'] = true; file_put_contents("$fxBf/.gallery-config.php", cfg_text($cfgBf));
@@ -10146,7 +10204,7 @@ $cfgBf = cfg_read("$fxBf/.gallery-config.php"); $cfgBf['CLOSE_PUBLIC_GALLERY'] =
 check('[bare file] with the gallery closed a stranger gets the "not valid" page, not the picture', $stClosed === 404 && !str_contains($bfType($hClosed), 'image/jpeg'));
 unset($cfgBf['CLOSE_PUBLIC_GALLERY']); file_put_contents("$fxBf/.gallery-config.php", cfg_text($cfgBf));
 $bfAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '0']);
-check('[bare file] when the folder is no longer Not listed the old address sends nothing', http_get("$baseBf/?$cA")[0] === 404 && !str_contains($bfType(http_get("$baseBf/?$cA&file")[2]), 'image'));
+check('[bare file] when the folder is no longer Only me the old address sends nothing', http_get("$baseBf/?$cA")[0] === 404 && !str_contains($bfType(http_get("$baseBf/?$cA&file")[2]), 'image'));
 proc_terminate($bfProc);
 
 /* --------------------------------------------------------------------- */
@@ -10166,7 +10224,7 @@ $dpGet = fn (string $file) => http_get("$baseDp/?original=" . rawurlencode($file
 $dpCfg = fn () => cfg_read("$fxDp/.gallery-config.php");
 $dpPage = fn (string $folder) => http_get("$baseDp/?admin&classic=1" . ($folder === '' ? '' : '&folder=' . rawurlencode($folder)), $dpOwn)[1];
 $dpTrip = $dpPage('Trip');
-check('[folder downloads] a public folder\'s settings have "Visitors can download originals" right after Gallery of its own and before Private folder', preg_match('~Gallery of its own.*?Visitors can download originals.*?Private folder~s', $dpTrip) === 1 && !str_contains($dpTrip, 'Only the photos directly in this folder') && str_contains($dpTrip, 'name="dl"'));
+check('[folder downloads] a public folder\'s settings have "Visitors can download originals" right after Gallery of its own (which follows the four buttons)', preg_match('~Who can see this folder.*?Gallery of its own.*?Visitors can download originals~s', $dpTrip) === 1 && !str_contains($dpTrip, 'Only the photos directly in this folder') && str_contains($dpTrip, 'name="dl"'));
 check('[folder downloads] it is not offered on a private folder, and not on the main page\'s settings as a folder switch (the main page has its own row)', !preg_match('~<div class="dl-block">~', $dpPage('Secret')) && str_contains($dpPage('Secret'), 'class="dl-block" hidden') && str_contains($dpPage(''), 'Visitors can download the photos on this page') && !str_contains($dpPage(''), 'class="dl-inside"'));
 check('[folder downloads] the main page\'s row only appears when photos lie directly on it', true);
 check('[folder downloads] to start with nothing is allowed: no folder, nor the main page, offers a download', $dpGet('Trip/t.jpg') === 404 && $dpGet('loose.jpg') === 404 && !str_contains(http_get("$baseDp/")[1], 'id="lightbox-download"'));
@@ -11041,7 +11099,7 @@ $chLeaks = function (array $r, array $words) { $all = $r[1] . "\n" . implode("\n
 
 // AB2: a collection on the front page, kept in a hidden folder: a card that leads somewhere, with no word of the hidden folder in it
 $chFront = $chGet('', []);
-check('[hidden parent] a stranger\'s front page has the card of a front-page collection kept in a Not listed folder and in a private one, addressed by the collection\'s own address, and not a word of either folder', str_contains($chFront[1], 'href="?folder=bestof"') && str_contains($chFront[1], 'href="?folder=backroom"') && !$chLeaks($chFront, ['hideout', 'vault']), json_encode([$chLeaks($chFront, ['hideout', 'vault']), preg_match_all('~href="\?folder=[^"]*"~', $chFront[1], $m) ? $m[0] : []]));
+check('[hidden parent] a stranger\'s front page has the card of a front-page collection kept in an Only me folder and in a private one, addressed by the collection\'s own address, and not a word of either folder', str_contains($chFront[1], 'href="?folder=bestof"') && str_contains($chFront[1], 'href="?folder=backroom"') && !$chLeaks($chFront, ['hideout', 'vault']), json_encode([$chLeaks($chFront, ['hideout', 'vault']), preg_match_all('~href="\?folder=[^"]*"~', $chFront[1], $m) ? $m[0] : []]));
 check('[hidden parent] ...and the card of one kept in a public folder keeps its address with the folder in it, as before', str_contains($chFront[1], 'href="?folder=Europe%2Feubest"'));
 $chPage = $chGet('?folder=bestof', []);
 check('[hidden parent] the card opens: the collection\'s page, with the members this visitor may see (the public photo of one folder and of the other, not the private one), no word of the hidden folder anywhere, and the way back is the gallery\'s front page', $chPage[0] === 200 && str_contains($chPage[1], 'Asia\/a.jpg') && str_contains($chPage[1], 'Mixed\/pub.jpg') && !str_contains($chPage[1], 'priv.jpg') && !$chLeaks($chPage, ['hideout', 'vault']) && str_contains($chPage[1], 'Best Of'), json_encode([$chPage[0], $chLeaks($chPage, ['hideout', 'vault'])]));
@@ -11053,7 +11111,7 @@ check('[hidden parent] a collection that is a Gallery of its own is reachable at
 $chZip = $chGet('?archive&folder=bestof', []); $chMap = $chGet('?map&folder=bestof', []);
 check('[hidden parent] its ZIP and its map page leak nothing either', !$chLeaks($chZip, ['hideout', 'vault']) && !$chLeaks($chMap, ['hideout', 'vault']), json_encode([$chZip[0], $chMap[0]]));
 $chViewFront = $chGet('', $chView); $chViewPage = $chGet('?folder=bestof', $chView);
-check('[hidden parent] someone with the private-view password: the Not listed folder stays hidden from them too (no word of it, the card by its own address), and the private one is theirs (its collection\'s card by the long address); the collection\'s page shows them the private photo as well', !$chLeaks($chViewFront, ['hideout']) && str_contains($chViewFront[1], 'href="?folder=bestof"') && str_contains($chViewFront[1], 'href="?folder=Vault%2Fbackroom"') && $chViewPage[0] === 200 && str_contains($chViewPage[1], 'priv.jpg') && !$chLeaks($chViewPage, ['hideout']), json_encode([$chLeaks($chViewFront, ['hideout']), $chViewPage[0]]));
+check('[hidden parent] someone with the private-view password: the Only me folder stays hidden from them too (no word of it, the card by its own address), and the private one is theirs (its collection\'s card by the long address); the collection\'s page shows them the private photo as well', !$chLeaks($chViewFront, ['hideout']) && str_contains($chViewFront[1], 'href="?folder=bestof"') && str_contains($chViewFront[1], 'href="?folder=Vault%2Fbackroom"') && $chViewPage[0] === 200 && str_contains($chViewPage[1], 'priv.jpg') && !$chLeaks($chViewPage, ['hideout']), json_encode([$chLeaks($chViewFront, ['hideout']), $chViewPage[0]]));
 $chOwnFront = $chGet('', $chOwn);
 check('[hidden parent] the owner, who may see the folder, gets the card with the long address, as before', str_contains($chOwnFront[1], 'href="?folder=Hideout%2Fbestof"') || str_contains($chOwnFront[1], 'href="?folder=Hideout/bestof"'));
 // the address must be free at the top when the collection is shown on its own
@@ -11495,8 +11553,8 @@ check('[zero] a group named 0 shows that name (the group header said "trip")', p
 
 /* --------------------------------------------------------------------- */
 
-// Audit group 3: the log route (?linklog) and a Not listed photo's own page (E1-1 to E1-6, and a wrong guess counted for every post of that page).
-echo "== audit group 3: what the visitor log accepts is what this visitor may open; a Not listed photo's page logs by its code and names nothing ==\n";
+// Audit group 3: the log route (?linklog) and an Only me photo's own page (E1-1 to E1-6, and a wrong guess counted for every post of that page).
+echo "== audit group 3: what the visitor log accepts is what this visitor may open; an Only me photo's page logs by its code and names nothing ==\n";
 $fxG = new_fixture_dir('g3log');
 foreach (['Pisa', 'Rome', 'Drawer', 'emptydir', '.hidden-dir'] as $gD) mkdir("$fxG/$gD");
 make_jpeg("$fxG/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxG/Pisa/p1.jpg", 80, 60, 150, 60, 60); make_jpeg("$fxG/Rome/r1.jpg", 80, 60, 60, 60, 150);
@@ -11544,14 +11602,14 @@ foreach ($gVis as $gWho => [$gSrc, $gHdr]) {
         if ($gKept !== $gPage) $gWrong[] = "$gWho / $gP: page " . ($gPage ? '200' : 'no') . ', logged ' . ($gKept ? 'yes' : 'no');
     }
 }
-check('[log route] for a stranger, for someone with the private-view password and for an Everything link\'s guest, a folder line (a real folder, a private or Not listed one, an empty one, a dot folder, a collection, a file, and odd spellings of Pisa) is kept exactly when that folder\'s page would answer them', $gWrong === [], implode('; ', $gWrong));
-check('[log route] ...so the private-view visitor\'s "Opened the folder" for a private folder is there (it was dropped), and an Everything link\'s guest has none for the Not listed folder (a line was forged)', $gFolderEv($gPriv, 'Rome') === 1 && $gFolderEv($gLid, 'Drawer') === 0 && $gFolderEv($gLid, 'Rome') === 1 && $gFolderEv($gPriv, 'family') === 1 && $gFolderEv($gPub, 'family') === 0);
+check('[log route] for a stranger, for someone with the private-view password and for an Everything link\'s guest, a folder line (a real folder, a private or Only me one, an empty one, a dot folder, a collection, a file, and odd spellings of Pisa) is kept exactly when that folder\'s page would answer them', $gWrong === [], implode('; ', $gWrong));
+check('[log route] ...so the private-view visitor\'s "Opened the folder" for a private folder is there (it was dropped), and an Everything link\'s guest has none for the Only me folder (a line was forged)', $gFolderEv($gPriv, 'Rome') === 1 && $gFolderEv($gLid, 'Drawer') === 0 && $gFolderEv($gLid, 'Rome') === 1 && $gFolderEv($gPriv, 'family') === 1 && $gFolderEv($gPub, 'family') === 0);
 $gBefore = count(vl_log($fxG, $gPub)['events']);
 $gMany = []; for ($i = 2; $i < 102; $i++) $gMany[] = ['f', str_repeat('./', $i) . 'Pisa'];
 $gPost('linklog', ['e' => $gMany], [$gUa]);
 check('[log route] a hundred spellings of one folder from a stranger add nothing (they used to be a hundred rows, up to 600 bytes each)', count(vl_log($fxG, $gPub)['events']) === $gBefore);
 $gArr = function (string $f) use ($gPost, $gEv, $gPub, $gUa) { $b = count(array_filter($gEv($gPub), fn ($x) => str_starts_with($x, 'arrive:'))); $gPost('linklog', ['e' => [], 'a' => ['f' => $f, 'h' => 'typed']], [$gUa]); return count(array_filter($gEv($gPub), fn ($x) => str_starts_with($x, 'arrive:'))) - $b; };
-check('[log route] how a visit began is held to the same rule: an arrival at a folder that is there is kept; at an odd spelling, a private folder or a Not listed one it is not', $gArr('Pisa') === 1 && $gArr('./Pisa') === 0 && $gArr('Rome') === 0 && $gArr('Drawer') === 0 && $gArr('nowhere') === 0);
+check('[log route] how a visit began is held to the same rule: an arrival at a folder that is there is kept; at an odd spelling, a private folder or an Only me one it is not', $gArr('Pisa') === 1 && $gArr('./Pisa') === 0 && $gArr('Rome') === 0 && $gArr('Drawer') === 0 && $gArr('nowhere') === 0);
 
 // E1-4: only the gallery's own page posts here, and a line is counted once in a post
 $gBefore = count($gEv($gPub));
@@ -11567,14 +11625,14 @@ $gRep = []; for ($i = 0; $i < 120; $i++) $gRep[] = ['o', 'pub.jpg'];
 $gPost('linklog', ['e' => $gRep], [$gUa]);
 check('[log route] the page\'s own post (JSON, same-origin) is logged, and 120 of the same line in one post count once (it was 120)', $gOn1 === $gOn0 + 1 && $gOn() === $gOn1 + 1, json_encode([$gOn0, $gOn1, $gOn()]));
 
-// E1-5, E1-6: a Not listed photo's own address
+// E1-5, E1-6: an Only me photo's own address
 $gA = $gAdmin(['action' => 'photo_address', 'file' => 'd1.jpg'], '&folder=Drawer'); $gCode = $gA['code'] ?? '';
 [, $gPage1] = http_get("$baseG/?$gCode", ['Sec-Fetch-Site: none', $gUa]);
-check('[not listed photo log] the page of a Not listed photo\'s own address, opened the way a typed one is, gives the script neither the folder\'s name nor the file\'s (it handed out the real path)', preg_match('/const galleryEntry = ([^;]*);/', $gPage1, $gM) === 1 && json_decode($gM[1], true) === ['f' => '', 'h' => 'typed', 'u' => true] && !str_contains($gPage1, 'Drawer') && !str_contains($gPage1, 'd1.jpg'), $gM[0] ?? '');
+check('[not listed photo log] the page of an Only me photo\'s own address, opened the way a typed one is, gives the script neither the folder\'s name nor the file\'s (it handed out the real path)', preg_match('/const galleryEntry = ([^;]*);/', $gPage1, $gM) === 1 && json_decode($gM[1], true) === ['f' => '', 'h' => 'typed', 'u' => true] && !str_contains($gPage1, 'Drawer') && !str_contains($gPage1, 'd1.jpg'), $gM[0] ?? '');
 $gBefore = count($gEv($gPub));
 $gS = $gPost("linklog&k=$gCode", ['e' => [['o', $gCode], ['s', $gCode]], 'a' => ['f' => '', 'h' => 'typed', 'u' => true]], ['Sec-Fetch-Site: same-origin', $gUa]);
 $gNew = array_slice($gEv($gPub), $gBefore);
-check('[not listed photo log] what that page posts (the photo by its code) is logged for that photo: the arrival, marked as a Not listed photo\'s, and the opening (they were dropped, so the log stayed empty)', $gS === 204 && in_array('arrive:Drawer/d1.jpg(u)', $gNew, true) && in_array('opened:Drawer/d1.jpg', $gNew, true), json_encode($gNew));
+check('[not listed photo log] what that page posts (the photo by its code) is logged for that photo: the arrival, marked as an Only me photo\'s, and the opening (they were dropped, so the log stayed empty)', $gS === 204 && in_array('arrive:Drawer/d1.jpg(u)', $gNew, true) && in_array('opened:Drawer/d1.jpg', $gNew, true), json_encode($gNew));
 $gBefore = count($gEv($gPub));
 $gPost("linklog&k=$gCode", ['e' => [['o', 'Drawer/d2.jpg'], ['o', 'Rome/r1.jpg']], 'a' => ['f' => 'Drawer/d2.jpg', 'h' => 'link', 'u' => true]], ['Sec-Fetch-Site: same-origin', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15']);
 $gNew = array_slice($gEv($gPub), $gBefore);
@@ -11776,7 +11834,7 @@ check('[mounts] ...and the Health check says that place is not shown, why, and w
 $g6Home = http_get("$base6/")[1];
 check('[mounts] a place from elsewhere named in digits ("2019" by name, "2024" found inside a roots folder) is shown: a card on the front page for each, its page opens and lists its photo, and its pictures are served (neither was shown, with no word of why)', substr_count($g6Home, 'folder=2024') > 0 && substr_count($g6Home, 'folder=2019') > 0 && str_contains(http_get("$base6/?folder=2024")[1], 'y.jpg') && str_contains(http_get("$base6/?folder=2019")[1], 'a.jpg') && http_get("$base6/?img=2024%2Fy.jpg&size=tile")[0] === 200 && http_get("$base6/?img=2019%2Fa.jpg&size=tile")[0] === 200);
 // G3: a real folder named in digits
-check('[mounts] a real top-level folder named in digits (123) can be worked on from the admin like any other: its download switch turns on (it said "Unknown folder"), its name saves, Not listed switches', ($g6Adm(['action' => 'toggle_folder_downloads', 'dl' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'save_folder_identity', 'display_name' => 'One two three'], '&folder=123')['ok'] ?? null) !== false && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=123')['ok'] ?? null) === true);
+check('[mounts] a real top-level folder named in digits (123) can be worked on from the admin like any other: its download switch turns on (it said "Unknown folder"), its name saves, Only me switches', ($g6Adm(['action' => 'toggle_folder_downloads', 'dl' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'save_folder_identity', 'display_name' => 'One two three'], '&folder=123')['ok'] ?? null) !== false && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=123')['ok'] ?? null) === true);
 check('[mounts] ...and the admin\'s folder tree marks it as the one open', substr_count(http_get("$base6/?admin&folder=123", $g6Own)[1], 'aria-current="page"') >= 1);
 // G10: a place called Admin
 [$g6S, $g6B] = http_get("$base6/?folder=Admin"); [$g6S2, , $g6Hd2] = http_get("$base6/?folder=admin", [], false); [$g6S3, , $g6Hd3] = http_get("$base6/?folder=reveal", [], false);
@@ -11986,7 +12044,7 @@ $dnTwin = function (array $names, string $label, string $mode = 'overview') use 
     $out['own gallery typed nested'] = $sig(http_get("$base/?folder=" . rawurlencode("{$T[0]}/$S"), ['Sec-Fetch-Site: none']));
     $out['own gallery typed other'] = $sig(http_get("$base/?folder=" . rawurlencode($T[1]), ['Sec-Fetch-Site: none']));
     $adm(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=' . rawurlencode($T[0]));
-    // a Not listed photo's own address, in a folder with a digit name
+    // an Only me photo's own address, in a folder with a digit name
     foreach ([0, 3] as $i) {
         $adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=' . rawurlencode($T[$i]));
         $pa = $adm(['action' => 'photo_address', 'file' => 'a.jpg'], '&folder=' . rawurlencode($T[$i]));
@@ -12021,7 +12079,7 @@ foreach (['overview', 'flat'] as $dnMode) {
     $dnB = $dnTwin([['2024', '0', '123', '007', '-5', '1e3', '7', '1000', '5', '00', '12', '2025'], '2023', '2022', '2019', '2021', ['123456789012', '210987654321'], '1234567890'], "b-$dnMode", $dnMode);
     $dnDiff = [];
     foreach ($dnA as $dnK => $dnVa) if (($dnB[$dnK] ?? '(missing)') !== $dnVa) $dnDiff[] = "[$dnK] letters: $dnVa / digits: " . ($dnB[$dnK] ?? '(missing)');
-    check("[digit names] in the $dnMode display mode, " . count($dnA) . " pages and actions (the folders and the one from elsewhere, their pages as a stranger, the owner and a link guest, the pictures, the ZIP, the admin and its actions, links with digit ids and folder ids, collections, Own gallery, Not listed addresses, covers, the visitor log, the Changes tab) answer exactly the same under names of digits as under letters", $dnDiff === [] && count($dnA) > 300, count($dnDiff) . ' differ: ' . implode(' | ', array_slice($dnDiff, 0, 6)));
+    check("[digit names] in the $dnMode display mode, " . count($dnA) . " pages and actions (the folders and the one from elsewhere, their pages as a stranger, the owner and a link guest, the pictures, the ZIP, the admin and its actions, links with digit ids and folder ids, collections, Own gallery, Only me addresses, covers, the visitor log, the Changes tab) answer exactly the same under names of digits as under letters", $dnDiff === [] && count($dnA) > 300, count($dnDiff) . ' differ: ' . implode(' | ', array_slice($dnDiff, 0, 6)));
 }
 
 // =====================================================================================================================
@@ -12323,12 +12381,12 @@ if ($vHasSqlite) {
     check('[keyboard] ...and the menus are a group of radios, not a listbox that has no options in it', !str_contains($kAdmin, 'role="listbox"') && !str_contains($kAdmin, 'aria-haspopup="listbox"') && str_contains($kAdmin, 'class="menu-pop" role="radiogroup"'));
     $kLinks = http_get("$baseK/?admin&linkspanel=1", ["Cookie: $kCk"])[1];
     check('[keyboard] the share-link form names its number and date fields', str_contains($kAdmin . $kLinks, 'aria-label="The date and time it stops working"') && str_contains($kAdmin . $kLinks, 'name="opens_other" aria-label="How many browsers can open it"'), 'in the admin page: ' . (str_contains($kAdmin, 'ends_at_local') ? 'yes' : 'no'));
-    // a Not listed photo's own page: the name stays off it, the button says "Photo"
+    // an Only me photo's own page: the name stays off it, the button says "Photo"
     $kU = $fxK . '/Hidden'; mkdir($kU); make_jpeg("$kU/SECRETNAME-9.jpg", 80, 60, 200, 200, 60);
     file_put_contents("$kU/.gallery-items.php", json_encode(['restriction' => 'private', 'unlisted' => true, 'items' => ['SECRETNAME-9.jpg' => ['caption' => '']]]));
     $kAddr = json_decode(http_post("$baseK/?admin&folder=Hidden", ['csrf_token' => extract_csrf_token($kAdmin), 'action' => 'photo_address', 'file' => 'SECRETNAME-9.jpg'], ["Cookie: $kCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true);
     $kPhoto = http_get("$baseK/?" . ($kAddr['code'] ?? 'x'), [], false)[1];
-    check('[keyboard] a Not listed photo\'s own page says "Photo" on the tile and on its button, and its name is not on the page', ($kAddr['ok'] ?? null) === true && str_contains($kPhoto, 'aria-label="Open photo: Photo"') && str_contains($kPhoto, 'alt="Photo"') && !str_contains($kPhoto, 'SECRETNAME'), substr($kPhoto, 0, 80));
+    check('[keyboard] an Only me photo\'s own page says "Photo" on the tile and on its button, and its name is not on the page', ($kAddr['ok'] ?? null) === true && str_contains($kPhoto, 'aria-label="Open photo: Photo"') && str_contains($kPhoto, 'alt="Photo"') && !str_contains($kPhoto, 'SECRETNAME'), substr($kPhoto, 0, 80));
 }
 
 /* --------------------------------------------------------------------- */
@@ -12535,7 +12593,7 @@ return false;
     $prevV = preg_match("/define\\('GALLERY_VERSION', '(\\d+\\.\\d+\\.\\d+)'\\)/", (string) @file_get_contents("$dE/.gallery-previous.php"), $pm) ? $pm[1] : '';
     check('[update twice] two presses of Update now at the same moment update once, and the file kept for Go back is the old version (it used to be the new one)', preg_match("/define\\('GALLERY_VERSION', '9\\.9\\.9'\\)/", (string) file_get_contents("$dE/index.php")) === 1 && $prevV === $rdCur, 'kept: ' . $prevV . ' answers: ' . json_encode($mwOut));
 
-    // F16: Go back to a version from before Not listed says what it does when any folder is Not listed
+    // F16: Go back to a version from before Only me says what it does when any folder is Only me
     $fxGb = new_fixture_dir('goback'); make_jpeg("$fxGb/a.jpg", 60, 60, 1, 1, 1); mkdir("$fxGb/Drawer"); make_jpeg("$fxGb/Drawer/s.jpg", 60, 60, 2, 2, 2);
     file_put_contents("$fxGb/Drawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true]));
     file_put_contents("$fxGb/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'gb-admin-pw-1']));
@@ -12544,10 +12602,10 @@ return false;
     $gbPort = find_free_port(); start_server($fxGb, $gbPort);
     [, , $gbH] = http_post("http://127.0.0.1:$gbPort/?admin", ['access_code' => 'gb-admin-pw-1'], ['User-Agent: gb-test'], false); $gbOwn = ['Cookie: ' . extract_cookie_header($gbH), 'User-Agent: gb-test'];
     $gbPage = http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1];
-    check('[go back] with a Not listed folder, the Go back button to a version that does not know Not listed carries a question that says what happens (private, open to an "Everything" link) and that the mark is kept', str_contains($gbPage, 'data-update="undo" data-warn="You have 1 Not listed folder.') && str_contains($gbPage, 'Everything') && str_contains($gbPage, 'updating again hides it again'));
+    check('[go back] with an Only me folder, the Go back button to a version that does not know Only me carries a question that says what happens (private, open to an "Everything" link) and that the mark is kept', str_contains($gbPage, 'data-update="undo" data-warn="You have 1 Only me folder.') && str_contains($gbPage, 'Everything') && str_contains($gbPage, 'updating again hides it again'));
     unlink("$fxGb/Drawer/.gallery-items.php");
     $gbPage2 = http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1];
-    check('[go back] ...and with none, the note\'s button (the one for the first day) has no question', str_contains($gbPage2, 'class="secondary" data-update="undo">Go back to 2.6.3</button>') && !str_contains($gbPage2, 'You have 1 Not listed folder'));
+    check('[go back] ...and with none, the note\'s button (the one for the first day) has no question', str_contains($gbPage2, 'class="secondary" data-update="undo">Go back to 2.6.3</button>') && !str_contains($gbPage2, 'You have 1 Only me folder'));
     check('[go back] ...while the button beside Check now (offered as long as the file is kept) always asks first: what it is, and that what the newer version saved since may not be understood', str_contains($gbPage2, 'data-update="check">Check now</button> <button type="button" class="linklike" data-update="undo" data-warn="Put version 2.6.3 back?') && str_contains($gbPage2, 'anything this version has saved since may not be understood'));
 }
 
@@ -13041,13 +13099,13 @@ echo "== audit group 14: a folder that can't be read and a damaged secret are na
     file_put_contents($secretPath, data_file_guard_line_for_tests() . "garbage that is not a key\n");
     $badAddr = $adm(['action' => 'photo_address', 'file' => 'd.jpg'], 'Drawer');
     $panelBad = $panel(); $after = (string) file_get_contents($secretPath);
-    check('[install secret] a key file that is there but holds no key is named in Health as damaged (what it affects, how to put it right), and the message of a Not listed photo\'s address says the file is damaged instead of "is the folder writable?"', str_contains($panelBad, 'The install secret file is damaged') && str_contains(html_entity_decode((string) ($badAddr['text'] ?? ''), ENT_QUOTES), 'holds no key') && !str_contains((string) ($badAddr['text'] ?? ''), 'is the folder writable'), json_encode([$ok1['ok'] ?? null, $badAddr]));
-    check('[install secret] ...and it is not replaced (a new key would change every Not listed address without a word): the file is exactly as it was', $after === data_file_guard_line_for_tests() . "garbage that is not a key\n");
+    check('[install secret] a key file that is there but holds no key is named in Health as damaged (what it affects, how to put it right), and the message of an Only me photo\'s address says the file is damaged instead of "is the folder writable?"', str_contains($panelBad, 'The install secret file is damaged') && str_contains(html_entity_decode((string) ($badAddr['text'] ?? ''), ENT_QUOTES), 'holds no key') && !str_contains((string) ($badAddr['text'] ?? ''), 'is the folder writable'), json_encode([$ok1['ok'] ?? null, $badAddr]));
+    check('[install secret] ...and it is not replaced (a new key would change every Only me address without a word): the file is exactly as it was', $after === data_file_guard_line_for_tests() . "garbage that is not a key\n");
     file_put_contents($secretPath, $good);
     check('[install secret] with the key back there is no such row', !str_contains($panel(), 'The install secret file is damaged'));
     $files = $adm(['action' => 'files_list'])['rows'] ?? [];
     $secretRow = array_values(array_filter($files, fn ($r) => ($r['kind'] ?? '') === 'secret'))[0] ?? [];
-    check('[files made] the install secret is described as what it does: thumbnail names, share-link cookies, Not listed addresses (and says sign-ins do not use it), and what deleting it does', str_contains((string) ($secretRow['what'] ?? ''), 'Not listed') && str_contains((string) ($secretRow['what'] ?? ''), 'Sign-ins do not use it') && str_contains((string) ($secretRow['ifgone'] ?? ''), 'address') && !str_contains((string) ($secretRow['what'] ?? '') . ($secretRow['ifgone'] ?? ''), 'signed out'), json_encode($secretRow));
+    check('[files made] the install secret is described as what it does: thumbnail names, share-link cookies, Only me addresses (and says sign-ins do not use it), and what deleting it does', str_contains((string) ($secretRow['what'] ?? ''), 'Only me') && str_contains((string) ($secretRow['what'] ?? ''), 'Sign-ins do not use it') && str_contains((string) ($secretRow['ifgone'] ?? ''), 'address') && !str_contains((string) ($secretRow['what'] ?? '') . ($secretRow['ifgone'] ?? ''), 'signed out'), json_encode($secretRow));
 }
 
 /* --------------------------------------------------------------------- */
@@ -13254,7 +13312,7 @@ echo "== audit group 15: the sign-in page, addresses, the Delete question ==\n";
     $oddOne = array_values(array_filter($conf, fn ($c) => str_contains($c, 'odd')));
     check('[delete question] a notes file whose name has a line break in it still asks before Delete (the line break used to end the script string, the question never came, and Delete went ahead)', count($oddOne) === 1 && !str_contains($oddOne[0], "\n") && str_contains($oddOne[0], '\\n') && is_array(json_decode($oddOne[0], true)) === false && json_decode($oddOne[0]) !== null, json_encode([$conf]));
 
-    // S1: the admin page says whether a private or Not listed folder exists, for the browser's check of the tidy-folder rule
+    // S1: the admin page says whether a private or Only me folder exists, for the browser's check of the tidy-folder rule
     $adm = http_get("$base/?admin&classic=1", $own1)[1];
     $adm2 = http_get("$b2/?admin&classic=1", $own)[1];
     check('[tidy rule] the admin page tells its script whether a private folder exists (1 here, 0 in a gallery with none), so the missing rule is only an alarm when something private is there', str_contains($adm, 'data-any-hidden-folder="1"') && str_contains($adm2, 'data-any-hidden-folder="0"'), json_encode([preg_match('/data-any-hidden-folder="[01]"/', $adm, $q1) ? $q1[0] : null, preg_match('/data-any-hidden-folder="[01]"/', $adm2, $q2) ? $q2[0] : null]));

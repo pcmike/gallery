@@ -442,7 +442,7 @@ foreach ($allFiles as $privateProbe) {
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
 if (is_admin_browser() || (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all')) link_scan_ambiguity($dir, $allFiles);   // (the owner's own look keeps the list current too, so a photo address in a copied folder is refused by the pictures as well)   // a folder copied with its id is shown to nobody
-if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
+if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Only me: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData, $photoPass) {
             return $photoPass !== null ? $f === $photoPass : (viewer_may_see_item($dir, $f, $itemsData) && !quiet_hidden_for_visitor($dir, $f, $itemsData));   // (opened by its own address: that photo, not the gallery's public rest; and an Unlisted folder's photos are left out of every list a visitor is given, unless the page is inside it or a link names it)

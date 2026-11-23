@@ -29,7 +29,7 @@ $lockHtml = ''; $lockForm = '';
 if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) && !viewer_is_link()) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
-    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 && $photoPass === null ? $_GET['photo'] : '';   // (not on a Not listed photo's own page: the way back would name the photo)
+    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 && $photoPass === null ? $_GET['photo'] : '';   // (not on an Only me photo's own page: the way back would name the photo)
     $lockHere = $lockFolderQuery . ($lockPhoto !== '' ? '&amp;photo=' . htmlspecialchars(rawurlencode($lockPhoto), ENT_QUOTES, 'UTF-8') : '') . (isset($_GET['map']) ? '&amp;map' : '');
     $lockHidden = '<input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '">'
         . ($lockPhoto !== '' ? '<input type="hidden" name="photo" value="' . htmlspecialchars($lockPhoto, ENT_QUOTES, 'UTF-8') . '">' : '')
@@ -359,7 +359,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   }
   // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
   // The viewer's info panel: offered for the photos of a folder that has switched it on (or takes that from the folder above), when something is
-  // switched on to show; never on a Not listed photo's own page.
+  // switched on to show; never on an Only me photo's own page.
   $infoFolders = [];
   if ($photoPass === null && photo_info_wanted()) {
       foreach ($files as $infoF) {
@@ -430,11 +430,17 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) !== 'private' && folder_is_quiet($dir, $currentFolderPath)): ?>
+  <div class="folder-priv-banner fpb-note fpb-quiet" id="folder-quiet-note" role="note">
+    <?= ui_icon('link') ?>
+    <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong></div>
+  </div>
+<?php endif; ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
-  <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // A Not listed folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
+  <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // An Only me folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
   <div class="folder-priv-banner fpb-note" id="folder-unlisted-note" role="note">
     <?= ui_icon('lock') ?>
-    <div><strong>Not listed: only you can open this folder</strong></div>
+    <div><strong>Only me: only you can open this folder</strong></div>
   </div>
   <?php else: $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
@@ -628,7 +634,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       $c = $itemsData[$f]['caption'] ?? '';
       return ($c !== '' && is_string($c)) ? $c : null;
   }, $files)) ?>;
-  // What a screen reader says for the big picture: the caption, else the file name without its folder ("Photo" on a Not listed photo's own page).
+  // What a screen reader says for the big picture: the caption, else the file name without its folder ("Photo" on an Only me photo's own page).
   const altTexts = <?= js_json(array_map(function ($f) use ($itemsData) { return photo_alt_text($f, $itemsData[$f] ?? [], photo_ref($f) !== $f); }, $files)) ?>;
   // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
   // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.

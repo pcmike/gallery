@@ -614,7 +614,7 @@ function request_route($reset = false) {
 }
 
 /** The words a bare query (?word, nothing else) means for the gallery itself. Any other single word is an address someone typed: a share link's or a
- *  Not listed photo's (see bare_query_as_address). */
+ *  Only me photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
         'view', 'accelcheck', 'browserhist', 'filesdownload', 'backupdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'tz', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'changes_entry', 'changes_find', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
@@ -624,7 +624,7 @@ function reserved_query_words() {
 }
 
 /** A query that is one bare word and nothing else (the address typed as /photos/?Ab3x9Qz2 where the server's one-word rule isn't set up) is the same as
- *  ?link=<word>: the one place that tells a share link's or a Not listed photo's address from a wrong guess, and counts the guess. */
+ *  ?link=<word>: the one place that tells a share link's or an Only me photo's address from a wrong guess, and counts the guess. */
 function bare_query_as_address() {
     $qs = (string) ($_SERVER['QUERY_STRING'] ?? '');
     if (preg_match('/^([A-Za-z0-9._~-]{1,60})(?:&.*)?$/Ds', $qs, $m) !== 1 || in_array($m[1], reserved_query_words(), true)) return;   // (the word first, nothing like word=value; other parameters a chat app added are ignored)
@@ -646,12 +646,12 @@ if (gallery_is_closed()) {
 }
 
 // A code (k=...) that opens nothing is a wrong guess whether or not the path it came with exists, counted once per request when it ends: otherwise who
-// gets paused would tell a Not listed photo that is there from one that is not.
+// gets paused would tell an Only me photo that is there from one that is not.
 if (isset($_GET['k']) && is_string($_GET['k'])) {   // (on every route: a code tried through about, manifest, download... was never counted, so the pause did not apply)
     register_shutdown_function(function () use ($dir) { if (empty($GLOBALS['__photo_pass_ok']) && !photo_code_is_right_for_request($dir)) link_guess_failed($dir, (string) $_GET['k']); });
 }
 
-// A Not listed photo's own page asks for its picture, video, strip, original and view count by the photo's code (?img=<code>&k=<code>), so the page never
+// An Only me photo's own page asks for its picture, video, strip, original and view count by the photo's code (?img=<code>&k=<code>), so the page never
 // says what the photo is called or where it lives: here the request becomes the photo's own, and everything after reads it as it always has.
 photo_code_params_translate($dir, $mediaExtensions, $self);
 

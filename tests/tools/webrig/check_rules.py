@@ -243,13 +243,13 @@ TypesConfig "%(w)s/apache/mime.types"
     os.makedirs(os.path.join(trip, 'later-folder')); shutil.copy(os.path.join(trip, 'Rome', 'photo-Rome.jpg'), os.path.join(trip, 'later-folder', 'photo-later-folder.jpg'))
 
     import json
-    # a photo in a Not listed folder: its address (eight letters and digits) must open through the same one-word rule
+    # a photo in an Only me folder: its address (eight letters and digits) must open through the same one-word rule
     os.makedirs(os.path.join(trip, 'drawer')); shutil.copy(os.path.join(trip, 'Rome', 'photo-Rome.jpg'), os.path.join(trip, 'drawer', 'photo-drawer.jpg'))
     ajax = {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'gallery-fetch'}
     site.raw('/trip/index.php?admin&folder=drawer', ajax, 'POST', urllib.parse.urlencode({'csrf_token': csrf, 'action': 'toggle_folder_unlisted', 'unlisted': '1'}), True)
     st, body, _ = site.raw('/trip/index.php?admin&folder=drawer', ajax, 'POST', urllib.parse.urlencode({'csrf_token': csrf, 'action': 'photo_address', 'file': 'photo-drawer.jpg'}), True)
     pcode = json.loads(body).get('code', '')
-    check('a photo in a Not listed folder is given its address: eight letters and digits', re.fullmatch(r'[A-Za-z0-9]{8}', pcode) is not None, body[:200])
+    check('a photo in an Only me folder is given its address: eight letters and digits', re.fullmatch(r'[A-Za-z0-9]{8}', pcode) is not None, body[:200])
     pwrong = 'Zz9Zz9Zz' if pcode != 'Zz9Zz9Zz' else 'Yy8Yy8Yy'
 
     def reset_throttle():
@@ -271,7 +271,7 @@ TypesConfig "%(w)s/apache/mime.types"
         check('[%s] ...and the present address opens the link' % n, opening('/trip/kept-one-now'))
         reset_throttle()
         st, body, loc, r = srv.get('/trip/' + pcode)
-        check('[%s] a Not listed photo\'s address opens that one photo through the same one-word rule, and nothing else of the gallery' % n, st == 200 and 'photo-drawer.jpg' in body and 'photo-Rome.jpg' not in body, (st, body[:120]))
+        check('[%s] an Only me photo\'s address opens that one photo through the same one-word rule, and nothing else of the gallery' % n, st == 200 and 'photo-drawer.jpg' in body and 'photo-Rome.jpg' not in body, (st, body[:120]))
         st, body, loc, r = srv.get('/trip/' + pcode + '?file')
         check('[%s] ...with ?file added the same address sends the picture itself (the suffix passes through the rule), with no page around it' % n, st == 200 and (r.getheader('Content-Type') or '').startswith('image/jpeg') and '<html' not in body.lower(), (st, r.getheader('Content-Type')))
         st, body, loc, r = srv.get('/trip/' + pcode + '?view')

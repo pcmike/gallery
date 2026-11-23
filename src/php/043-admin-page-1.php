@@ -22,7 +22,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $GLOBALS['__admin_fresh'] = $fresh;
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__lock_probe']['anyPrivate'] = !empty($adminHidden['folders']) || !empty($adminHidden['items']);   // (the lock check only worries once something is private)
-    $GLOBALS['__lock_probe']['anyHiddenFolder'] = !empty($adminHidden['folders']);   // (a private or Not listed folder: the tidy-folder-link check worries once there is one, see data-any-hidden-folder)
+    $GLOBALS['__lock_probe']['anyHiddenFolder'] = !empty($adminHidden['folders']);   // (a private or Only me folder: the tidy-folder-link check worries once there is one, see data-any-hidden-folder)
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
     $adminCollection = $adminFolderPath !== null && AUTO_GROUP_BY_FOLDER ? collection_at($dir, $adminFolderPath, $files) : null;   // (a collection has a settings page of its own, and no folder on disk)
