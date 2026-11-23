@@ -4248,6 +4248,22 @@ try:
         b.js("document.querySelector('[data-sl-modal=ok]').click()"); b.drain(0.5)
         ok(b.js("document.querySelectorAll('#sl-form .sl-chip').length") == 1, "[not listed link] Include puts it in the link")
         shutil.rmtree(SITE_L + "/Drawer")
+        # an Unlisted folder is public: the picker tags it, picking it asks nothing, and a folder above it does not bring it along
+        os.makedirs(SITE_L + "/Shelf/Quiet", exist_ok=True)
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(120,90); imagejpeg($i,$argv[1]); copy($argv[1], $argv[2]);", SITE_L + "/Shelf/s1.jpg", SITE_L + "/Shelf/Quiet/q1.jpg"], check=True)
+        open(SITE_L + "/Shelf/Quiet/.gallery-items.php", "w").write(LGUARD + json.dumps({"quiet": True, "items": [], "groups": []}) + "\n")
+        b.goto(BL + "/?admin&quiet=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
+        b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.4); type_in("#sl-form [name=label]", "Quiet link")
+        b.js("document.querySelector('#sl-form input[name=scope_type][value=folders]').click()"); b.drain(0.3)
+        b.js("document.querySelector('#sl-form [data-chip-add=scope]').click()"); b.drain(0.5)
+        ok(b.js("[...document.querySelectorAll('.sl-picklist .sl-pick')].some(l => l.textContent.includes('Quiet') && l.textContent.includes('Unlisted') && !l.textContent.includes('Only me'))") and not b.js("[...document.querySelectorAll('.sl-picklist .sl-pick')].some(l => l.textContent.includes('Shelf') && !l.textContent.includes('Quiet') && l.textContent.includes('Unlisted'))"), "[unlisted link] the folder picker tags an Unlisted folder, and only that one")
+        b.js("(() => { const i = [...document.querySelectorAll('.sl-picklist input')].find(x => x.value === 'Shelf'); i.click(); })()"); b.drain(0.3)
+        qs = json.loads(b.js("JSON.stringify(Object.fromEntries([...document.querySelectorAll('.sl-picklist input')].map(x => [x.value, x.indeterminate ? 'dash' : (x.checked ? 'on' : 'off')])))"))
+        ok(qs.get("Shelf") in ("on", "dash") and qs.get("Shelf/Quiet") == "off", "[unlisted link] ticking the folder above does not tick the Unlisted folder (a folder picked above it does not bring it along)", str(qs))
+        b.js("(() => { const i = [...document.querySelectorAll('.sl-picklist input')].find(x => x.value === 'Shelf/Quiet'); i.click(); })()")
+        b.js("document.querySelector('[data-sl-modal=ok]').click()"); b.drain(0.5)
+        ok(not b.js("(() => { const m = document.querySelector('#sl-modal'); return !!m && !m.hidden; })()") and b.js("document.querySelectorAll('#sl-form .sl-chip').length") == 2, "[unlisted link] picking it by name asks no question (it is public) and the link then names both folders")
+        shutil.rmtree(SITE_L + "/Shelf")
         # folders inside a folder: ticking one ticks what is inside it, anything can then be unticked, and the link keeps what it leaves out
         for d in ("Euro/Paris", "Euro/Rome/Old", "Euro/Nice"):
             os.makedirs(SITE_L + "/" + d, exist_ok=True); shutil.copy(SITE_L + "/pub.jpg", SITE_L + "/" + d + "/x.jpg")

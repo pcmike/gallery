@@ -1733,7 +1733,7 @@ foreach ($quWho as $quName => $quHdr) {
     if ($quLeaks) echo "    leaks: " . implode('; ', $quLeaks) . "\n";
 }
 check('[unlisted] Flat: the folder above lists its own photo and none of the Unlisted ones, and a page inside the Unlisted folder still opens', str_contains(http_get("$baseQu/?folder=Trips")[1], 'trips-1.jpg') && !str_contains(http_get("$baseQu/?folder=Trips")[1], 'QUIET') && str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox")[1], 'QUIET-SENTINEL.jpg'));
-file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
+file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 
 check('[unlisted] the Unlisted folder\'s own map page (typed, no sign-in) shows its place, and the folder above\'s map page shows only its own', str_contains(http_get("$baseQu/?map&folder=Trips%2FQuietBox")[1], '48.85') && str_contains(http_get("$baseQu/?map&folder=Trips")[1], '41.9') && !str_contains(http_get("$baseQu/?map&folder=Trips")[1], '48.85'));
 // (the settings file was rewritten for the Flat part: the owner signs in again)
@@ -1794,6 +1794,21 @@ $quSet('Trips/QuietBox/Deep', 'public');
 // the folder settings page shows it as it is
 $quPageUnl = http_get("$baseQu/?admin&folder=Trips%2FQuietBox", $quOwn)[1];
 check('[own gallery default] the folder\'s settings show the switch ON with the note "On because this folder is Unlisted" and the Unlisted button chosen', preg_match('~<label class="switch"><input type="checkbox" name="owngallery" value="1"[^>]*checked~', $quPageUnl) === 1 && str_contains($quPageUnl, 'On because this folder is Unlisted') && str_contains($quPageUnl, '<input type="radio" name="vis" value="unlisted" checked>'));
+// ---- the viewer's own "this photo was shown" ping (it names the photo, not a folder): an Unlisted photo's views count, and it lists nothing
+$quTrack = fn (string $path, array $hdr = []) => json_decode(http_get("$baseQu/?track=" . rawurlencode($path), array_merge(['User-Agent: Mozilla/5.0 test'], $hdr))[1], true) ?? ['ok' => null];
+$quT1 = $quTrack('Trips/QuietBox/QUIET-SENTINEL.jpg'); $quT2 = $quTrack('Trips/QuietBox/QUIET-SENTINEL.jpg');
+check('[unlisted] a view of an Unlisted photo is counted for a visitor who types its address (the page\'s ping names only the photo): the count goes up each time', ($quT1['ok'] ?? null) === true && ($quT2['photoViews'] ?? 0) === ($quT1['photoViews'] ?? -1) + 1, json_encode([$quT1, $quT2]));
+check('[unlisted] ...the ping answers only with that photo\'s own counts (nothing about what else is in the folder), an ordinary photo still counts, and a private one and one that is not there do not', ($quTrack('front.jpg')['ok'] ?? null) === true && ($quTrack('Plain/PRIVATE-PLAIN.jpg')['ok'] ?? null) === false && ($quTrack('Trips/QuietBox/NO-SUCH.jpg')['ok'] ?? null) === false && count($quT1) === 5, json_encode($quT1));
+// ---- the owner's pickers tag an Unlisted folder (amber "Unlisted"), and no question is asked for it: it is public
+$quSet('Trips/QuietBox', 'unlisted');
+$quCollPage = http_get("$baseQu/?admin&folder=highlights", $quOwn)[1];
+check('[unlisted] the collection editor tags the Unlisted folder and its photo "Unlisted" (and not "Only me" or "Public")', preg_match('~cm-pill quiet">Unlisted</span>~', $quCollPage) === 1 && substr_count($quCollPage, 'cm-pill quiet">Unlisted') >= 2 && !preg_match('~QuietBox.{0,400}Only me~s', $quCollPage));
+check('[unlisted] ...and the picker the editor opens is given the folder flagged as Unlisted (so the tag is drawn there too)', (function () use ($quCollPage) { if (!preg_match('/class="cm-members"[^>]*data-folders="([^"]*)"/', $quCollPage, $m)) return false; foreach (json_decode(html_entity_decode($m[1], ENT_QUOTES), true) ?: [] as $o) if (($o['p'] ?? '') === 'Trips/QuietBox') return ($o['q'] ?? null) === true && ($o['u'] ?? null) === false; return false; })());
+$quLinkFolders = (function () use ($baseQu, $quOwn) { $page = http_get("$baseQu/?admin", $quOwn)[1]; return preg_match('/id="sl-form"[^>]*data-folders="([^"]*)"/', $page, $m) ? (json_decode(html_entity_decode($m[1], ENT_QUOTES), true) ?: []) : []; })();
+$quLf = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') === 'Trips/QuietBox'))[0] ?? [];
+$quLfOpen = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') === 'Open'))[0] ?? [];
+check('[unlisted] the share-link form is given the Unlisted folder flagged "q" (not "u", which asks the Only me question), and an ordinary folder neither', ($quLf['q'] ?? null) === true && ($quLf['u'] ?? null) === false && ($quLfOpen['q'] ?? null) === false && ($quLfOpen['u'] ?? null) === false, json_encode($quLf));
+$quSet('Trips/QuietBox', 'public');
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";

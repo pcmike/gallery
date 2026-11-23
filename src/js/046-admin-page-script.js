@@ -1284,10 +1284,19 @@
       Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
       return top;
     }
+    // The Unlisted folders that sit in no other Unlisted folder: the same rule (a folder picked above one does not bring it along), with no question asked when one is picked, because it is public.
+    function topQuiet(form) {
+      var all = {}, top = {};
+      folderList(form).forEach(function (o) { if (o.q && !o.c) all[o.p] = true; });
+      Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
+      return top;
+    }
+    // Both kinds of folder that a folder above does not bring along.
+    function topHidden(form) { var a = topUnlisted(form), b = topQuiet(form), r = {}; Object.keys(a).forEach(function (k) { r[k] = true; }); Object.keys(b).forEach(function (k) { r[k] = true; }); return r; }
     // Is this folder (a path) covered by what the link holds now? The nearest folder listed above it, itself included, decides: one that is picked takes it in with everything inside it,
     // one that is left out (an exception) puts it out, and an Only me folder is not taken in by a folder above it.
     function covered(form, p) {
-      var un = topUnlisted(form), parts = p.split('/'), pre = '', on = false;
+      var un = topHidden(form), parts = p.split('/'), pre = '', on = false;
       for (var i = 0; i < parts.length; i++) {
         pre = pre === '' ? parts[i] : pre + '/' + parts[i];
         if (st.except.indexOf(pre) >= 0) on = false;
@@ -1555,14 +1564,14 @@
       if (limited && !st.scope.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
       var list = limited ? all.filter(function (o) { return covered(form, o.p); }) : all;
       var byP = {}; list.forEach(function (o) { byP[o.p] = o; });
-      var un = topUnlisted(form);
+      var un = topHidden(form);
       var below = function (p) { return list.filter(function (o) { return !o.c && o.p.indexOf(p + '/') === 0; }); };   // everything under a folder, in this list
       var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in an Only me folder that is itself under p)
       var tick = {};
       if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
       else st[kind].forEach(function (p) { tick[p] = true; });
       var rows = list.map(function (o) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : '') + '</span></label>';
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : (o.q ? ' <small class="muted">Unlisted</small>' : '')) + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
       var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
         : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
@@ -1597,8 +1606,8 @@
             var t = !!tick[o.p];
             if (o.c) { if (t) tops.push(o.p); return; }
             var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
-            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; an Only me folder is always its own top)
-            else if (!t && pt && !o.u) left.push(o.p);   // (left out of a ticked folder above it)
+            if (t && (!pt || o.u || o.q)) tops.push(o.p);   // (the top of a ticked part; an Only me or Unlisted folder is always its own top)
+            else if (!t && pt && !o.u && !o.q) left.push(o.p);   // (left out of a ticked folder above it)
           });
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
@@ -2971,7 +2980,7 @@
       var chosenF = {}, chosenP = {};
       function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
       var rows = folders.map(function (o) {
-        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Only me</small>' : '') + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
+        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Only me</small>' : (o.q ? ' <small class="muted">Unlisted</small>' : '')) + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
       }).join('');
       box.innerHTML = '<div class="cm-pick"><strong>Add to ' + esc(members.getAttribute('data-title')) + '</strong><p class="hint" style="margin:2px 0 8px">Tick a folder to add all of it, or open a folder’s photos to pick single ones.</p><ul>' + rows + '</ul><div class="cm-foot"><button type="button" class="primary" data-pick-add disabled>Add</button><button type="button" class="secondary" data-pick-cancel>Cancel</button><span class="rowstate" role="status" aria-live="polite"></span></div></div>';
       box.hidden = false;

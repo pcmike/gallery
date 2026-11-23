@@ -9694,6 +9694,7 @@ function link_allows_quiet_item($l, $dir, $file, $itemsData = null) {
 function quiet_hidden_for_visitor($dir, $file, $itemsData = null) {
     $depth = quiet_root_depth($dir, $file);
     if ($depth === 0 || is_admin_browser()) return false;
+    if (request_route() === 'track') return false;   // (the viewer's own "this photo was shown" ping names only the photo, not a folder: it lists nothing, and an Unlisted photo's views must count like any other's)
     $root = implode('/', array_slice(explode('/', dirname($file)), 0, $depth));
     if (quiet_request_inside($root)) return false;
     $l = link_viewer();
@@ -13659,7 +13660,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         foreach ($files as $f) {
             $d = dirname($f); $d = ($d === '.' || $d === '') ? '' : $d;
             if ($d !== $folder) continue;
-            $out[] = ['file' => basename($f), 'thumb' => img_url($f, 'thumb'), 'state' => file_is_unlisted($dir, $f) ? 'unlisted' : (file_is_hidden($dir, $f, items_get_all_for_files($dir, [$f])) ? 'private' : 'public')];
+            $out[] = ['file' => basename($f), 'thumb' => img_url($f, 'thumb'), 'state' => file_is_unlisted($dir, $f) ? 'unlisted' : (file_is_hidden($dir, $f, items_get_all_for_files($dir, [$f])) ? 'private' : (file_is_quiet($dir, $f) ? 'quiet' : 'public'))];
             if (count($out) >= 600) break;
         }
         admin_json_exit(['ok' => true, 'text' => '', 'photos' => $out]);
@@ -13837,7 +13838,7 @@ function collection_member_rows($dir, $rec, $files) {
             $key = 'p:' . $it['fid'] . '/' . $it['file'];
             $file = $path === null ? null : ($path === '' ? $it['file'] : $path . '/' . $it['file']);
             if ($file === null || !in_array($file, $files, true)) { $rows[] = ['key' => $key, 'kind' => 'photo', 'label' => $it['file'], 'where' => $path ?? '', 'state' => 'missing', 'count' => 0, 'mode' => '', 'thumb' => null]; continue; }
-            $state = file_is_unlisted($dir, $file) ? 'unlisted' : (file_is_hidden($dir, $file, items_get_all_for_files($dir, [$file])) ? 'private' : 'public');
+            $state = file_is_unlisted($dir, $file) ? 'unlisted' : (file_is_hidden($dir, $file, items_get_all_for_files($dir, [$file])) ? 'private' : (file_is_quiet($dir, $file) ? 'quiet' : 'public'));
             $rows[] = ['key' => $key, 'kind' => 'photo', 'label' => $it['file'], 'where' => $path, 'path' => $file, 'state' => $state, 'count' => 1, 'mode' => '', 'thumb' => img_url($file, 'thumb')];
             continue;
         }
@@ -13845,14 +13846,14 @@ function collection_member_rows($dir, $rec, $files) {
         if ($path === null || $path === '' || empty(folder_files_under($files, $path))) { $rows[] = ['key' => $key, 'kind' => 'folder', 'fid' => $it['fid'], 'label' => $path === null ? 'a folder that is gone' : $path, 'where' => '', 'state' => 'missing', 'count' => 0, 'mode' => $it['mode'], 'thumb' => null]; continue; }
         $own = $it['mode'] === 'own';
         $n = 0; foreach ($files as $f) { if (strncmp($f, $path . '/', strlen($path) + 1) !== 0) continue; if ($own && dirname($f) !== $path) continue; $n++; }
-        $state = folder_is_unlisted($dir, $path) ? 'unlisted' : (folder_is_private($dir, $path) || folder_above_is_private($dir, $path) ? 'private' : 'public');
+        $state = folder_is_unlisted($dir, $path) ? 'unlisted' : (folder_is_private($dir, $path) || folder_above_is_private($dir, $path) ? 'private' : (folder_is_quiet($dir, $path) ? 'quiet' : 'public'));
         $rows[] = ['key' => $key, 'kind' => 'folder', 'fid' => $it['fid'], 'label' => $path, 'where' => '', 'path' => $path, 'state' => $state, 'count' => $n, 'mode' => $it['mode'], 'thumb' => null];
     }
     return $rows;
 }
 
 function collection_pill($state) {
-    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Only me'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
+    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Only me'], 'quiet' => [' quiet', 'Unlisted'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
     return '<span class="cm-pill' . $t[0] . '">' . $t[1] . '</span>';
 }
 
@@ -13910,7 +13911,7 @@ function render_admin_collection_panel($dir, $files, $rec, $csrfToken) {
     <h3 class="subhead">Members</h3>
     <?php
       $folderOpts = [];
-      foreach (folder_tree_rows($dir, all_folder_paths($files)) as $fr) $folderOpts[] = ['p' => $fr['p'], 'n' => $fr['n'], 'd' => $fr['d'], 'x' => folder_is_private($dir, $fr['p']) || folder_above_is_private($dir, $fr['p']), 'u' => folder_is_unlisted($dir, $fr['p'])];
+      foreach (folder_tree_rows($dir, all_folder_paths($files)) as $fr) $folderOpts[] = ['p' => $fr['p'], 'n' => $fr['n'], 'd' => $fr['d'], 'x' => folder_is_private($dir, $fr['p']) || folder_above_is_private($dir, $fr['p']), 'u' => folder_is_unlisted($dir, $fr['p']), 'q' => folder_is_quiet($dir, $fr['p'])];
       $memberFolders = []; $memberPhotos = [];
       foreach ($rows as $m) { if ($m['state'] === 'missing') continue; if ($m['kind'] === 'folder') $memberFolders[] = $m['path']; else $memberPhotos[] = $m['path']; }
     ?>
@@ -14979,7 +14980,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         foreach ($panelColls[$parent] ?? [] as $cr) $folderOpts[] = ['p' => $cr['path'], 'l' => link_folder_label($dir, $cr['path']), 'n' => $cr['title'] !== '' ? $cr['title'] : $cr['name'], 'd' => $depth, 'x' => $cr['private'], 'u' => false, 'c' => true];
     };
     $addColls('', 0);
-    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) { $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p']), 'u' => folder_is_unlisted($dir, $r['p'])]; $addColls($r['p'], $r['d'] + 1); }
+    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) { $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p']), 'u' => folder_is_unlisted($dir, $r['p']), 'q' => folder_is_quiet($dir, $r['p'])]; $addColls($r['p'], $r['d'] + 1); }
     $privNow = admin_hidden_data($dir, $files);   // (what is private right now: the form says "opens private photos" only when the link would)
     $current = []; $ended = []; $problemLinks = 0;
     foreach ($data['links'] as $l) {
@@ -20633,6 +20634,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .cm-new input[type=text] { flex:1 1 200px; min-width:0; }
   .cm-pill { display:inline-block; font-size:.68rem; padding:2px 8px; border-radius:10px; background:#2a2a30; color:#cfd0d6; margin-left:6px; vertical-align:1px; font-style:normal; font-weight:500; }
   .cm-pill.priv { background:#3b2f12; color:#f2c86b; }
+  .cm-pill.quiet { background:#3a3010; color:#f0d27a; }
   .cm-pill.miss { background:#3a1d1d; color:#f09a9a; }
   .cm-kind { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); width:48px; flex:0 0 48px; }
   .cm-th { width:44px; height:44px; border-radius:6px; object-fit:cover; flex:0 0 44px; background:#222; }
@@ -22505,10 +22507,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
       return top;
     }
+    // The Unlisted folders that sit in no other Unlisted folder: the same rule (a folder picked above one does not bring it along), with no question asked when one is picked, because it is public.
+    function topQuiet(form) {
+      var all = {}, top = {};
+      folderList(form).forEach(function (o) { if (o.q && !o.c) all[o.p] = true; });
+      Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
+      return top;
+    }
+    // Both kinds of folder that a folder above does not bring along.
+    function topHidden(form) { var a = topUnlisted(form), b = topQuiet(form), r = {}; Object.keys(a).forEach(function (k) { r[k] = true; }); Object.keys(b).forEach(function (k) { r[k] = true; }); return r; }
     // Is this folder (a path) covered by what the link holds now? The nearest folder listed above it, itself included, decides: one that is picked takes it in with everything inside it,
     // one that is left out (an exception) puts it out, and an Only me folder is not taken in by a folder above it.
     function covered(form, p) {
-      var un = topUnlisted(form), parts = p.split('/'), pre = '', on = false;
+      var un = topHidden(form), parts = p.split('/'), pre = '', on = false;
       for (var i = 0; i < parts.length; i++) {
         pre = pre === '' ? parts[i] : pre + '/' + parts[i];
         if (st.except.indexOf(pre) >= 0) on = false;
@@ -22776,14 +22787,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (limited && !st.scope.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
       var list = limited ? all.filter(function (o) { return covered(form, o.p); }) : all;
       var byP = {}; list.forEach(function (o) { byP[o.p] = o; });
-      var un = topUnlisted(form);
+      var un = topHidden(form);
       var below = function (p) { return list.filter(function (o) { return !o.c && o.p.indexOf(p + '/') === 0; }); };   // everything under a folder, in this list
       var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in an Only me folder that is itself under p)
       var tick = {};
       if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
       else st[kind].forEach(function (p) { tick[p] = true; });
       var rows = list.map(function (o) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : '') + '</span></label>';
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : (o.q ? ' <small class="muted">Unlisted</small>' : '')) + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
       var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
         : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
@@ -22818,8 +22829,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             var t = !!tick[o.p];
             if (o.c) { if (t) tops.push(o.p); return; }
             var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
-            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; an Only me folder is always its own top)
-            else if (!t && pt && !o.u) left.push(o.p);   // (left out of a ticked folder above it)
+            if (t && (!pt || o.u || o.q)) tops.push(o.p);   // (the top of a ticked part; an Only me or Unlisted folder is always its own top)
+            else if (!t && pt && !o.u && !o.q) left.push(o.p);   // (left out of a ticked folder above it)
           });
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
@@ -24192,7 +24203,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var chosenF = {}, chosenP = {};
       function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
       var rows = folders.map(function (o) {
-        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Only me</small>' : '') + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
+        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Only me</small>' : (o.q ? ' <small class="muted">Unlisted</small>' : '')) + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
       }).join('');
       box.innerHTML = '<div class="cm-pick"><strong>Add to ' + esc(members.getAttribute('data-title')) + '</strong><p class="hint" style="margin:2px 0 8px">Tick a folder to add all of it, or open a folder’s photos to pick single ones.</p><ul>' + rows + '</ul><div class="cm-foot"><button type="button" class="primary" data-pick-add disabled>Add</button><button type="button" class="secondary" data-pick-cancel>Cancel</button><span class="rowstate" role="status" aria-live="polite"></span></div></div>';
       box.hidden = false;

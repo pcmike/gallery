@@ -910,6 +910,7 @@
   .cm-new input[type=text] { flex:1 1 200px; min-width:0; }
   .cm-pill { display:inline-block; font-size:.68rem; padding:2px 8px; border-radius:10px; background:#2a2a30; color:#cfd0d6; margin-left:6px; vertical-align:1px; font-style:normal; font-weight:500; }
   .cm-pill.priv { background:#3b2f12; color:#f2c86b; }
+  .cm-pill.quiet { background:#3a3010; color:#f0d27a; }
   .cm-pill.miss { background:#3a1d1d; color:#f09a9a; }
   .cm-kind { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); width:48px; flex:0 0 48px; }
   .cm-th { width:44px; height:44px; border-radius:6px; object-fit:cover; flex:0 0 44px; background:#222; }

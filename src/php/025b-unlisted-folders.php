@@ -88,6 +88,7 @@ function link_allows_quiet_item($l, $dir, $file, $itemsData = null) {
 function quiet_hidden_for_visitor($dir, $file, $itemsData = null) {
     $depth = quiet_root_depth($dir, $file);
     if ($depth === 0 || is_admin_browser()) return false;
+    if (request_route() === 'track') return false;   // (the viewer's own "this photo was shown" ping names only the photo, not a folder: it lists nothing, and an Unlisted photo's views must count like any other's)
     $root = implode('/', array_slice(explode('/', dirname($file)), 0, $depth));
     if (quiet_request_inside($root)) return false;
     $l = link_viewer();

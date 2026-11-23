@@ -143,7 +143,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         foreach ($files as $f) {
             $d = dirname($f); $d = ($d === '.' || $d === '') ? '' : $d;
             if ($d !== $folder) continue;
-            $out[] = ['file' => basename($f), 'thumb' => img_url($f, 'thumb'), 'state' => file_is_unlisted($dir, $f) ? 'unlisted' : (file_is_hidden($dir, $f, items_get_all_for_files($dir, [$f])) ? 'private' : 'public')];
+            $out[] = ['file' => basename($f), 'thumb' => img_url($f, 'thumb'), 'state' => file_is_unlisted($dir, $f) ? 'unlisted' : (file_is_hidden($dir, $f, items_get_all_for_files($dir, [$f])) ? 'private' : (file_is_quiet($dir, $f) ? 'quiet' : 'public'))];
             if (count($out) >= 600) break;
         }
         admin_json_exit(['ok' => true, 'text' => '', 'photos' => $out]);
@@ -321,7 +321,7 @@ function collection_member_rows($dir, $rec, $files) {
             $key = 'p:' . $it['fid'] . '/' . $it['file'];
             $file = $path === null ? null : ($path === '' ? $it['file'] : $path . '/' . $it['file']);
             if ($file === null || !in_array($file, $files, true)) { $rows[] = ['key' => $key, 'kind' => 'photo', 'label' => $it['file'], 'where' => $path ?? '', 'state' => 'missing', 'count' => 0, 'mode' => '', 'thumb' => null]; continue; }
-            $state = file_is_unlisted($dir, $file) ? 'unlisted' : (file_is_hidden($dir, $file, items_get_all_for_files($dir, [$file])) ? 'private' : 'public');
+            $state = file_is_unlisted($dir, $file) ? 'unlisted' : (file_is_hidden($dir, $file, items_get_all_for_files($dir, [$file])) ? 'private' : (file_is_quiet($dir, $file) ? 'quiet' : 'public'));
             $rows[] = ['key' => $key, 'kind' => 'photo', 'label' => $it['file'], 'where' => $path, 'path' => $file, 'state' => $state, 'count' => 1, 'mode' => '', 'thumb' => img_url($file, 'thumb')];
             continue;
         }
@@ -329,14 +329,14 @@ function collection_member_rows($dir, $rec, $files) {
         if ($path === null || $path === '' || empty(folder_files_under($files, $path))) { $rows[] = ['key' => $key, 'kind' => 'folder', 'fid' => $it['fid'], 'label' => $path === null ? 'a folder that is gone' : $path, 'where' => '', 'state' => 'missing', 'count' => 0, 'mode' => $it['mode'], 'thumb' => null]; continue; }
         $own = $it['mode'] === 'own';
         $n = 0; foreach ($files as $f) { if (strncmp($f, $path . '/', strlen($path) + 1) !== 0) continue; if ($own && dirname($f) !== $path) continue; $n++; }
-        $state = folder_is_unlisted($dir, $path) ? 'unlisted' : (folder_is_private($dir, $path) || folder_above_is_private($dir, $path) ? 'private' : 'public');
+        $state = folder_is_unlisted($dir, $path) ? 'unlisted' : (folder_is_private($dir, $path) || folder_above_is_private($dir, $path) ? 'private' : (folder_is_quiet($dir, $path) ? 'quiet' : 'public'));
         $rows[] = ['key' => $key, 'kind' => 'folder', 'fid' => $it['fid'], 'label' => $path, 'where' => '', 'path' => $path, 'state' => $state, 'count' => $n, 'mode' => $it['mode'], 'thumb' => null];
     }
     return $rows;
 }
 
 function collection_pill($state) {
-    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Only me'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
+    $t = ['public' => ['', 'Public'], 'private' => [' priv', 'Private'], 'unlisted' => [' priv', 'Only me'], 'quiet' => [' quiet', 'Unlisted'], 'missing' => [' miss', 'Not found']][$state] ?? ['', ''];
     return '<span class="cm-pill' . $t[0] . '">' . $t[1] . '</span>';
 }
 
@@ -394,7 +394,7 @@ function render_admin_collection_panel($dir, $files, $rec, $csrfToken) {
     <h3 class="subhead">Members</h3>
     <?php
       $folderOpts = [];
-      foreach (folder_tree_rows($dir, all_folder_paths($files)) as $fr) $folderOpts[] = ['p' => $fr['p'], 'n' => $fr['n'], 'd' => $fr['d'], 'x' => folder_is_private($dir, $fr['p']) || folder_above_is_private($dir, $fr['p']), 'u' => folder_is_unlisted($dir, $fr['p'])];
+      foreach (folder_tree_rows($dir, all_folder_paths($files)) as $fr) $folderOpts[] = ['p' => $fr['p'], 'n' => $fr['n'], 'd' => $fr['d'], 'x' => folder_is_private($dir, $fr['p']) || folder_above_is_private($dir, $fr['p']), 'u' => folder_is_unlisted($dir, $fr['p']), 'q' => folder_is_quiet($dir, $fr['p'])];
       $memberFolders = []; $memberPhotos = [];
       foreach ($rows as $m) { if ($m['state'] === 'missing') continue; if ($m['kind'] === 'folder') $memberFolders[] = $m['path']; else $memberPhotos[] = $m['path']; }
     ?>
