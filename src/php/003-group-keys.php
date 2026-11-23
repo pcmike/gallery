@@ -71,6 +71,11 @@ if (isset($_GET['photo'])) {
         exit;
     }
 }
+// A photo of an Unlisted folder typed as ?photo=<path> alone belongs on its folder's own page (the front page does not list that folder), so the address goes there.
+if ($requestedPhoto !== null && !isset($_GET['folder']) && request_route() === '' && !is_admin_browser() && file_is_quiet($dir, $requestedPhoto)) {
+    header('Location: ?folder=' . rawurlencode(dirname($requestedPhoto)) . '&photo=' . rawurlencode($requestedPhoto), true, 302);
+    exit;
+}
 // A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
 // "GROUPING" below), kept out of search engines and not passed on in a Referer.
 $photoPass = null;

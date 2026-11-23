@@ -1507,6 +1507,11 @@ if (isset($_GET['photo'])) {
         exit;
     }
 }
+// A photo of an Unlisted folder typed as ?photo=<path> alone belongs on its folder's own page (the front page does not list that folder), so the address goes there.
+if ($requestedPhoto !== null && !isset($_GET['folder']) && request_route() === '' && !is_admin_browser() && file_is_quiet($dir, $requestedPhoto)) {
+    header('Location: ?folder=' . rawurlencode(dirname($requestedPhoto)) . '&photo=' . rawurlencode($requestedPhoto), true, 302);
+    exit;
+}
 // A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
 // "GROUPING" below), kept out of search engines and not passed on in a Referer.
 $photoPass = null;
@@ -3556,6 +3561,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (an Unlisted folder's pictures are for whoever has its address, not for a search engine's image results)
     // Someone using a share link is sent a private picture: noted in that link's log (their browser reports what was on screen too).
     if ($variant !== 'full' && ($linkNote = visitor_logged_link()) !== null && file_is_hidden($dir, $filename, $itemsData)) link_queue_delivery($linkNote, 's', $filename);
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
@@ -3715,6 +3721,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (see serve_image)
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
     $srcPath = resolve_real_path($dir, $filename);
     $size = @filesize($srcPath);
@@ -4387,7 +4394,7 @@ if (is_admin_browser() || (!is_revealed() && ($linkHere = link_viewer()) !== nul
 if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData, $photoPass) {
-            return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);   // (opened by its own address: that photo, not the gallery's public rest)
+            return $photoPass !== null ? $f === $photoPass : (viewer_may_see_item($dir, $f, $itemsData) && !quiet_hidden_for_visitor($dir, $f, $itemsData));   // (opened by its own address: that photo, not the gallery's public rest; and an Unlisted folder's photos are left out of every list a visitor is given, unless the page is inside it or a link names it)
         }));
         if (empty($visibleMembers)) {
             unset($groups[$key], $folderGroupKeys[$key], $explicitGroupKeys[$key]);
@@ -6686,6 +6693,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
         folder_unlisted_cached(null, null, true);
         folder_own_gallery_cached(null, null, true);
         folder_flag_resolve(null, null, null, true);
+        folder_quiet_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
@@ -7252,7 +7260,7 @@ function link_item_is_public($dir, $file, $itemsData = null) {
 /** How a link's folders cover an item: 'all' (it is under a folder the link shares with everything inside), 'public' (it is under folders
  *  the link shares as "public items only", and under no other), or '' (under none of them). A private folder's items are all private,
  *  so a public-only folder that is itself private covers nothing. */
-function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
+function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = [], $fromDepth = null) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return '';
     $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
@@ -7260,13 +7268,13 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
     $amb = link_ambiguous_set();
     $cover = ''; $viaCollection = '';
     foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
-        if ($cid[0] !== 'c' || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
+        if ($cid[0] !== 'c' || $fromDepth !== null || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // ($fromDepth: asked for an Unlisted folder's photo, which no collection brings along)   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
         if (!isset($pub[$cid])) return 'all';
         $viaCollection = 'public';
     }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
-    $from = max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
+    $from = $fromDepth ?? max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
     $n = 0;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
@@ -8764,7 +8772,7 @@ function items_path($folderPath) {
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment) and mediaInfo its own "show media info" switch: true, false, or null when it
  *  has made no choice and takes the one from the folder above it (see folder_flag_resolve). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => null, 'mediaInfo' => null, 'quiet' => null, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
 }
 
 function items_read($folderPath) {
@@ -9591,6 +9599,102 @@ function serve_photo_info($dir, $mediaExtensions, $self) {
         return;
     }
     echo json_encode(['ok' => true, 'rows' => photo_info_rows($dir, $claimed, $items[$claimed] ?? [])], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+}
+/* -----------------------------------------------------------------------
+ * Unlisted folders (what the owner is shown as "Unlisted"; kept as `quiet: true` in the folder's own settings, so that it is never mixed up with the
+ * older `unlisted` flag, which is what the owner is shown as "Only me").
+ *
+ * An Unlisted folder is PUBLIC: anyone who types its address can open it, with no sign-in. What makes it unlisted is that it is left out of everything
+ * that lists things for a visitor: the gallery's front page and the folders around it (cards, pills, counts, the map, notes, the ZIP of the folder
+ * above, collections, link previews, the "last updated" date) and search engines are asked to skip it. It covers the folder and everything beneath
+ * it. The owner sees all of it, with a pill that says so.
+ *
+ * The one place that takes it out of the lists is the filter that already decides what a visitor's page is made of (see GROUPING in
+ * 009-notes-grouping-and-order.php): $groups and $files are filtered there, so every count, list and allowlist after it agrees. Pages that are
+ * MEANT to reach it keep its photos in that list: a page inside the folder (?folder=<it or a folder in it>), and a share link that names it.
+ * Nothing here asks "is anything Unlisted?" first, on purpose: a folder moved in from another gallery, restored from a backup or edited by hand
+ * carries the setting without any note anywhere else, and must be left out all the same.
+ * ----------------------------------------------------------------------- */
+
+/** One folder's own Unlisted setting, read once per request (and reset with the other folder settings when one is saved). */
+function folder_quiet_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) { $cache = []; return null; }
+    $folderRel = (string) $folderRel;
+    if (!isset($cache[$folderRel])) {
+        $cache[$folderRel] = ($folderRel === '' ? false : (items_read(resolve_real_path($dir, $folderRel))['quiet'] ?? null) === true);   // (the gallery's own folder cannot be Unlisted: it is the gallery)
+    }
+    return $cache[$folderRel];
+}
+
+/** How many path segments of $file's folders it takes to reach the topmost Unlisted folder above it (1 for a top-level folder), or 0 when none is. */
+function quiet_root_depth($dir, $file) {
+    if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
+        $path = ''; $depth = 0;
+        foreach (explode('/', dirname($file)) as $segment) {
+            $path = $path === '' ? $segment : $path . '/' . $segment;
+            $depth++;
+            if (folder_quiet_cached($dir, $path)) return $depth;
+        }
+    }
+    return 0;
+}
+
+/** The path of the topmost Unlisted folder $file sits in, or '' when it is in none. */
+function quiet_root_path($dir, $file) {
+    $depth = quiet_root_depth($dir, $file);
+    return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
+}
+
+/** Is the item in an Unlisted folder? */
+function file_is_quiet($dir, $file) {
+    return quiet_root_depth($dir, $file) > 0;
+}
+
+/** Is this folder Unlisted, on its own or because a folder above it is? */
+function folder_is_quiet($dir, $folderPath) {
+    return folder_quiet_cached($dir, $folderPath) || quiet_root_depth($dir, $folderPath . '/x') > 0;
+}
+
+/** Is the page being asked for inside the Unlisted folder $root (the folder itself, or one in it)? */
+function quiet_request_inside($root) {
+    $asked = $_GET['folder'] ?? null;
+    if (!is_string($asked) || $asked === '' || $root === '') return false;
+    return $asked === $root || strncmp($asked, $root . '/', strlen($root) + 1) === 0;
+}
+
+/** May the share link $l show this item of an Unlisted folder? Only when the link NAMES the Unlisted folder (or a folder inside it) or the photo itself:
+ *  an "Everything" link and a link that names a folder above it leave it out, as they do a folder that is Only me, so a link meant for "all my photos" never
+ *  carries the folder that was meant to stay out of sight. A collection the link names does not bring it along either (a collection is a list). */
+function link_allows_quiet_item($l, $dir, $file, $itemsData = null) {
+    $type = $l['scope']['type'] ?? '';
+    $from = max(0, quiet_root_depth($dir, $file) - 1);
+    if ($type === 'folders' || $type === 'mixed') {
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? [], $from);
+        if ($cover === 'all' || $cover === 'public') return true;   // (an Unlisted folder is public, so "public items only" covers it too)
+        if ($type === 'folders') return false;
+    }
+    if ($type === 'photos' || $type === 'mixed') {
+        $set = [];
+        foreach ((array) ($l['scope']['photos'] ?? []) as $p) if (is_array($p) && is_string($p['fid'] ?? null) && is_string($p['name'] ?? null)) $set[$p['fid'] . "\0" . $p['name']] = true;
+        if (!$set) return false;
+        $slash = strrpos($file, '/');
+        $fid = folder_id_cached($dir, $slash === false ? '' : substr($file, 0, $slash));
+        return $fid !== '' && !isset(link_ambiguous_set()[$fid]) && isset($set[$fid . "\0" . basename($file)]);
+    }
+    return false;
+}
+
+/** Is this item left out of the visitor's lists because it is in an Unlisted folder? False for the owner, for a page inside the folder, and for a link
+ *  that names it. This is what the page's filter asks, once for every file (see GROUPING). */
+function quiet_hidden_for_visitor($dir, $file, $itemsData = null) {
+    $depth = quiet_root_depth($dir, $file);
+    if ($depth === 0 || is_admin_browser()) return false;
+    $root = implode('/', array_slice(explode('/', dirname($file)), 0, $depth));
+    if (quiet_request_inside($root)) return false;
+    $l = link_viewer();
+    if ($l !== null && link_allows_quiet_item($l, $dir, $file, $itemsData)) return false;
+    return true;
 }
 /** The stacks as stored, cleaned: names only, each photo in one stack at most, an anchor that is a member, and nothing left
  *  that holds fewer than two photos. */
@@ -11617,7 +11721,7 @@ function edited_record_keys() {
     return [
         'folder' => [
             'displayName' => 'shown', 'description' => 'shown', 'dates' => 'shown', 'sortOrder' => 'shown', 'restriction' => 'shown', 'unlisted' => 'shown',
-            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown',
+            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown', 'quiet' => 'shown',
             'mapEnabled' => 'shown', 'mapRadius' => 'shown', 'photoSort' => 'shown', 'groups' => 'shown', 'stacks' => 'shown', 'cover' => 'shown', 'coverFollow' => 'shown',
             'folderId' => 'internal', 'pageviews' => 'internal', 'items' => 'internal',
         ],
@@ -11663,6 +11767,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
+        if (($d['quiet'] ?? null) === true) $set[] = ['', 'Unlisted: public, left out of every list'];
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
         if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo links send the bare file'];
@@ -25589,6 +25694,7 @@ if (isset($_GET['folder'])) {
         exit;
     }
     $currentFolderPath = $requestedFolder;
+    if ($currentCollectionPage === null && folder_is_quiet($dir, $currentFolderPath)) { header('X-Robots-Tag: noindex, nofollow'); $GLOBALS['__noindex'] = true; }   // (an Unlisted folder's page is for whoever has its address: search engines are asked to skip it)
     // A folder can say how its own page shows the folders under it (its own choice, else the gallery's).
     $folderItemsOwn = $currentCollectionPage !== null ? $currentCollectionPage['rec'] : items_read(resolve_real_path($dir, $requestedFolder));   // (a collection keeps the same choices in its own record)
     $folderStyleOwn = $folderItemsOwn['subfolderStyle'] ?? null;
@@ -27542,6 +27648,7 @@ send_viewer_aware_cache_headers();
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php if (!empty($GLOBALS['__noindex'])) echo '<meta name="robots" content="noindex, nofollow">' . "\n"; ?>
 <title><?= htmlspecialchars($pageTitle) ?> — Gallery</title>
 <meta name="description" content="<?= htmlspecialchars($ogDescription) ?>">
 <?= home_screen_app_tags($rootPageTitle) ?>

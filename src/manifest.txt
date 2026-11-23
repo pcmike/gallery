@@ -29,6 +29,7 @@ js/023-map-script-pins.js
 php/024-map-points-2.php
 php/025-item-data.php
 php/025a-photo-info.php
+php/025b-unlisted-folders.php
 php/026-media-stacks-and-records.php
 php/027-gps-and-admin-folder-helpers.php
 php/028-admin-export-and-hidden.php

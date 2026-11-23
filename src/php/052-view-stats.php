@@ -629,6 +629,7 @@ if (isset($_GET['folder'])) {
         exit;
     }
     $currentFolderPath = $requestedFolder;
+    if ($currentCollectionPage === null && folder_is_quiet($dir, $currentFolderPath)) { header('X-Robots-Tag: noindex, nofollow'); $GLOBALS['__noindex'] = true; }   // (an Unlisted folder's page is for whoever has its address: search engines are asked to skip it)
     // A folder can say how its own page shows the folders under it (its own choice, else the gallery's).
     $folderItemsOwn = $currentCollectionPage !== null ? $currentCollectionPage['rec'] : items_read(resolve_real_path($dir, $requestedFolder));   // (a collection keeps the same choices in its own record)
     $folderStyleOwn = $folderItemsOwn['subfolderStyle'] ?? null;

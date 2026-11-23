@@ -89,7 +89,7 @@ function link_item_is_public($dir, $file, $itemsData = null) {
 /** How a link's folders cover an item: 'all' (it is under a folder the link shares with everything inside), 'public' (it is under folders
  *  the link shares as "public items only", and under no other), or '' (under none of them). A private folder's items are all private,
  *  so a public-only folder that is itself private covers nothing. */
-function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
+function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = [], $fromDepth = null) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return '';
     $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
@@ -97,13 +97,13 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
     $amb = link_ambiguous_set();
     $cover = ''; $viaCollection = '';
     foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
-        if ($cid[0] !== 'c' || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
+        if ($cid[0] !== 'c' || $fromDepth !== null || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // ($fromDepth: asked for an Unlisted folder's photo, which no collection brings along)   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
         if (!isset($pub[$cid])) return 'all';
         $viaCollection = 'public';
     }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
-    $from = max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
+    $from = $fromDepth ?? max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
     $n = 0;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;

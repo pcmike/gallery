@@ -323,6 +323,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
         folder_unlisted_cached(null, null, true);
         folder_own_gallery_cached(null, null, true);
         folder_flag_resolve(null, null, null, true);
+        folder_quiet_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {

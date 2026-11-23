@@ -226,6 +226,7 @@ send_viewer_aware_cache_headers();
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php if (!empty($GLOBALS['__noindex'])) echo '<meta name="robots" content="noindex, nofollow">' . "\n"; ?>
 <title><?= htmlspecialchars($pageTitle) ?> — Gallery</title>
 <meta name="description" content="<?= htmlspecialchars($ogDescription) ?>">
 <?= home_screen_app_tags($rootPageTitle) ?>

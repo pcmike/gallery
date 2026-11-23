@@ -1629,6 +1629,114 @@ write_patched_index("$fxSs1/index.php", $indexContents, []);
 $portSs1 = find_free_port(); start_server($fxSs1, $portSs1);
 [, $ss1Page] = http_get("http://127.0.0.1:$portSs1/");
 check('[slideshow] a page with a single photo has no Play button on the page (nothing to play)', !str_contains($ss1Page, 'id="slideshow-start"') && str_contains($ss1Page, 'id="map-bar"') );
+/* ---------------------------------------------------------------------
+ * Unlisted folders: public, reachable by typing the address, left out of every list. A folder with sentinel names, photos, captions, a place and a date is
+ * requested every way there is, as a stranger, as someone with the private-view password, on share links and as the owner. The sentinels must turn up
+ * only where the folder is meant to be reached (a page inside it; a link that names it; the owner) and nowhere else.
+ * --------------------------------------------------------------------- */
+echo "== Unlisted folders ==\n";
+$fxQu = new_fixture_dir('unlisted');
+foreach (['Trips', 'Trips/QuietBox', 'Trips/QuietBox/Deep', 'Open', 'Plain'] as $quD) mkdir("$fxQu/$quD", 0777, true);
+foreach (['front.jpg' => 1, 'Trips/trips-1.jpg' => 2, 'Trips/QuietBox/QUIET-SENTINEL.jpg' => 3, 'Trips/QuietBox/QUIET-TWO.jpg' => 4, 'Trips/QuietBox/Deep/QUIET-DEEP.jpg' => 5, 'Open/open-1.jpg' => 6, 'Plain/PRIVATE-PLAIN.jpg' => 7] as $quF => $quC) make_jpeg("$fxQu/$quF", 40, 40, 20 * $quC, 60, 200 - 20 * $quC);
+make_minimal_mp4("$fxQu/Trips/QuietBox/QUIET-VIDEO.mp4", 3, 1);
+touch("$fxQu/Trips/QuietBox/QUIET-SENTINEL.jpg", strtotime('2031-05-05 12:00:00'));   // (a date no other file has: "last updated" must not turn it up)
+$quWrite = fn (string $folder, array $data) => file_put_contents("$fxQu/$folder/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($data));
+$quLoc = ['lat' => 48.8566, 'lng' => 2.3522, 'label' => 'QUIET-PLACE'];
+$quWrite('Trips/QuietBox', ['quiet' => true, 'locationEnabled' => true, 'mapEnabled' => true, 'displayName' => 'QuietBox Name', 'description' => 'QUIET-DESC', 'items' => ['QUIET-SENTINEL.jpg' => ['caption' => 'QUIET-CAPTION', 'location' => $quLoc], 'QUIET-TWO.jpg' => ['location' => $quLoc]]]);
+$quWrite('Trips', ['locationEnabled' => true, 'mapEnabled' => true, 'items' => ['trips-1.jpg' => ['caption' => 'Trips caption', 'location' => ['lat' => 41.9, 'lng' => 12.5, 'label' => 'Rome']]]]);
+$quWrite('Plain', ['restriction' => 'private']);
+file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxQu/index.php");
+$portQu = find_free_port(); start_server($fxQu, $portQu); $baseQu = "http://127.0.0.1:$portQu";
+[, , $quH1] = http_post("$baseQu/?admin", ['access_code' => 'qu-admin-pw-1'], [], false);
+$quOwn = ['Cookie: ' . extract_cookie_header($quH1)];
+[, , $quH2] = http_post("$baseQu/?reveal", ['access_code' => 'qu-view-pw-1'], [], false);
+$quViewCookie = extract_cookie_header($quH2); $quView = $quViewCookie ? ['Cookie: ' . $quViewCookie] : [];
+check('[unlisted] the fixture signs in as the owner and as a private-view viewer', $quOwn[0] !== 'Cookie: ' && $quViewCookie !== null && $quViewCookie !== extract_cookie_header($quH1));
+$quCsrf = (string) extract_csrf_token(http_get("$baseQu/?admin", $quOwn)[1]);
+$quAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseQu/?admin$q", $f + ['csrf_token' => $quCsrf], array_merge($quOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$quLinks = fn () => read_data_file("$fxQu/.gallery-links.php");
+$quMake = function (string $label, array $f) use ($quAdmin, $quLinks, $baseQu, $fxQu) {
+    $made = $quAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return null;
+    $token = $quLinks()['links'][$made['id']]['token'];
+    @unlink("$fxQu/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseQu/?link=$token", ['go' => '1'], [], false);
+    $ck = extract_cookie_header($h);
+    return $ck ? ['Cookie: ' . $ck] : null;
+};
+$quLinkAll = $quMake('Everything', ['scope_type' => 'all']);
+$quLinkTrips = $quMake('Trips', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Trips'])]);
+$quLinkBox = $quMake('The box', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Trips/QuietBox'])]);
+check('[unlisted] the three share links open (Everything, the folder above, and one that names the Unlisted folder)', $quLinkAll !== null && $quLinkTrips !== null && $quLinkBox !== null);
+$quColl = $quAdmin(['action' => 'collection_create', 'parent' => '', 'title' => 'Highlights']);
+$quCollId = (string) ($quColl['id'] ?? '');
+$quAdmin(['action' => 'collection_member_add', 'id' => $quCollId, 'items' => json_encode([['path' => 'Trips/QuietBox'], ['path' => 'Trips/QuietBox', 'file' => 'QUIET-SENTINEL.jpg'], ['path' => 'Open', 'file' => 'open-1.jpg']])]);
+check('[unlisted] the fixture makes a collection (Highlights) that holds the Unlisted folder, one of its photos and an ordinary photo', ($quColl['ok'] ?? null) === true && $quCollId !== '' && count(read_data_file("$fxQu/.gallery-collections.php")['collections'][0]['items'] ?? []) === 3, json_encode($quColl));
+// every address that could list the folder or what is in it
+$quPaths = ['/', '/?folder=Trips', '/?folder=Open', '/?folder=Plain', '/?folder=highlights', '/?folder=Trips&sort=name', '/?sort=taken.desc', '/?map', '/?map&folder=Trips', '/?archive', '/?archive&folder=Trips', '/?archive&folder=highlights', '/?manifest', '/?about'];
+$quMedia = [];   // (a photo's own address is not a list: the files of a public folder can be fetched by anyone who knows the name, as any public photo can)
+$quCrawl = function (array $hdr, bool $baseline = false) use ($baseQu, $quPaths) {
+    $leaks = [];
+    foreach ($quPaths as $q) {
+        [$st, $body] = http_get("$baseQu$q", $hdr, true);
+        if ($baseline && $st !== 200 && !str_starts_with($q, '/?archive') && $q !== '/?folder=Plain') { $leaks[] = "page $q answers a stranger $st: the crawl would prove nothing about it"; continue; }   // (the stranger's answers are the baseline: every address that is not a refusal by design is a real page)
+        foreach (['QUIET', 'QuietBox', 'quietbox', 'May 5, 2031', '2031-05-05'] as $needle) if (str_contains($body, $needle)) { $leaks[] = "page $q ($st) has \"$needle\""; break; }
+    }
+    return $leaks;
+};
+$quWho = ['a stranger' => [], 'someone with the private-view password' => $quView, 'a link to Everything' => $quLinkAll ?? [], 'a link to the folder above (Trips)' => $quLinkTrips ?? []];
+foreach ($quWho as $quName => $quHdr) {
+    $quLeaks = $quCrawl($quHdr, $quHdr === []);
+    check("[unlisted] $quName never meets the Unlisted folder or anything of it on a page that lists things (" . count($quPaths) . " addresses)", $quLeaks === []);
+    if ($quLeaks) echo "    leaks: " . implode('; ', $quLeaks) . "\n";
+}
+// where it IS meant to be found
+$quOwnFront = http_get("$baseQu/?folder=Trips", $quOwn)[1];
+check('[unlisted] the owner sees the Unlisted folder on its parent\'s page, as a card with its own name', str_contains($quOwnFront, 'QuietBox Name') && str_contains($quOwnFront, 'folder-cover'), '');
+$quBoxPage = http_get("$baseQu/?folder=Trips%2FQuietBox");
+check('[unlisted] anyone who types the folder\'s address (a stranger, no sign-in) gets its page: its name, its note and its photos', $quBoxPage[0] === 200 && str_contains($quBoxPage[1], 'QuietBox Name') && str_contains($quBoxPage[1], 'QUIET-DESC') && str_contains($quBoxPage[1], 'QUIET-CAPTION') && str_contains($quBoxPage[1], 'QUIET-SENTINEL.jpg'), (string) $quBoxPage[0]);
+check('[unlisted] ...and a folder inside it (Deep) opens the same way', str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox%2FDeep")[1], 'QUIET-DEEP.jpg'));
+check('[unlisted] a person with the private-view password gets it the same way (it is public: nothing more is needed)', str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox", $quView)[1], 'QUIET-DESC'));
+check('[unlisted] a link that names the folder shows it (its card on the link\'s front page, and its page)', str_contains(http_get("$baseQu/", $quLinkBox ?? [])[1], 'QuietBox') && str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox", $quLinkBox ?? [])[1], 'QUIET-CAPTION'));
+check('[unlisted] a link that names the folder ABOVE it does not bring it along: its folder page does not list it, and the Unlisted folder only opens by its own address', !str_contains(http_get("$baseQu/?folder=Trips", $quLinkTrips ?? [])[1], 'QuietBox'));
+// a folder that is not there, for comparison
+check('[unlisted] a folder that does not exist is still a 404 (the Unlisted one is no catch-all)', http_get("$baseQu/?folder=Trips%2FNoSuchBox")[0] === 404 && http_get("$baseQu/?folder=Trips%2FQuiet")[0] === 404);
+
+// the collection shows the ordinary photo and nothing of the Unlisted ones, to every visitor who is not on the way into the folder
+$quHigh = http_get("$baseQu/?folder=highlights");
+check('[unlisted] a collection that holds an Unlisted folder shows its ordinary members and none of the Unlisted ones (the owner sees them all)', $quHigh[0] === 200 && str_contains($quHigh[1], 'open-1.jpg') && !str_contains($quHigh[1], 'QUIET') && str_contains(http_get("$baseQu/?folder=highlights", $quOwn)[1], 'QUIET-SENTINEL.jpg'), (string) $quHigh[0]);
+// the search engines and the typed photo address
+[$quSt, $quBoxBody, $quBoxHd] = http_get("$baseQu/?folder=Trips%2FQuietBox");
+check('[unlisted] the Unlisted folder\'s own page asks search engines to skip it (a header, and a tag in the page)', (bool) preg_grep('~^X-Robots-Tag:.*noindex~i', $quBoxHd) && str_contains($quBoxBody, '<meta name="robots" content="noindex, nofollow">'));
+check('[unlisted] ...an ordinary folder\'s page does not', !preg_grep('~^X-Robots-Tag~i', http_get("$baseQu/?folder=Trips")[2]) && !str_contains(http_get("$baseQu/?folder=Trips")[1], 'name="robots"') && !preg_grep('~^X-Robots-Tag~i', http_get("$baseQu/")[2]));
+$quImgQ = http_get("$baseQu/?img=Trips%2FQuietBox%2FQUIET-SENTINEL.jpg&size=thumb"); $quImgO = http_get("$baseQu/?img=Open%2Fopen-1.jpg&size=thumb");
+check('[unlisted] its pictures are public to whoever asks for them by name, and ask search engines to skip them; an ordinary photo\'s do not', $quImgQ[0] === 200 && (bool) preg_grep('~^X-Robots-Tag:.*noindex~i', $quImgQ[2]) && $quImgO[0] === 200 && !preg_grep('~^X-Robots-Tag~i', $quImgO[2]));
+[$quPs, , $quPh] = http_get("$baseQu/?photo=Trips%2FQuietBox%2FQUIET-SENTINEL.jpg", [], false);
+check('[unlisted] a photo of the folder typed as ?photo= alone is sent to the folder\'s own page (the front page does not list the folder), for a stranger; the owner is not sent', $quPs === 302 && (bool) preg_grep('~^Location: \?folder=Trips%2FQuietBox&photo=Trips%2FQuietBox%2FQUIET-SENTINEL\.jpg~', $quPh) && http_get("$baseQu/?photo=Open%2Fopen-1.jpg", [], false)[0] === 200);
+// what each page says it holds
+$quCount = function (string $body) { return preg_match('~(\d+) photos?(?: · (\d+) videos?)?~', strip_tags($body), $m) ? trim($m[0]) : ''; };
+$quFront = ['stranger' => $quCount(http_get("$baseQu/")[1]), 'view' => $quCount(http_get("$baseQu/", $quView)[1]), 'owner' => $quCount(http_get("$baseQu/", $quOwn)[1])];
+check('[unlisted] the front page\'s count leaves the Unlisted folder out for a stranger (3), adds only the private folder for the private-view password (4), and counts everything for the owner (7 photos · 1 video)', $quFront === ['stranger' => '3 photos', 'view' => '4 photos', 'owner' => '7 photos · 1 video'], json_encode($quFront));
+check('[unlisted] the Unlisted folder\'s own page counts what is in it (3 photos · 1 video), and the folder above it counts one photo for a stranger and all four for the owner', $quCount(http_get("$baseQu/?folder=Trips%2FQuietBox")[1]) === '3 photos · 1 video' && $quCount(http_get("$baseQu/?folder=Trips")[1]) === '1 photo' && $quCount(http_get("$baseQu/?folder=Trips", $quOwn)[1]) === '4 photos · 1 video');
+// the map and the "last updated" line really are on those pages (so their silence about the folder means something)
+$quMapFolder = http_get("$baseQu/?map")[1];
+check('[unlisted] the gallery\'s map has its ordinary place (Rome, 41.9) and not the Unlisted folder\'s (48.85, QUIET-PLACE): the crawl above has a place to be clean about', str_contains($quMapFolder, '41.9') && !str_contains($quMapFolder, '48.85') && !str_contains($quMapFolder, 'QUIET-PLACE') && str_contains(http_get("$baseQu/?map", $quOwn)[1], '48.85'));
+check('[unlisted] the front page says when the gallery was last updated, and the date is not the Unlisted folder\'s', preg_match('~Last updated [A-Z][a-z]+ \d+, \d{4}~', strip_tags(http_get("$baseQu/")[1]), $quLm) === 1 && !str_contains($quLm[0], '2031'), $quLm[0] ?? 'none');
+check('[unlisted] the owner\'s front page shows the Unlisted folder\'s date (it counts for the owner), so the line is really worked out from the photos', preg_match('~Last updated [A-Z][a-z]+ \d+, \d{4}~', strip_tags(http_get("$baseQu/", $quOwn)[1]), $quLo) === 1 && str_contains($quLo[0], '2031'), $quLo[0] ?? 'none');
+// Flat: the folder above shows the photos of the folders under it, all on one page; the Unlisted one must not be among them
+file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'FOLDER_FLAT_NOTES' => true]));
+foreach ($quWho as $quName => $quHdr) {
+    if ($quHdr === $quLinkAll || $quHdr === ($quLinkTrips ?? null) || $quHdr === $quView) { /* (the cookies still work: only the owner's session ends when the settings file is rewritten) */ }
+    $quLeaks = $quCrawl($quHdr, $quHdr === []);
+    check("[unlisted] Flat: $quName never meets the Unlisted folder on a page that lists things (" . count($quPaths) . " addresses)", $quLeaks === []);
+    if ($quLeaks) echo "    leaks: " . implode('; ', $quLeaks) . "\n";
+}
+check('[unlisted] Flat: the folder above lists its own photo and none of the Unlisted ones, and a page inside the Unlisted folder still opens', str_contains(http_get("$baseQu/?folder=Trips")[1], 'trips-1.jpg') && !str_contains(http_get("$baseQu/?folder=Trips")[1], 'QUIET') && str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox")[1], 'QUIET-SENTINEL.jpg'));
+file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
+
+check('[unlisted] the Unlisted folder\'s own map page (typed, no sign-in) shows its place, and the folder above\'s map page shows only its own', str_contains(http_get("$baseQu/?map&folder=Trips%2FQuietBox")[1], '48.85') && str_contains(http_get("$baseQu/?map&folder=Trips")[1], '41.9') && !str_contains(http_get("$baseQu/?map&folder=Trips")[1], '48.85'));
+
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
 $fxPi = new_fixture_dir('photoinfo');

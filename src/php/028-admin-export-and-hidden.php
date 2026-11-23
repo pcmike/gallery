@@ -256,7 +256,7 @@ function edited_record_keys() {
     return [
         'folder' => [
             'displayName' => 'shown', 'description' => 'shown', 'dates' => 'shown', 'sortOrder' => 'shown', 'restriction' => 'shown', 'unlisted' => 'shown',
-            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown',
+            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown', 'mediaInfo' => 'shown', 'quiet' => 'shown',
             'mapEnabled' => 'shown', 'mapRadius' => 'shown', 'photoSort' => 'shown', 'groups' => 'shown', 'stacks' => 'shown', 'cover' => 'shown', 'coverFollow' => 'shown',
             'folderId' => 'internal', 'pageviews' => 'internal', 'items' => 'internal',
         ],
@@ -302,6 +302,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
+        if (($d['quiet'] ?? null) === true) $set[] = ['', 'Unlisted: public, left out of every list'];
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
         if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo links send the bare file'];
