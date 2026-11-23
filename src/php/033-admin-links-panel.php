@@ -13,7 +13,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         foreach ($panelColls[$parent] ?? [] as $cr) $folderOpts[] = ['p' => $cr['path'], 'l' => link_folder_label($dir, $cr['path']), 'n' => $cr['title'] !== '' ? $cr['title'] : $cr['name'], 'd' => $depth, 'x' => $cr['private'], 'u' => false, 'c' => true];
     };
     $addColls('', 0);
-    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) { $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p']), 'u' => folder_is_unlisted($dir, $r['p']), 'q' => folder_is_quiet($dir, $r['p'])]; $addColls($r['p'], $r['d'] + 1); }
+    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) { $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p']), 'u' => folder_is_unlisted($dir, $r['p']), 'q' => folder_quiet_cached($dir, $r['p']), 'qi' => folder_is_quiet($dir, $r['p'])]; $addColls($r['p'], $r['d'] + 1); }
     $privNow = admin_hidden_data($dir, $files);   // (what is private right now: the form says "opens private photos" only when the link would)
     $current = []; $ended = []; $problemLinks = 0;
     foreach ($data['links'] as $l) {

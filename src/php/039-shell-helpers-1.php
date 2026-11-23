@@ -37,15 +37,22 @@ function folder_lock_toggles_shown() {
     return AUTO_GROUP_BY_FOLDER && in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
 }
 
-/** The lock beside a folder in a tree: closed when the folder is private, open when it is visible, dimmed (and not pressable) when a
- *  folder above it makes it private. */
+/** The lock beside a folder in a tree: it SHOWS who can see the folder and opens the folder's settings, where "Who can see this folder" is changed (with the questions
+ *  that go with it). It changes nothing itself, so a press can never open a private folder or drop an Unlisted one by surprise. Closed (red) when the folder is private or
+ *  Only me, open when it is public, open and amber when it is Unlisted; dimmed when a folder above it is what makes it so. */
 function folder_lock_button($path, $csrf, $cls = 'flock') {
     $dir = $GLOBALS['dir'];
-    $own = folder_restriction_cached($dir, $path) === 'private';
-    $inh = !$own && folder_above_is_private($dir, $path);
-    $on = $own || $inh;
-    return '<button type="button" class="' . $cls . ($on ? ' on' : '') . ($inh ? ' inh' : '') . '" data-lock-path="' . htmlspecialchars($path, ENT_QUOTES, 'UTF-8') . '"' . ($own ? ' data-own="1"' : '') . ' data-csrf="' . htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') . '"' . ($inh ? ' disabled' : '')
-        . ' aria-pressed="' . ($on ? 'true' : 'false') . '" title="' . ($inh ? 'Private because a folder above it is private' : ($on ? 'Private: press to make it visible' : 'Visible: press to make it private')) . '" aria-label="Private">' . ui_icon($on ? 'lock' : 'unlock') . '</button>';
+    $data = folder_items_memo($dir, $path);
+    $own = folder_visibility_level($data);   // (public, unlisted, private, me: this folder's own setting)
+    $inhPrivate = $own !== 'private' && $own !== 'me' && folder_above_is_private($dir, $path);
+    $inhQuiet = $own === 'public' && !$inhPrivate && folder_is_quiet($dir, $path);
+    $level = $inhPrivate ? 'private' : ($inhQuiet ? 'unlisted' : $own);
+    $inh = $inhPrivate || $inhQuiet;
+    $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
+    $on = $level === 'private' || $level === 'me';
+    $title = $names[$level] . ($inh ? ' (because a folder above it is)' : '') . ': press for this folder\'s settings, where you change who can see it';
+    return '<button type="button" class="' . $cls . ($on ? ' on' : '') . ($level === 'unlisted' ? ' q' : '') . ($inh ? ' inh' : '') . '" data-lock-path="' . htmlspecialchars($path, ENT_QUOTES, 'UTF-8') . '" data-level="' . $level . '"'
+        . ' title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '" aria-label="Who can see this folder: ' . $names[$level] . '. Open its settings">' . ui_icon($on ? 'lock' : 'unlock') . '</button>';
 }
 
 /** The folders as the shell's tree: Root on top with the gallery's own picture, every folder nested inside it, a count of
@@ -202,7 +209,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         $h .= '<a class="pb-w" href="' . $e($tab($t)) . '" data-pb-tab="' . $t . '"><span>' . $e($label) . '</span><span class="pb-b" data-b="' . $t . '">' . $badges . '</span></a>';
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
-    return $h . '<script>window.galleryFolderLock=window.galleryFolderLock||function(b){if(b.disabled)return;var on=b.classList.contains("on");b.disabled=true;var body=new URLSearchParams({csrf_token:b.getAttribute("data-csrf"),action:"toggle_folder_restriction",hidden:on?"":"1"});fetch("?admin&folder="+encodeURIComponent(b.getAttribute("data-lock-path")),{method:"POST",body:body,credentials:"same-origin",headers:{"X-Requested-With":"gallery-fetch"}}).then(function(r){return r.json()}).then(function(j){b.disabled=false;if(j&&j.ok){var now=!on;b.classList.toggle("on",now);b.setAttribute("aria-pressed",now?"true":"false");b.title=now?"Private: press to make it visible":"Visible: press to make it private";var u=b.querySelector("use");if(u)u.setAttribute("href",now?"#i-lock":"#i-unlock")}}).catch(function(){b.disabled=false})};</script><script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
+    return $h . '<script>window.galleryFolderLock=window.galleryFolderLock||function(b){location.href="?admin&folder="+encodeURIComponent(b.getAttribute("data-lock-path"))+"#settings"};</script><script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
         . 'var admin=bar.getAttribute("data-context")==="admin",loaded=0,busy=false,stale=false,sBusy=false;'
         . 'function top(){setTimeout(function(){scrollTo(0,0)},30);setTimeout(function(){scrollTo(0,0)},200)}'
         . 'function flag(){try{sessionStorage.setItem("pbTop","1")}catch(x){}}'
@@ -220,7 +227,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         // something was changed on this page (a setting, a folder\'s privacy): the Menu is asked for again, from the page itself, the next time it opens, so its locks and counts are not out of date
         . 'document.addEventListener("change",function(e){if(admin&&!sheet.contains(e.target))stale=true});'
         . 'function refresh(){if(sBusy)return;sBusy=true;fetch(location.href,{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,"text/html"),n=d.querySelector("#pb-sheet .pb-scroll"),o=sheet.querySelector(".pb-scroll");if(!n||!o)return;o.innerHTML=n.innerHTML;applyFolds();stale=false;loaded=0}).catch(function(){}).then(function(){sBusy=false})}'
-        . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
+        . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();if(!admin)flag();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
         . 'bar.addEventListener("click",function(e){var a=e.target.closest?e.target.closest("a.pb-i"):null;if(!a)return;var h=a.getAttribute("href")||"";'
         // on the gallery page the Gallery button is also "up": scrolled down it goes to the top of this page, at the top it goes up one folder
         . 'if(!admin&&a.getAttribute("data-pb")==="gallery"&&a.hasAttribute("data-up")){e.preventDefault();if(window.pageYOffset>8){var calm=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;window.scrollTo({top:0,behavior:calm?"auto":"smooth"})}else if(a.getAttribute("data-up")!=="")location.href=a.getAttribute("data-up");return}'

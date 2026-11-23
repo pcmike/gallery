@@ -72,7 +72,11 @@ if (isset($_GET['photo'])) {
     }
 }
 // A photo of an Unlisted folder typed as ?photo=<path> alone belongs on its folder's own page (the front page does not list that folder), so the address goes there.
-if ($requestedPhoto !== null && !isset($_GET['folder']) && request_route() === '' && !is_admin_browser() && file_is_quiet($dir, $requestedPhoto)) {
+// Not for an Only me photo's own address (its code would be lost, and the folder's name given away in the answer), and not for someone on a share link that names the
+// photo (the link opens that photo; sending the guest to the folder's page would show them all of the folder).
+if ($requestedPhoto !== null && !isset($_GET['folder']) && request_route() === '' && !is_admin_browser() && file_is_quiet($dir, $requestedPhoto)
+    && !(isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData))
+    && !(($quietLink = link_viewer()) !== null && link_allows_quiet_item($quietLink, $dir, $requestedPhoto, $itemsData))) {
     header('Location: ?folder=' . rawurlencode(dirname($requestedPhoto)) . '&photo=' . rawurlencode($requestedPhoto), true, 302);
     exit;
 }

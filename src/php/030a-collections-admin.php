@@ -379,7 +379,8 @@ function render_admin_collection_panel($dir, $files, $rec, $csrfToken) {
     $path = $rec['path'];
     $rows = collection_member_rows($dir, $rec, $files);
     $hidden = ['folder' => 0, 'photo' => 0];
-    foreach ($rows as $m) if (in_array($m['state'], ['private', 'unlisted'], true)) $hidden[$m['kind']]++;
+    $quietHere = ['folder' => 0, 'photo' => 0];
+    foreach ($rows as $m) { if (in_array($m['state'], ['private', 'unlisted'], true)) $hidden[$m['kind']]++; elseif ($m['state'] === 'quiet') $quietHere[$m['kind']]++; }
     $onFront = $rec['parentPath'] === '';
 ?>
   <section class="panel" id="settings" data-collection="<?= $esc($rec['id']) ?>">
@@ -411,6 +412,7 @@ function render_admin_collection_panel($dir, $files, $rec, $csrfToken) {
           <div class="cm-sub"><?php
             if ($m['state'] === 'missing') echo $m['kind'] === 'photo' ? 'It was renamed or moved. Remove it, or put it back.' : 'The folder is gone, or has no photos. Remove it, or put it back.';
             elseif ($m['kind'] === 'photo') echo $m['where'] === '' ? 'at the top of the gallery' : 'in ' . $esc($m['where']);
+            elseif ($m['state'] === 'quiet') echo 'Visitors will not see this one in the collection while it is Unlisted.';
             elseif (in_array($m['state'], ['private', 'unlisted'], true)) echo 'Visitors will not see this one in the collection until it is public.';
             else echo number_format($m['count']) . ' photo' . ($m['count'] === 1 ? '' : 's');
           ?></div>
@@ -426,6 +428,9 @@ function render_admin_collection_panel($dir, $files, $rec, $csrfToken) {
     </ul>
     <?php if ($hidden['folder'] + $hidden['photo'] > 0): ?>
     <div class="warn-note"><?= $hidden['folder'] ? $hidden['folder'] . ' folder' . ($hidden['folder'] === 1 ? '' : 's') : '' ?><?= $hidden['folder'] && $hidden['photo'] ? ' and ' : '' ?><?= $hidden['photo'] ? $hidden['photo'] . ' photo' . ($hidden['photo'] === 1 ? '' : 's') : '' ?> here <?= $hidden['folder'] + $hidden['photo'] === 1 ? 'is' : 'are' ?> private. Visitors will not see <?= $hidden['folder'] + $hidden['photo'] === 1 ? 'it' : 'them' ?> in this collection.</div>
+    <?php endif; ?>
+    <?php if ($quietHere['folder'] + $quietHere['photo'] > 0): ?>
+    <div class="warn-note"><?= $quietHere['folder'] ? $quietHere['folder'] . ' folder' . ($quietHere['folder'] === 1 ? '' : 's') : '' ?><?= $quietHere['folder'] && $quietHere['photo'] ? ' and ' : '' ?><?= $quietHere['photo'] ? $quietHere['photo'] . ' photo' . ($quietHere['photo'] === 1 ? '' : 's') : '' ?> here <?= $quietHere['folder'] + $quietHere['photo'] === 1 ? 'is' : 'are' ?> Unlisted. Visitors will not see <?= $quietHere['folder'] + $quietHere['photo'] === 1 ? 'it' : 'them' ?> in this collection.</div>
     <?php endif; ?>
     <p class="cm-addrow"><button type="button" class="secondary cm-add">Add folders or photos&hellip;</button></p>
     <div id="cm-picker" hidden></div>
@@ -454,7 +459,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
     </div>
     <?php foreach (array_merge(array_values($reg['byPath']), $reg['taken']) as $r):
         $rows = collection_member_rows($dir, $r, $files); $nf = count(array_filter($rows, fn ($x) => $x['kind'] === 'folder')); $np = count($rows) - $nf;
-        $miss = count(array_filter($rows, fn ($x) => $x['state'] === 'missing')); $priv = count(array_filter($rows, fn ($x) => in_array($x['state'], ['private', 'unlisted'], true)));
+        $miss = count(array_filter($rows, fn ($x) => $x['state'] === 'missing')); $priv = count(array_filter($rows, fn ($x) => in_array($x['state'], ['private', 'unlisted'], true))); $unl = count(array_filter($rows, fn ($x) => $x['state'] === 'quiet'));
         $nested = array_sum(array_map(fn ($x) => (int) $x['count'], array_filter($rows, fn ($x) => $x['kind'] === 'folder'))); // (the photos in the folders it holds, each counted once under the folder that holds it)
         $taken = isset($reg['byPath'][$r['path']]) ? false : true;
         $href = '?admin&amp;folder=' . $esc(rawurlencode($r['path'])) . '#settings';
@@ -468,7 +473,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
         <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?><?php if (($ownAt = collection_own_address_text($dir, $files, $r)) !== ''): ?><br>and, for visitors who can't see its folder, <?= $esc($ownAt) ?><?php elseif (in_array($r['id'], array_column($reg['aliasLost'], 'id'), true)): ?> <span class="cm-pill miss">Its own address is taken at the top: it is at its path only</span><?php endif; ?></dd>
         <dt>On the front page</dt><dd><?= $r['parentPath'] === '' ? 'Yes (it lives there)' : ($r['front'] ? 'Yes' : 'No') ?></dd>
         <dt>Holds</dt><dd><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= number_format($nested) ?> nested photo<?= $nested === 1 ? '' : 's' ?><?= $np ? ' and ' . $np . ' photo' . ($np === 1 ? '' : 's') . ' picked on their own' : '' ?></dd>
-        <dt>Problems</dt><dd><?php if ($miss || $priv): ?><?= $miss ? '<span class="cm-pill miss">' . $miss . ' not found</span> ' : '' ?><?= $priv ? '<span class="cm-pill priv">' . $priv . ' private</span>' : '' ?><?php else: ?>Nothing missing<?php endif; ?></dd>
+        <dt>Problems</dt><dd><?php if ($miss || $priv || $unl): ?><?= $miss ? '<span class="cm-pill miss">' . $miss . ' not found</span> ' : '' ?><?= $priv ? '<span class="cm-pill priv">' . $priv . ' private</span> ' : '' ?><?= $unl ? '<span class="cm-pill quiet">' . $unl . ' Unlisted</span>' : '' ?><?php else: ?>Nothing missing<?php endif; ?></dd>
         <dt>Share links</dt><dd><?php if ($using): foreach ($using as $i => $l): ?><?= $i ? ', ' : '' ?><a href="#links" data-tab="links"><?= $esc($l['label']) ?></a><?php endforeach; else: ?>None<?php endif; ?></dd>
         <dt>Gallery of its own</dt><dd><?= $r['ownGallery'] ? 'On' : 'Off' ?></dd>
       </dl>

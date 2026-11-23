@@ -463,7 +463,8 @@ function link_preview_picture($l, $dir, $draft = null) {
     // A link limited to some folders and/or photos takes its picture, chosen or automatic, only from the public photos it covers: the opening page
     // and a chat's preview show it to anyone before the link is opened, so a photo the link does not cover must not appear there. A link whose
     // picks hold no public photo shows the gallery's icon.
-    $public = array_values(array_filter($public, function ($f) use ($l, $dir, $draft) { return link_cover_in_scope($l, $dir, $f, $draft); }));
+    // An Unlisted folder's photo is the picture of a link only when the link names it (an Everything link, or one naming a folder above it, would show it to anyone who has the address).
+    $public = array_values(array_filter($public, function ($f) use ($l, $dir, $draft) { return link_cover_in_scope($l, $dir, $f, $draft) && link_cover_allows_quiet($l, $dir, $f, $draft); }));
     // The owner's own choice, looked at again every time it is used: a photo that has since gone private, been deleted or fallen outside what the link covers is not in the list, and the automatic pick takes over.
     $chosen = (string) ($l['pictureFile'] ?? '');
     if ($chosen !== '' && $photo($chosen) && in_array($chosen, $public, true)) return $chosen;

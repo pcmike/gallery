@@ -11,7 +11,9 @@
  * 009-notes-grouping-and-order.php): $groups and $files are filtered there, so every count, list and allowlist after it agrees. Pages that are
  * MEANT to reach it keep its photos in that list: a page inside the folder (?folder=<it or a folder in it>), and a share link that names it.
  * Nothing here asks "is anything Unlisted?" first, on purpose: a folder moved in from another gallery, restored from a backup or edited by hand
- * carries the setting without any note anywhere else, and must be left out all the same.
+ * carries the setting without any note anywhere else, and must be left out all the same. (The one thing that does use a note is the tidiness of "Gallery of
+ * its own", which an Unlisted folder has by default: the gallery's own settings file says whether any folder has it, so a gallery that has none reads nothing
+ * and sets no cookie. Such a folder keeps its way back until its owner presses a button for it once; it is still left out of every list.)
  * ----------------------------------------------------------------------- */
 
 /** One folder's own Unlisted setting, read once per request (and reset with the other folder settings when one is saved). */
@@ -20,25 +22,28 @@ function folder_quiet_cached($dir, $folderRel, $reset = false) {
     if ($reset) { $cache = []; return null; }
     $folderRel = (string) $folderRel;
     if (!isset($cache[$folderRel])) {
-        $cache[$folderRel] = ($folderRel === '' ? false : (items_read(resolve_real_path($dir, $folderRel))['quiet'] ?? null) === true);   // (the gallery's own folder cannot be Unlisted: it is the gallery)
+        $cache[$folderRel] = ($folderRel === '' ? false : (folder_items_memo($dir, $folderRel)['quiet'] ?? null) === true);   // (the gallery's own folder cannot be Unlisted: it is the gallery)
     }
     return $cache[$folderRel];
 }
 
-/** How many path segments of $file's folders it takes to reach the topmost Unlisted folder above it (1 for a top-level folder), or 0 when none is. */
+/** How many path segments of $file's folders it takes to reach the NEAREST Unlisted folder above it (1 for a top-level folder), or 0 when none is. The nearest, not
+ *  the topmost: an Unlisted folder inside an Unlisted folder stays out of its parent's page too (the page of the folder above does not list it), and a share link
+ *  that names the folder above does not bring it along. A folder inside an Unlisted folder that is not marked itself just follows it. */
 function quiet_root_depth($dir, $file) {
+    $found = 0;
     if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
         $path = ''; $depth = 0;
         foreach (explode('/', dirname($file)) as $segment) {
             $path = $path === '' ? $segment : $path . '/' . $segment;
             $depth++;
-            if (folder_quiet_cached($dir, $path)) return $depth;
+            if (folder_quiet_cached($dir, $path)) $found = $depth;
         }
     }
-    return 0;
+    return $found;
 }
 
-/** The path of the topmost Unlisted folder $file sits in, or '' when it is in none. */
+/** The path of the nearest Unlisted folder $file sits in, or '' when it is in none. */
 function quiet_root_path($dir, $file) {
     $depth = quiet_root_depth($dir, $file);
     return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
@@ -61,6 +66,13 @@ function quiet_request_inside($root) {
     return $asked === $root || strncmp($asked, $root . '/', strlen($root) + 1) === 0;
 }
 
+/** The level of "Who can see this folder" a folder's own settings add up to: 'me' (private with the Only me flag), 'private', 'unlisted', or 'public'. Private wins over
+ *  Unlisted: a folder that is both (a hand-edited file) is private. */
+function folder_visibility_level($data) {
+    if (item_restriction($data) === 'private') return ($data['unlisted'] ?? null) === true ? 'me' : 'private';
+    return ($data['quiet'] ?? null) === true ? 'unlisted' : 'public';
+}
+
 /** May the share link $l show this item of an Unlisted folder? Only when the link NAMES the Unlisted folder (or a folder inside it) or the photo itself:
  *  an "Everything" link and a link that names a folder above it leave it out, as they do a folder that is Only me, so a link meant for "all my photos" never
  *  carries the folder that was meant to stay out of sight. A collection the link names does not bring it along either (a collection is a list). */
@@ -81,6 +93,21 @@ function link_allows_quiet_item($l, $dir, $file, $itemsData = null) {
         return $fid !== '' && !isset(link_ambiguous_set()[$fid]) && isset($set[$fid . "\0" . basename($file)]);
     }
     return false;
+}
+
+/** May this file be the preview picture of the link $l (or of the form's unsaved choice $draft: type, folders, except, photos)? A file that is in no Unlisted folder, or
+ *  that the link names, may. */
+function link_cover_allows_quiet($l, $dir, $file, $draft = null) {
+    if (!file_is_quiet($dir, $file)) return true;
+    if ($draft === null) return link_allows_quiet_item($l, $dir, $file);
+    $type = (string) ($draft['type'] ?? 'all');
+    if (!in_array($type, ['folders', 'photos', 'mixed'], true)) return false;
+    if ($type !== 'photos') {
+        $root = quiet_root_path($dir, $file);   // (the draft names folders by path: only those at the Unlisted folder or inside it count, as for a saved link)
+        $within = function ($list) use ($root) { return array_values(array_filter((array) $list, function ($d) use ($root) { return is_string($d) && ($d === $root || strncmp($d, $root . '/', strlen($root) + 1) === 0); })); };
+        if (link_path_in_folders($file, $within($draft['folders'] ?? []), $within($draft['except'] ?? []))) return true;
+    }
+    return $type !== 'folders' && in_array($file, (array) ($draft['photos'] ?? []), true);
 }
 
 /** Is this item left out of the visitor's lists because it is in an Unlisted folder? False for the owner, for a page inside the folder, and for a link

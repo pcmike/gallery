@@ -1284,11 +1284,11 @@
       Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
       return top;
     }
-    // The Unlisted folders that sit in no other Unlisted folder: the same rule (a folder picked above one does not bring it along), with no question asked when one is picked, because it is public.
+    // The folders marked Unlisted themselves (`q` is the folder's own mark: a folder inside one just follows it): each has to be picked by name, even one inside another
+    // Unlisted folder, as the server reads it (the nearest one decides). No question is asked when one is picked, because it is public.
     function topQuiet(form) {
-      var all = {}, top = {};
-      folderList(form).forEach(function (o) { if (o.q && !o.c) all[o.p] = true; });
-      Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
+      var top = {};
+      folderList(form).forEach(function (o) { if (o.q && !o.c) top[o.p] = true; });
       return top;
     }
     // Both kinds of folder that a folder above does not bring along.
@@ -1571,7 +1571,7 @@
       if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
       else st[kind].forEach(function (p) { tick[p] = true; });
       var rows = list.map(function (o) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : (o.q ? ' <small class="muted">Unlisted</small>' : '')) + '</span></label>';
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Only me</small>' : (o.qi ? ' <small class="muted">Unlisted</small>' : '')) + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
       var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
         : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
@@ -1606,13 +1606,13 @@
             var t = !!tick[o.p];
             if (o.c) { if (t) tops.push(o.p); return; }
             var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
-            if (t && (!pt || o.u || o.q)) tops.push(o.p);   // (the top of a ticked part; an Only me or Unlisted folder is always its own top)
-            else if (!t && pt && !o.u && !o.q) left.push(o.p);   // (left out of a ticked folder above it)
+            if (t && (!pt || un[o.p])) tops.push(o.p);   // (the top of a ticked part; the top of an Only me or Unlisted folder is always its own top, one inside it just follows it)
+            else if (!t && pt && !un[o.p]) left.push(o.p);   // (left out of a ticked folder above it)
           });
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
         // An Only me folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
-        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
+        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && un[o.p] && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
           if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
           syncForm(form);
@@ -1967,21 +1967,41 @@
     }
     function send(to, done) {
       var body = new URLSearchParams();
-      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to);
+      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level);   // (the level this page showed: the server refuses a choice made on a stale page)
       say('Saving…', 'busy');
       fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
-          if (!j.ok) { say(j.text, 'err'); done(false); return; }
+          if (!j.ok) { if (j.level) paint(j.level, null); say(j.text, 'err'); done(false); return; }   // (a stale page: it shows where the folder stands now, and nothing was changed)
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
           paint(to, j.own); say('Saved', 'ok'); window.__siteDirty = true; done(true);
         })
         .catch(function (e) { say(e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); done(false); });
     }
     function closeModal() { pending = null; if (modal) modal.hidden = true; var c = wrap.querySelector('input[name=vis]:checked'); if (c) c.focus(); }
+    function rowsShown(on) { [].forEach.call(modal.querySelectorAll('.pm-row'), function (r) { r.style.display = on ? '' : 'none'; }); }   // (the counts belong to opening a private folder only)
+    // The two moves that are not about a folder's photos but about who gets to see the folder: letting people with the private-view password in (Only me to Private), and
+    // putting an Unlisted folder on show (Unlisted to Public). Each asks once, in plain words, with no counts.
+    var PLAIN = {
+      password: ['Let people with the private-view password open this folder?', 'Everyone you have given the private-view password will be able to open this folder and see what is in it (photos marked private on their own stay private). Not right? Cancel and leave it Only me.', 'Let them in'],
+      listed: ['Show this folder to everyone?', 'It will appear on the gallery\'s page, among the folders, on the map and in the counts, for every visitor. Not right? Cancel and leave it Unlisted.', 'Show it']
+    };
+    function askPlain(to, kind) {
+      say('', ''); pending = to; rowsShown(false);
+      document.getElementById('priv-modal-title').textContent = PLAIN[kind][0];
+      document.getElementById('pm-hint').textContent = PLAIN[kind][1];
+      document.getElementById('pm-ok').textContent = PLAIN[kind][2];
+      modal.hidden = false; document.getElementById('pm-cancel').focus();
+    }
+    function questionFor(from, to) {
+      if ((from === 'private' || from === 'me') && (to === 'public' || to === 'unlisted')) return 'open';
+      if (from === 'me' && to === 'private') return 'password';
+      if (from === 'unlisted' && to === 'public') return 'listed';
+      return null;
+    }
     function ask(to) {
-      say('', ''); pending = to;
+      say('', ''); pending = to; rowsShown(true);
       fetch(location.href.replace(/#.*$/, '') + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
@@ -1999,8 +2019,8 @@
     radios.forEach(function (r) {
       r.addEventListener('change', function () {
         if (!r.checked) return;
-        var to = r.value, opening = (level === 'private' || level === 'me') && (to === 'public' || to === 'unlisted');
-        if (opening && modal) { paint(level, null); ask(to); return; }   // (stays where it was until it is confirmed)
+        var to = r.value, kind = questionFor(level, to);
+        if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
         send(to, function (ok) { if (!ok) paint(level, null); });
       });
     });

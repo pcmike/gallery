@@ -104,7 +104,9 @@ function link_folder_item_counts($dir, $rel, $except = []) {
     [$all, $public] = link_public_media($dir);
     $pre = $rel === '' ? '' : $rel . '/'; $n = strlen($pre);
     $left = []; foreach ((array) $except as $e) if ($pre === '' || strncmp($e . '/', $pre, $n) === 0) $left[] = $e . '/';   // (what is left out is not counted)
-    $count = function ($list) use ($pre, $n, $left) { $c = 0; foreach ($list as $f) { if (strncmp($f, $pre, $n) !== 0) continue; foreach ($left as $e) if (strncmp($f, $e, strlen($e)) === 0) continue 2; $c++; } return $c; };
+    $relDepth = $rel === '' ? 0 : substr_count($rel, '/') + 1;
+    // An Unlisted folder below the one counted is not brought along by the link (it has to be named): its photos are not counted here, as they are not shown.
+    $count = function ($list) use ($pre, $n, $left, $dir, $relDepth) { $c = 0; foreach ($list as $f) { if (strncmp($f, $pre, $n) !== 0) continue; foreach ($left as $e) if (strncmp($f, $e, strlen($e)) === 0) continue 2; if (quiet_root_depth($dir, $f) > $relDepth) continue; $c++; } return $c; };
     return [$count($all), $count($public)];
 }
 

@@ -948,6 +948,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         items_update($adminFolderReal, function (&$data) use ($hidden) {
             if ($hidden) { $data['restriction'] = 'private'; unset($data['quiet']); } else { unset($data['restriction'], $data['unlisted']); }   // (public again is not "Only me" either; a private folder is not Unlisted: the stricter one stands)
         });
+        own_galleries_recompute($dir, $files);   // (a folder that was Unlisted is a gallery of its own by default; it is not any more, and the gallery's note of whether any folder is must follow)
         return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.'),
                 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)];
     }
@@ -959,6 +960,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $level = (string) ($_POST['level'] ?? '');
         if (!in_array($level, ['public', 'unlisted', 'private', 'me'], true)) return ['type' => 'error', 'text' => 'Unknown choice: nothing was changed.'];
+        // The page says which level it showed when the choice was made: if the folder has been changed since (another tab, the lock beside it, a phone), nothing is changed
+        // here and the page is told where the folder stands, so that opening a private folder is never done without the question that goes with it.
+        $was = $_POST['was'] ?? null;
+        $nowLevel = folder_visibility_level(items_read($adminFolderReal));
+        if (is_string($was) && in_array($was, ['public', 'unlisted', 'private', 'me'], true) && $was !== $nowLevel) {
+            $labels = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
+            return ['type' => 'error', 'stale' => true, 'level' => $nowLevel, 'text' => 'This folder was changed since the page was opened: it is ' . $labels[$nowLevel] . ' now. Nothing was changed; choose again.'];
+        }
         items_update($adminFolderReal, function (&$data) use ($level) {
             unset($data['restriction'], $data['unlisted'], $data['quiet']);
             if ($level === 'unlisted') { $data['quiet'] = true; }
@@ -986,11 +995,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         items_update($adminFolderReal, function (&$data) use ($on) {
             if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; unset($data['quiet']); } else { unset($data['unlisted']); }
         });
+        own_galleries_recompute($dir, $files);   // (see toggle_folder_restriction)
         if ($on) { install_secret(true); folder_id_stamp($adminFolderReal); }   // (what a photo's address is worked out from: so every photo in it has one from now on, with nothing to press)
         $private = item_restriction(items_read($adminFolderReal)) === 'private';
         return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
                 'text' => $on ? 'Only me: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
-                              : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
+                              : 'No longer Only me. The folder is still private, so people with the private-view password can open it.'];
     }
 
     // An Only me folder's photo has an address (eight letters and digits) that opens that one photo for anyone who has it. This gives the

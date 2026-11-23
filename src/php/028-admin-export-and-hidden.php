@@ -527,7 +527,7 @@ function admin_cover_state($dir, $files, $folderPath) {
         $cf = pick_folder_cover($under, $cspec, $prefix . $name);
         $rec = items_read(resolve_real_path($dir, $prefix . $name));
         $tiles[] = ['name' => $name, 'label' => $label($prefix . $name, $name), 'file' => $cf, 'url' => $cf !== null ? img_url($cf, 'cover') : '', 'chosen' => $cspec !== null,
-            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'not listed' : 'private') : ''];
+            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'only me' : 'private') : (($rec['quiet'] ?? null) === true ? 'unlisted' : '')];
     }
     return ['mode' => $mode, 'title' => $title, 'small' => $small, 'file' => $file, 'url' => $file !== null ? img_url($file, 'cover') : '', 'from' => $mode === 'follow' ? substr($spec, 7) : ($mode === 'auto' ? $src : ''), 'tiles' => $tiles];
 }
@@ -648,7 +648,7 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
         <?php foreach ($names as $v => $nm): ?><label data-v="<?= $esc($v) ?>"><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $level === $v ? ' checked' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
       <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$level]) ?></p>
-      <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
+      <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
         <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
       </form>
     </div>

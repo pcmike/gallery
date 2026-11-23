@@ -1809,6 +1809,105 @@ $quLf = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') ===
 $quLfOpen = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') === 'Open'))[0] ?? [];
 check('[unlisted] the share-link form is given the Unlisted folder flagged "q" (not "u", which asks the Only me question), and an ordinary folder neither', ($quLf['q'] ?? null) === true && ($quLf['u'] ?? null) === false && ($quLfOpen['q'] ?? null) === false && ($quLfOpen['u'] ?? null) === false, json_encode($quLf));
 $quSet('Trips/QuietBox', 'public');
+/* ---- second look at Unlisted folders (an independent review's findings): an Only me photo inside an Unlisted folder, a link's preview picture, a one-photo link,
+ * an Unlisted folder inside an Unlisted folder, a page that is out of date, the pickers and counts. Every top folder here is Unlisted (so a preview picture has
+ * nowhere else to come from), plus one private folder. */
+echo "== Unlisted folders, second look ==\n";
+$fxQ3 = new_fixture_dir('unlisted3');
+foreach (['Hideout', 'Hideout/Mine', 'Shelf', 'Shelf/Sec', 'Nest', 'Nest/Inner', 'Nest/Inner/Down', 'Plain'] as $q3D) mkdir("$fxQ3/$q3D", 0777, true);
+foreach (['Hideout/HIDE-ONE.jpg' => 1, 'Hideout/HIDE-TWO.jpg' => 2, 'Hideout/Mine/MINE-SENTINEL.jpg' => 3, 'Shelf/Sec/SEC-ONLY.jpg' => 4, 'Nest/NEST-OUTER.jpg' => 5, 'Nest/Inner/INNER-SENTINEL.jpg' => 6, 'Nest/Inner/Down/INNER-DOWN.jpg' => 7, 'Plain/PLAIN-PRIVATE.jpg' => 8] as $q3F => $q3C) make_jpeg("$fxQ3/$q3F", 40, 40, 20 * $q3C, 60, 220 - 20 * $q3C);
+$q3Write = fn (string $folder, array $data) => file_put_contents("$fxQ3/$folder/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($data));
+foreach (['Hideout', 'Shelf/Sec', 'Nest', 'Nest/Inner'] as $q3Q) $q3Write($q3Q, ['quiet' => true, 'items' => []]);
+$q3Write('Plain', ['restriction' => 'private']);
+file_put_contents("$fxQ3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'q3-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'q3-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
+copy($indexSrc, "$fxQ3/index.php");
+$portQ3 = find_free_port(); start_server($fxQ3, $portQ3); $baseQ3 = "http://127.0.0.1:$portQ3";
+[, , $q3H1] = http_post("$baseQ3/?admin", ['access_code' => 'q3-admin-pw-1'], [], false);
+$q3Own = ['Cookie: ' . extract_cookie_header($q3H1)];
+$q3Csrf = (string) extract_csrf_token(http_get("$baseQ3/?admin", $q3Own)[1]);
+$q3Admin = fn (array $f, string $q = '') => json_decode(http_post("$baseQ3/?admin$q", $f + ['csrf_token' => $q3Csrf], array_merge($q3Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$q3Items = fn (string $folder) => read_data_file("$fxQ3/$folder/.gallery-items.php");
+$q3Links = fn () => read_data_file("$fxQ3/.gallery-links.php");
+$q3Typed = ['Sec-Fetch-Site: none', 'User-Agent: Mozilla/5.0 test'];
+$q3Make = function (string $label, array $f) use ($q3Admin, $q3Links, $baseQ3, $fxQ3) {
+    $made = $q3Admin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return null;
+    $token = $q3Links()['links'][$made['id']]['token'];
+    @unlink("$fxQ3/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseQ3/?link=$token", ['go' => '1'], [], false);
+    $ck = extract_cookie_header($h);
+    return ['token' => $token, 'id' => $made['id'], 'cookie' => $ck ? ['Cookie: ' . $ck] : null];
+};
+// ---- 1. an Only me photo inside an Unlisted folder keeps its own address
+$q3Me = $q3Admin(['action' => 'set_folder_visibility', 'level' => 'me'], '&folder=Hideout%2FMine');
+$q3Addr = $q3Admin(['action' => 'photo_address', 'file' => 'MINE-SENTINEL.jpg'], '&folder=Hideout%2FMine');
+$q3Code = (string) ($q3Addr['code'] ?? '');
+check('[unlisted, review] the fixture makes Hideout/Mine Only me (inside the Unlisted Hideout) and has an address for its photo', ($q3Me['ok'] ?? null) === true && preg_match('/^[A-Za-z0-9]{8}$/', $q3Code) === 1, json_encode([$q3Me, $q3Addr]));
+@unlink("$fxQ3/.gallery-login-attempts.php");
+[$q3St, $q3Body, $q3Hd] = http_get("$baseQ3/?photo=Hideout%2FMine%2FMINE-SENTINEL.jpg&k=$q3Code", $q3Typed, false);
+check('[unlisted, review] an Only me photo\'s own address inside an Unlisted folder opens that photo alone, with no redirect (a redirect would drop the code and give the folder\'s name away)', $q3St === 200 && !preg_grep('~^Location:~i', $q3Hd) && str_contains($q3Body, '?img=' . $q3Code) && !str_contains($q3Body, 'MINE-SENTINEL') && !str_contains($q3Body, 'Hideout') && !str_contains($q3Body, 'HIDE-ONE') && !str_contains($q3Body, 'SEC-ONLY'), "status $q3St has-sentinel " . (int) str_contains($q3Body, 'MINE-SENTINEL') . ' has-hide-one ' . (int) str_contains($q3Body, 'HIDE-ONE') . ' has-sec ' . (int) str_contains($q3Body, 'SEC-ONLY'));
+@unlink("$fxQ3/.gallery-login-attempts.php");
+[$q3St2] = http_get("$baseQ3/?photo=Hideout%2FMine%2FMINE-SENTINEL.jpg", $q3Typed, false);
+check('[unlisted, review] ...and without the code the photo is not found, as an Only me photo always is', $q3St2 === 404 || ($q3St2 === 200 && !str_contains(http_get("$baseQ3/?photo=Hideout%2FMine%2FMINE-SENTINEL.jpg", $q3Typed, false)[1], 'MINE-SENTINEL')), "status $q3St2");
+// ---- 2. a link's preview picture is never an Unlisted photo the link does not name
+$q3All = $q3Make('Everything', ['scope_type' => 'all']);
+$q3Shelf = $q3Make('The shelf', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Shelf'])]);
+$q3Hide = $q3Make('Hideout', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Hideout'])]);
+$q3Pic = fn (array $l) => (function () use ($baseQ3, $l) { $b = http_get("$baseQ3/?link=" . $l['token'], [], false)[1]; return preg_match('~img=(Hideout|Shelf|Nest)~', $b . ' ' . urldecode($b), $m) ? $m[0] : null; })();
+check('[unlisted, review] the three links open', $q3All && $q3Shelf && $q3Hide);
+check('[unlisted, review] an Everything link\'s opening page (and its chat preview) shows no Unlisted photo as its picture', $q3Pic($q3All) === null, (string) $q3Pic($q3All));
+check('[unlisted, review] ...nor does a link to the folder above one (Shelf, whose only folder is Unlisted)', $q3Pic($q3Shelf) === null, (string) $q3Pic($q3Shelf));
+check('[unlisted, review] ...while a link that names the Unlisted folder may use its photo (the picture is there)', $q3Pic($q3Hide) !== null);
+// ---- 3. a link to one photo of an Unlisted folder does not send its guest into the whole folder
+$q3One = $q3Make('One photo', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Hideout/HIDE-ONE.jpg'])]);
+[$q3S3, $q3B3, $q3H3] = http_get("$baseQ3/?photo=Hideout%2FHIDE-ONE.jpg", array_merge($q3One['cookie'] ?? [], $q3Typed), false);
+check('[unlisted, review] a one-photo link\'s guest opens the photo where it is asked for (no redirect to the folder\'s own page), and the page holds that photo and not the folder\'s others', $q3S3 === 200 && !preg_grep('~^Location:~i', $q3H3) && str_contains($q3B3, 'HIDE-ONE') && !str_contains($q3B3, 'HIDE-TWO'), "status $q3S3");
+[$q3S3b, , $q3H3b] = http_get("$baseQ3/?photo=Hideout%2FHIDE-ONE.jpg", $q3Typed, false);
+check('[unlisted, review] a stranger who types a photo of an Unlisted folder still goes to its folder\'s page (as before)', $q3S3b === 302 && (bool) preg_grep('~^Location: \?folder=Hideout&photo=~i', $q3H3b));
+// ---- 4. an Unlisted folder inside an Unlisted folder is left out of its parent's page, and a link to the parent does not bring it
+[, $q3Outer] = http_get("$baseQ3/?folder=Nest", $q3Typed, false);
+check('[unlisted, review] the page of an Unlisted folder lists its own photos and not the Unlisted folder inside it', str_contains($q3Outer, 'NEST-OUTER') && !str_contains($q3Outer, 'INNER') && !str_contains($q3Outer, 'folder=Nest%2FInner'));
+[, $q3Inner] = http_get("$baseQ3/?folder=Nest%2FInner", $q3Typed, false);
+check('[unlisted, review] ...and the inner folder\'s own page works, with what is inside it (a folder in it that is not marked follows it)', str_contains($q3Inner, 'INNER-SENTINEL') && str_contains($q3Inner, 'INNER-DOWN') && !str_contains($q3Inner, 'NEST-OUTER'));
+$q3Nest = $q3Make('The nest', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Nest'])]);
+$q3InnerLink = $q3Make('The inner one', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Nest/Inner'])]);
+$q3Fronts = fn (?array $l) => http_get("$baseQ3/", array_merge($l['cookie'] ?? [], $q3Typed), false)[1] . http_get("$baseQ3/?folder=Nest", array_merge($l['cookie'] ?? [], $q3Typed), false)[1];
+$q3NestBody = $q3Fronts($q3Nest); $q3InBody = $q3Fronts($q3InnerLink);
+check('[unlisted, review] a link that names Nest brings Nest\'s photos but not the Unlisted folder inside it', str_contains($q3NestBody, 'NEST-OUTER') && !str_contains($q3NestBody, 'INNER'));
+check('[unlisted, review] a link that names the inner folder brings it', str_contains($q3InBody, 'INNER-SENTINEL'));
+// ---- 5. the lock buttons keep the gallery's note of "some folder is a gallery of its own" right
+$q3Root = fn () => read_data_file("$fxQ3/.gallery-items.php");
+$q3Admin(['action' => 'set_folder_visibility', 'level' => 'public'], '&folder=Hideout%2FMine');
+foreach (['Hideout', 'Shelf/Sec', 'Nest', 'Nest/Inner'] as $q3Q) $q3Admin(['action' => 'set_folder_visibility', 'level' => 'unlisted'], '&folder=' . rawurlencode($q3Q));
+check('[unlisted, review] the gallery notes that a folder is a gallery of its own once folders are Unlisted', ($q3Root()['ownGalleries'] ?? null) === true);
+foreach (['Hideout', 'Shelf/Sec', 'Nest', 'Nest/Inner'] as $q3Q) $q3Admin(['action' => 'toggle_folder_restriction', 'hidden' => '1'], '&folder=' . rawurlencode($q3Q));
+check('[unlisted, review] ...and the lock beside a folder (private on) takes the note away when no Unlisted folder is left', !array_key_exists('ownGalleries', $q3Root()) && !array_key_exists('quiet', $q3Items('Nest')));
+$q3Admin(['action' => 'toggle_folder_restriction', 'hidden' => ''], '&folder=Nest');
+foreach (['Hideout', 'Shelf/Sec', 'Nest/Inner'] as $q3Q) $q3Admin(['action' => 'set_folder_visibility', 'level' => 'unlisted'], '&folder=' . rawurlencode($q3Q));
+check('[unlisted, review] ...and putting Unlisted folders back sets it again; Only me (the other button) clears it as well', ($q3Root()['ownGalleries'] ?? null) === true);
+foreach (['Hideout', 'Shelf/Sec', 'Nest/Inner'] as $q3Q) $q3Admin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=' . rawurlencode($q3Q));
+check('[unlisted, review] ...(Only me on every Unlisted folder: none is a gallery of its own any more)', !array_key_exists('ownGalleries', $q3Root()));
+// ---- 6. a choice made on a page that is out of date changes nothing
+$q3Admin(['action' => 'set_folder_visibility', 'level' => 'private'], '&folder=Hideout');
+$q3Stale = $q3Admin(['action' => 'set_folder_visibility', 'level' => 'unlisted', 'was' => 'public'], '&folder=Hideout');
+check('[unlisted, review] a choice made on a page that still shows Public, for a folder that is Private now, is refused (no question skipped) and says where the folder stands', ($q3Stale['ok'] ?? null) === false && ($q3Stale['stale'] ?? null) === true && ($q3Stale['level'] ?? null) === 'private' && ($q3Items('Hideout')['restriction'] ?? null) === 'private' && !array_key_exists('quiet', $q3Items('Hideout')), json_encode($q3Stale));
+$q3Ok = $q3Admin(['action' => 'set_folder_visibility', 'level' => 'unlisted', 'was' => 'private'], '&folder=Hideout');
+check('[unlisted, review] ...and the same choice on a page that is up to date goes through', ($q3Ok['ok'] ?? null) === true && ($q3Items('Hideout')['quiet'] ?? null) === true);
+check('[unlisted, review] the folder\'s settings page tells the no-JavaScript form which level it showed', str_contains(http_get("$baseQ3/?admin&folder=Hideout", $q3Own)[1], '<input type="hidden" name="was" value="unlisted">'));
+foreach (['Shelf/Sec', 'Nest/Inner'] as $q3Q) $q3Admin(['action' => 'set_folder_visibility', 'level' => 'unlisted'], '&folder=' . rawurlencode($q3Q));
+// ---- 8. the pickers: a folder's own mark (q) is what counts; a folder inside it only follows (qi)
+$q3Form = (function () use ($baseQ3, $q3Own) { $page = http_get("$baseQ3/?admin", $q3Own)[1]; return preg_match('/id="sl-form"[^>]*data-folders="([^"]*)"/', $page, $m) ? (json_decode(html_entity_decode($m[1], ENT_QUOTES), true) ?: []) : []; })();
+$q3Flag = fn (string $p) => array_values(array_filter($q3Form, fn ($o) => ($o['p'] ?? '') === $p))[0] ?? [];
+check('[unlisted, review] the share-link form is told which folders are Unlisted themselves (q) and which only follow one (qi): Nest/Inner is its own, Nest/Inner/Down follows', ($q3Flag('Hideout')['q'] ?? null) === true && ($q3Flag('Nest/Inner')['q'] ?? null) === true && ($q3Flag('Nest/Inner/Down')['q'] ?? null) === false && ($q3Flag('Nest/Inner/Down')['qi'] ?? null) === true && ($q3Flag('Plain')['q'] ?? null) === false, json_encode([$q3Flag('Nest/Inner/Down'), $q3Flag('Nest/Inner')]));
+// ---- 9. the owner's lists say what visitors will not see
+$q3Coll = $q3Admin(['action' => 'collection_create', 'parent' => '', 'title' => 'Picks']);
+$q3Admin(['action' => 'collection_member_add', 'id' => (string) ($q3Coll['id'] ?? ''), 'items' => json_encode([['path' => 'Hideout'], ['path' => 'Hideout', 'file' => 'HIDE-ONE.jpg']])]);
+$q3CollPage = http_get("$baseQ3/?admin&folder=picks", $q3Own)[1];
+check('[unlisted, review] the collection editor says Unlisted members are not shown to visitors (in each row and in a note), not "N photos"', str_contains($q3CollPage, 'while it is Unlisted') && str_contains($q3CollPage, 'are Unlisted. Visitors will not see'), '');
+$q3Tabs = http_get("$baseQ3/?admin#collections", $q3Own)[1];
+check('[unlisted, review] ...and the collections list counts them as "1 Unlisted"', str_contains($q3Tabs, 'cm-pill quiet">2 Unlisted') || str_contains($q3Tabs, 'cm-pill quiet">1 Unlisted'));
+$q3Nested = $q3Make('Nest and the one inside it', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Nest', 'Nest/Inner'])]);
+check('[unlisted, review] a link that names both Nest and the folder inside it brings both (the nearest folder named decides)', $q3Nested && str_contains(http_get("$baseQ3/?folder=Nest%2FInner", array_merge($q3Nested['cookie'] ?? [], $q3Typed), false)[1], 'INNER-SENTINEL'));
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
@@ -9201,9 +9300,19 @@ $flShell = http_get("$baseFl/?admin&shell=1", $flAuth)[1];
 check('[Flat] the admin tree has a lock beside each folder (3) while the gallery is Flat, with the folder\'s path on it', substr_count($flShell, 'class="flock') === 3 && str_contains($flShell, 'data-lock-path="sub1"') && str_contains($flShell, 'data-lock-path="sub1/deep"'));
 check('[Flat] ...and with Cover cards there are no locks in the tree (the cards carry their own)', !str_contains($flShellCards, 'class="flock'));
 $flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
-$flTok = preg_match('/data-csrf="([a-f0-9]+)"/', $flShell, $flM) ? $flM[1] : '';
-$flLock = json_decode(http_post("$baseFl/?admin&folder=sub2", ['csrf_token' => $flTok, 'action' => 'toggle_folder_restriction', 'hidden' => '1'], array_merge($flAuth, ['X-Requested-With: gallery-fetch']))[1], true);
-check('[Flat] pressing a folder\'s lock makes it private (visitors no longer see it), and the lock then shows closed', ($flLock['ok'] ?? null) === true && !str_contains(http_get("$baseFl/")[1], 'sub2%2Fc.jpg') && str_contains(http_get("$baseFl/?admin&shell=1", $flAuth)[1], 'class="flock on" data-lock-path="sub2"'));
+$flTok = (string) extract_csrf_token(http_get("$baseFl/?admin", $flAuth)[1]);
+$flLevel = fn (string $level, string $folder = 'sub2') => json_decode(http_post("$baseFl/?admin&folder=" . rawurlencode($folder), ['csrf_token' => $flTok, 'action' => 'set_folder_visibility', 'level' => $level], array_merge($flAuth, ['X-Requested-With: gallery-fetch']))[1], true);
+$flTree = fn () => http_get("$baseFl/?admin&shell=1", $flAuth)[1];
+check('[Flat] the lock shows who can see the folder (it changes nothing itself): a public folder\'s is open', str_contains($flShell, 'class="flock" data-lock-path="sub2" data-level="public"') && !str_contains($flShell, 'data-csrf='));
+$flLevel('private');
+check('[Flat] ...a private folder\'s is closed (and visitors no longer see the folder)', str_contains($flTree(), 'class="flock on" data-lock-path="sub2" data-level="private"') && !str_contains(http_get("$baseFl/")[1], 'sub2%2Fc.jpg'));
+$flLevel('unlisted');
+check('[Flat] ...an Unlisted folder\'s is open and amber (class q), an Only me folder\'s is closed', str_contains($flTree(), 'class="flock q" data-lock-path="sub2" data-level="unlisted"') && ($flLevel('me')['ok'] ?? null) === true && str_contains($flTree(), 'class="flock on" data-lock-path="sub2" data-level="me"'));
+$flLevel('public'); $flUnl = $flLevel('unlisted', 'sub1');
+check('[Flat] ...a folder inside an Unlisted folder shows Unlisted too, dimmed, because the folder above is (and one inside a private folder shows closed and dimmed)', ($flUnl['ok'] ?? null) === true && str_contains($flTree(), 'class="flock q inh" data-lock-path="sub1/deep" data-level="unlisted"') && ($flLevel('private', 'sub1')['ok'] ?? null) === true && str_contains($flTree(), 'class="flock on inh" data-lock-path="sub1/deep" data-level="private"'));
+$flLevel('public', 'sub1');
+$flLevel('private');
+check('[Flat] the lock\'s title says what pressing it does (open the folder\'s settings), and the old one-press action is still there for older pages but nothing in the tree uses it', str_contains($flTree(), "Private: press for this folder's settings") || str_contains($flTree(), 'press for this folder&#039;s settings'));
 
 /* --------------------------------------------------------------------- *
  * New versions: the daily look, the notice, Update now and Go back, against a release server of our own.

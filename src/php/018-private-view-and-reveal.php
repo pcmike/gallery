@@ -124,6 +124,15 @@ function folder_is_unlisted($dir, $folderPath) {
     return folder_unlisted_cached($dir, $folderPath) || folder_above_is_unlisted($dir, $folderPath . '/x');
 }
 
+/** One folder's settings file, read once per request and shared by the readers of its flags below (private, Only me, Unlisted, Gallery of its own): they used to read
+ *  it one after another. Reset with them when a folder's settings are saved. */
+function folder_items_memo($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) { $cache = []; return null; }
+    if (!isset($cache[$folderRel])) $cache[$folderRel] = items_read(resolve_real_path($dir, $folderRel));
+    return $cache[$folderRel];
+}
+
 /** One folder's own Only me flag, read once per request like folder_restriction_cached (and reset with it). True only while the
  *  folder is also private, so removing the privacy removes this too. */
 function folder_unlisted_cached($dir, $folderRel, $reset = false) {
@@ -133,7 +142,7 @@ function folder_unlisted_cached($dir, $folderRel, $reset = false) {
         return null;
     }
     if (!isset($cache[$folderRel])) {
-        $data = items_read(resolve_real_path($dir, $folderRel));
+        $data = folder_items_memo($dir, $folderRel);
         $cache[$folderRel] = item_restriction($data) === 'private' && ($data['unlisted'] ?? null) === true;
     }
     return $cache[$folderRel];
@@ -150,7 +159,7 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
         $coll = $folderRel !== '' && collections_any() ? collection_at($dir, $folderRel) : null;   // (a collection keeps its own mark in its own record)
         if ($coll !== null) { $cache[$folderRel] = !empty($coll['ownGallery']); }
         else {
-            $own = items_read(resolve_real_path($dir, $folderRel));
+            $own = folder_items_memo($dir, $folderRel);
             $cache[$folderRel] = is_bool($own['ownGallery'] ?? null) ? $own['ownGallery'] : ($own['quiet'] ?? null) === true;   // (the folder's own choice; with none, an Unlisted folder is a gallery of its own)
         }
     }
@@ -328,10 +337,11 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
         folder_own_gallery_cached(null, null, true);
         folder_flag_resolve(null, null, null, true);
         folder_quiet_cached(null, null, true);
+        folder_items_memo(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
-        $cache[$folderRel] = item_restriction(items_read(resolve_real_path($dir, $folderRel)));
+        $cache[$folderRel] = item_restriction(folder_items_memo($dir, $folderRel));
     }
     return $cache[$folderRel];
 }
