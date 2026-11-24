@@ -31700,6 +31700,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   document.addEventListener('click', (e) => {
     const link = e.target.closest('.permalink-copy');
     if (!link) return;
+    // A folder card's copy button is a real link to the folder, but pressing it is only a copy: it must not also open the folder. (A same-page anchor, on a note or a group box, still
+    // jumps there as well, on purpose; and a press with Ctrl, Cmd, Shift or Alt held is the browser's own "open in a new tab or window" and is left to it.)
+    if (link.classList.contains('folder-permalink-copy')) { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); }
     // A .md item's or group box's permalink is a same-page #anchor; a
     // folder cover card's is a real "?folder=..." link instead (no
     // hash) — copy whichever one this button actually has.
