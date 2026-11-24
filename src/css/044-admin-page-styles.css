@@ -1253,4 +1253,7 @@
   .folder-switches > .own-gallery-row { display:flex; flex-direction:column; gap:4px; }
   .folder-switches > .own-gallery-row .own-note { margin:0; }
   .vis-choice { min-width:0; }
+  .vis-seg label.is-off { cursor:not-allowed; } .vis-seg label.is-off span { opacity:.38; }
+  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; }
+  .vis-choice .vis-follow { margin:6px 0 2px; max-width:62ch; } .vis-choice .vis-follow a { color:inherit; text-decoration:underline; }
   .vis-choice > label { display:block; margin:0 0 6px; }

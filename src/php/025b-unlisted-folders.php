@@ -73,6 +73,26 @@ function folder_visibility_level($data) {
     return ($data['quiet'] ?? null) === true ? 'unlisted' : 'public';
 }
 
+/** Which folder a folder's visibility follows, when the folders above it are stricter than its own setting: ['level', 'path', 'label'] or null. A folder cannot be more open
+ *  than the one it sits in (private at any depth hides everything beneath it, and an Unlisted folder's folders follow it), so a folder with no setting of its own (Public)
+ *  inside a private folder is, in fact, private. The strictest level above wins (Only me, then Private, then Unlisted); of several folders at that level it is the topmost,
+ *  the one that was actually set. This is what the folder's settings tell the owner, so that "Public" is never shown for a folder visitors cannot open. */
+function folder_follow_info($dir, $folderPath) {
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
+    $own = $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))];
+    $best = null; $bestRank = 0; $path = '';
+    $parts = explode('/', (string) $folderPath); array_pop($parts);
+    foreach ($parts as $segment) {
+        $path = $path === '' ? $segment : $path . '/' . $segment;
+        $level = folder_visibility_level(folder_items_memo($dir, $path));
+        if ($rank[$level] > $bestRank) { $bestRank = $rank[$level]; $best = ['level' => $level, 'path' => $path]; }   // (strictly stricter only: the topmost of a level stays)
+    }
+    if ($best === null || $bestRank <= $own) return null;
+    $label = folder_display_meta($dir, $best['path'])['label'];
+    $best['label'] = $label !== '' ? $label : basename($best['path']);
+    return $best;
+}
+
 /** May the share link $l show this item of an Unlisted folder? Only when the link NAMES the Unlisted folder (or a folder inside it) or the photo itself:
  *  an "Everything" link and a link that names a folder above it leave it out, as they do a folder that is Only me, so a link meant for "all my photos" never
  *  carries the folder that was meant to stay out of sight. A collection the link names does not bring it along either (a collection is a list). */

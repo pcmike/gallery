@@ -1909,6 +1909,53 @@ check('[unlisted, review] ...and the collections list counts them as "1 Unlisted
 $q3Nested = $q3Make('Nest and the one inside it', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Nest', 'Nest/Inner'])]);
 check('[unlisted, review] a link that names both Nest and the folder inside it brings both (the nearest folder named decides)', $q3Nested && str_contains(http_get("$baseQ3/?folder=Nest%2FInner", array_merge($q3Nested['cookie'] ?? [], $q3Typed), false)[1], 'INNER-SENTINEL'));
 
+/* ---- a folder's settings say what it follows: a folder with no choice as strict as the folders above it follows the strictest of them (the topmost of a level), at any depth ---- */
+echo "== Folder settings: what a folder follows ==\n";
+$fxF4 = new_fixture_dir('follow');
+$f4Dirs = ['Fam', 'Fam/Brazil', 'Fam/Brazil/Y2016', 'Fam/Brazil/Y2016/Deep', 'Quiet', 'Quiet/Kid', 'Mine', 'Mine/Kid', 'Chain', 'Chain/Mid', 'Chain/Mid/Leaf', 'Mix', 'Mix/Mid', 'Mix/Mid/Leaf', 'Tie', 'Tie/Mid', 'Tie/Mid/Leaf', 'Open', 'Open/Kid'];
+foreach ($f4Dirs as $i => $d) { mkdir("$fxF4/$d", 0777, true); make_jpeg("$fxF4/$d/p.jpg", 40, 40, 20 + $i * 9, 60, 200 - $i * 9); }
+file_put_contents("$fxF4/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'f4-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxF4/index.php");
+$portF4 = find_free_port(); start_server($fxF4, $portF4); $baseF4 = "http://127.0.0.1:$portF4";
+[, , $f4H1] = http_post("$baseF4/?admin", ['access_code' => 'f4-admin-pw-1'], [], false);
+$f4Own = ['Cookie: ' . extract_cookie_header($f4H1)];
+$f4Csrf = (string) extract_csrf_token(http_get("$baseF4/?admin", $f4Own)[1]);
+$f4Set = fn (string $folder, string $level) => json_decode(http_post("$baseF4/?admin&folder=" . rawurlencode($folder), ['action' => 'set_folder_visibility', 'level' => $level, 'csrf_token' => $f4Csrf], array_merge($f4Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+foreach ([['Fam', 'private'], ['Quiet', 'unlisted'], ['Mine', 'me'], ['Chain', 'private'], ['Chain/Mid', 'unlisted'], ['Mix', 'unlisted'], ['Mix/Mid', 'private'], ['Tie', 'private'], ['Tie/Mid', 'private']] as [$f4P, $f4L]) $f4Set($f4P, $f4L);
+$f4Info = function (string $folder) use ($baseF4, $f4Own) {
+    $page = http_get("$baseF4/?admin&folder=" . rawurlencode($folder), $f4Own)[1];
+    preg_match('~id="vis-choice" data-level="(\w+)" data-follow="(\w*)" data-from-name="([^"]*)"~', $page, $m);
+    preg_match('~<input type="radio" name="vis" value="(\w+)" checked~', $page, $c);
+    preg_match_all('~<input type="radio" name="vis" value="(\w+)"[^>]* disabled~', $page, $d);
+    preg_match('~<p class="hint vis-follow" id="vis-follow"( hidden)?>(.*?)</p>~s', $page, $n);
+    return ['own' => $m[1] ?? null, 'follow' => $m[2] ?? null, 'from' => $m[3] ?? null, 'checked' => $c[1] ?? null, 'disabled' => $d[1] ?? [], 'noteHidden' => !empty($n[1]), 'note' => trim(preg_replace('~\s+~', ' ', strip_tags($n[2] ?? ''))), 'dlHidden' => (bool) preg_match('~<div class="dl-block" hidden>~', $page), 'page' => $page];
+};
+$f4Brazil = $f4Info('Fam/Brazil');
+check('[follow] a folder inside a private one, with no choice of its own, follows it: Private is the button drawn as chosen, Public and Unlisted cannot be pressed, and the folder says why', $f4Brazil['own'] === 'public' && $f4Brazil['follow'] === 'private' && $f4Brazil['from'] === 'Fam' && $f4Brazil['checked'] === 'private' && $f4Brazil['disabled'] === ['public', 'unlisted'] && !$f4Brazil['noteHidden'] && str_starts_with($f4Brazil['note'], 'Private because the folder above it, Fam, is Private.') && str_contains($f4Brazil['page'], 'href="?admin&amp;folder=Fam#settings"'), json_encode(array_diff_key($f4Brazil, ['page' => 1])));
+check('[follow] ...and the sentence under the buttons is the one for Private (not "Everyone can open it"), and the download switch is gone (nothing is visible to download)', str_contains($f4Brazil['page'], 'Only you, people with the private-view password') && !str_contains($f4Brazil['page'], '<p class="hint vis-desc" aria-live="polite">Everyone can open it') && $f4Brazil['dlHidden']);
+$f4Y = $f4Info('Fam/Brazil/Y2016'); $f4D = $f4Info('Fam/Brazil/Y2016/Deep');
+check('[follow] two and three levels down it is the same, and it names the folder that set it (Fam, not the folders between)', $f4Y['follow'] === 'private' && $f4Y['from'] === 'Fam' && $f4D['follow'] === 'private' && $f4D['from'] === 'Fam' && $f4D['checked'] === 'private' && $f4D['disabled'] === ['public', 'unlisted']);
+$f4Fam = $f4Info('Fam');
+check('[follow] the folder that sets it follows nothing: its own button is chosen, nothing is greyed, and there is no note', $f4Fam['follow'] === '' && $f4Fam['checked'] === 'private' && $f4Fam['disabled'] === [] && $f4Fam['noteHidden']);
+$f4Q = $f4Info('Quiet/Kid'); $f4M = $f4Info('Mine/Kid'); $f4Open = $f4Info('Open/Kid');
+check('[follow] under an Unlisted folder it follows Unlisted (only Public is greyed); under an Only me folder it follows Only me (all but Only me are greyed)', $f4Q['follow'] === 'unlisted' && $f4Q['checked'] === 'unlisted' && $f4Q['disabled'] === ['public'] && str_starts_with($f4Q['note'], 'Unlisted because the folder above it, Quiet, is Unlisted.') && $f4M['follow'] === 'me' && $f4M['checked'] === 'me' && $f4M['disabled'] === ['public', 'unlisted', 'private'] && str_starts_with($f4M['note'], 'Only me because the folder above it, Mine, is Only me.'));
+check('[follow] a folder inside a public one has nothing to follow: Public is chosen, nothing is greyed, no note, and the download switch is there', $f4Open['follow'] === '' && $f4Open['checked'] === 'public' && $f4Open['disabled'] === [] && $f4Open['noteHidden'] && !$f4Open['dlHidden']);
+$f4Leaf = $f4Info('Chain/Mid/Leaf'); $f4Mid = $f4Info('Chain/Mid');
+check('[follow] the strictest folder above wins, not the nearest: a folder under an Unlisted folder that is under a private one follows the private one', $f4Leaf['follow'] === 'private' && $f4Leaf['from'] === 'Chain' && $f4Leaf['checked'] === 'private');
+check('[follow] a folder with a setting of its own that is looser than what it follows (Unlisted under Private) shows what it follows and says its own choice takes over when the folder above is opened up', $f4Mid['own'] === 'unlisted' && $f4Mid['follow'] === 'private' && $f4Mid['checked'] === 'private' && $f4Mid['disabled'] === ['public', 'unlisted'] && str_contains($f4Mid['note'], 'Its own choice, Unlisted, takes over if Chain is opened up.'));
+$f4Mix = $f4Info('Mix/Mid/Leaf');
+check('[follow] ...and when the middle folder is the stricter one (Unlisted, then Private, then a folder), the folder follows the Private one in the middle', $f4Mix['follow'] === 'private' && $f4Mix['from'] === 'Mid' && $f4Mix['checked'] === 'private');
+$f4Tie = $f4Info('Tie/Mid/Leaf');
+check('[follow] where two folders above are at the same level it names the topmost, the one that was set first (Tie, not Tie/Mid)', $f4Tie['follow'] === 'private' && $f4Tie['from'] === 'Tie');
+$f4Fol = $f4Info('Tie/Mid');
+check('[follow] a folder whose own setting is as strict as the folder above (Private under Private) follows nothing and shows no note', $f4Fol['follow'] === '' && $f4Fol['checked'] === 'private' && $f4Fol['disabled'] === [] && $f4Fol['noteHidden']);
+$f4Press = $f4Set('Fam/Brazil', 'private');
+check('[follow] pressing Private on a folder that follows Private stores it on that folder (it stays private if the folder above is opened up), and the page then follows nothing', ($f4Press['ok'] ?? null) === true && (read_data_file("$fxF4/Fam/Brazil/.gallery-items.php")['restriction'] ?? null) === 'private' && $f4Info('Fam/Brazil')['follow'] === '');
+$f4Set('Fam/Brazil', 'public');
+$f4Set('Fam', 'public');
+$f4After = $f4Info('Fam/Brazil');
+check('[follow] opening the folder above up (Fam to Public) ends it: the folder inside is Public again, with nothing greyed', $f4After['follow'] === '' && $f4After['checked'] === 'public' && $f4After['disabled'] === [] && $f4After['noteHidden']);
+
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
 $fxPi = new_fixture_dir('photoinfo');

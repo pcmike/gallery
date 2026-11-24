@@ -9694,6 +9694,26 @@ function folder_visibility_level($data) {
     return ($data['quiet'] ?? null) === true ? 'unlisted' : 'public';
 }
 
+/** Which folder a folder's visibility follows, when the folders above it are stricter than its own setting: ['level', 'path', 'label'] or null. A folder cannot be more open
+ *  than the one it sits in (private at any depth hides everything beneath it, and an Unlisted folder's folders follow it), so a folder with no setting of its own (Public)
+ *  inside a private folder is, in fact, private. The strictest level above wins (Only me, then Private, then Unlisted); of several folders at that level it is the topmost,
+ *  the one that was actually set. This is what the folder's settings tell the owner, so that "Public" is never shown for a folder visitors cannot open. */
+function folder_follow_info($dir, $folderPath) {
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
+    $own = $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))];
+    $best = null; $bestRank = 0; $path = '';
+    $parts = explode('/', (string) $folderPath); array_pop($parts);
+    foreach ($parts as $segment) {
+        $path = $path === '' ? $segment : $path . '/' . $segment;
+        $level = folder_visibility_level(folder_items_memo($dir, $path));
+        if ($rank[$level] > $bestRank) { $bestRank = $rank[$level]; $best = ['level' => $level, 'path' => $path]; }   // (strictly stricter only: the topmost of a level stays)
+    }
+    if ($best === null || $bestRank <= $own) return null;
+    $label = folder_display_meta($dir, $best['path'])['label'];
+    $best['label'] = $label !== '' ? $label : basename($best['path']);
+    return $best;
+}
+
 /** May the share link $l show this item of an Unlisted folder? Only when the link NAMES the Unlisted folder (or a folder inside it) or the photo itself:
  *  an "Everything" link and a link that names a folder above it leave it out, as they do a folder that is Only me, so a link meant for "all my photos" never
  *  carries the folder that was meant to stay out of sight. A collection the link names does not bring it along either (a collection is a list). */
@@ -12189,16 +12209,21 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $level = $me ? 'me' : ($private ? 'private' : ($quiet ? 'unlisted' : 'public'));
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $descs = visibility_descriptions();
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
+    $follow = folder_follow_info($GLOBALS['dir'], $adminFolderPath);   // (a stricter folder above: this folder, with no say of its own that is as strict, follows it)
+    $eff = $follow !== null ? $follow['level'] : $level;               // (what visitors actually get)
+    $effPrivate = $eff === 'private' || $eff === 'me';
     $ownExplicit = array_key_exists('ownGallery', $itemsHere) && is_bool($itemsHere['ownGallery']) ? $itemsHere['ownGallery'] : null;
     $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
     <div class="folder-switches">
-    <div class="vis-choice" id="vis-choice" data-level="<?= $esc($level) ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
+    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
       <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
       <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
-        <?php foreach ($names as $v => $nm): ?><label data-v="<?= $esc($v) ?>"><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $level === $v ? ' checked' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
+        <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
-      <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$level]) ?></p>
+      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up.<?php endif; ?></span></p>
+      <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$eff]) ?></p>
       <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
         <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
       </form>
@@ -12212,7 +12237,7 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
       <p class="hint own-note" data-own-explicit="<?= $ownExplicit === null ? '' : ($ownExplicit ? '1' : '0') ?>"><?= $esc(own_gallery_note($level, $ownExplicit)) ?></p>
     </div>
     <?php if (!gallery_is_closed()): $dlFolders = public_download_current()[0]; ?>
-    <div class="dl-block"<?= $private ? ' hidden' : '' ?>>
+    <div class="dl-block"<?= $effPrivate ? ' hidden' : '' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_downloads', 'dl', in_array($adminFolderPath, $dlFolders, true), 'Visitors can download originals', '', '', 'unlisted-form'); ?>
       <?php $dlRow = admin_downloads_inside_html($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? [], $adminFolderPath); if ($dlRow !== ''): ?>
       <div class="dl-inside" data-dl-inside data-csrf="<?= $esc($csrfToken) ?>"<?= in_array($adminFolderPath, $dlFolders, true) ? '' : ' hidden' ?>>
@@ -21023,6 +21048,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .folder-switches > .own-gallery-row { display:flex; flex-direction:column; gap:4px; }
   .folder-switches > .own-gallery-row .own-note { margin:0; }
   .vis-choice { min-width:0; }
+  .vis-seg label.is-off { cursor:not-allowed; } .vis-seg label.is-off span { opacity:.38; }
+  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; }
+  .vis-choice .vis-follow { margin:6px 0 2px; max-width:62ch; } .vis-choice .vis-follow a { color:inherit; text-decoration:underline; }
   .vis-choice > label { display:block; margin:0 0 6px; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
@@ -23213,6 +23241,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var csrf = wrap.getAttribute('data-csrf'), node = wrap.querySelector('.rowstate'), desc = wrap.querySelector('.vis-desc'), modal = document.getElementById('priv-modal');
     var radios = [].slice.call(wrap.querySelectorAll('input[name=vis]')), level = wrap.getAttribute('data-level');
     var counts = { stay: +wrap.getAttribute('data-stay') || 0, open: +wrap.getAttribute('data-open') || 0 }, noun = wrap.getAttribute('data-noun') || 'photo', pending = null, descs = {};
+    // A folder cannot be more open than the folder it sits in: when a folder above is stricter than this folder's own setting, the folder follows it (the page says which
+    // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
+    var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
+    var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
+    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null;
+    function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function say(text, kind) {
@@ -23228,9 +23262,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function paint(l, own) {
       level = l; wrap.setAttribute('data-level', l);
-      radios.forEach(function (r) { r.checked = r.value === l; });
-      if (desc) desc.textContent = descs[l] || '';
-      var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = l === 'private' || l === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
+      var e = effective(l), following = e !== l;
+      wrap.classList.toggle('following', following);
+      radios.forEach(function (r) {
+        var off = following && RANK[r.value] < RANK[e], lab = r.closest('label');
+        r.checked = r.value === e; r.disabled = off;
+        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
+      });
+      if (followNote) followNote.hidden = !following;
+      if (followOwn) { var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = shows ? 'Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up.' : ''; }
+      if (desc) desc.textContent = descs[e] || '';
+      var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
       paintOwn(own);
     }
@@ -23286,9 +23328,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         .catch(function () { pending = null; say('Couldn\'t check: reload the page and try again.', 'err'); });
     }
     radios.forEach(function (r) {
-      r.addEventListener('change', function () {
-        if (!r.checked) return;
-        var to = r.value, kind = questionFor(level, to);
+      r.addEventListener('click', function () {   // (a click, not a change: a folder that follows a stricter one has that button drawn as chosen, and pressing it is a choice of its own)
+        var to = r.value;
+        if (r.disabled || to === level) return;
+        var kind = questionFor(level, to);
         if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
         send(to, function (ok) { if (!ok) paint(level, null); });
       });

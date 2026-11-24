@@ -27,6 +27,14 @@ Make the backup's "this part lost a lot" check look inside records, so a bulk ed
 - **Sketch:** compare the records field by field (for captions, the caption, the location and the private mark), and hold the part when many of them changed the same way, with the same Health row and one-click confirm as for removed records.
 - **Note:** held back because it needs a rule for what counts as "many" for each field, and an ordinary bulk edit (Tidy up, a long editing session) would trip it often. Worth revisiting once the removed-records check has been in use for a while and the owner knows how often it speaks up.
 
+## A nested folder more open than the folder above it
+
+Let a folder inside a private (or Unlisted) folder have a choice of its own that is more open, the nearest explicit choice winning, as the location switch already works.
+
+- **Today:** not possible. A folder made private at any depth hides everything beneath it, and Public is "nothing set", so it cannot override anything. A folder's settings say which folder it follows (see the guide). The cases that want it are covered: a share link that names the subfolder (it works though the folder above is private, and can end, be switched off and be watched), moving the folder out, and marking single photos public inside a private folder.
+- **Sketch:** a stored Public (and Unlisted) choice for a folder, and a rule that the nearest folder with a choice decides; an older version would ignore the new value and keep the folder private (fails closed). The buttons greyed out for a following folder would become pressable.
+- **Note:** held back on purpose. It makes "is this visible?" depend on the whole chain of folders, a forgotten Public on a subfolder would quietly keep it open, and every list that decides what a visitor sees (the front page, Flat, counts, the map, ZIPs, collections, an Everything link) would need a rule for a visible folder inside a hidden one, and a full crawl test like the one for Unlisted. Worth building only if a real case turns up that a share link or a move does not cover.
+
 ## Showing a photo's own information (its metadata) in the viewer
 
 Let a visitor open an "info" panel in the viewer with what the photo file itself says, not only the owner's caption: the camera or phone (make and model), the lens, the camera settings (focal length, aperture, shutter speed, ISO, flash, exposure mode, white balance), when it was taken (with the time zone a phone records), the picture's size, and perhaps the place and the editing software.

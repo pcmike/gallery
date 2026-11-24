@@ -638,16 +638,21 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $level = $me ? 'me' : ($private ? 'private' : ($quiet ? 'unlisted' : 'public'));
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $descs = visibility_descriptions();
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
+    $follow = folder_follow_info($GLOBALS['dir'], $adminFolderPath);   // (a stricter folder above: this folder, with no say of its own that is as strict, follows it)
+    $eff = $follow !== null ? $follow['level'] : $level;               // (what visitors actually get)
+    $effPrivate = $eff === 'private' || $eff === 'me';
     $ownExplicit = array_key_exists('ownGallery', $itemsHere) && is_bool($itemsHere['ownGallery']) ? $itemsHere['ownGallery'] : null;
     $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
     <div class="folder-switches">
-    <div class="vis-choice" id="vis-choice" data-level="<?= $esc($level) ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
+    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
       <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
       <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
-        <?php foreach ($names as $v => $nm): ?><label data-v="<?= $esc($v) ?>"><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $level === $v ? ' checked' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
+        <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
-      <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$level]) ?></p>
+      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up.<?php endif; ?></span></p>
+      <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$eff]) ?></p>
       <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
         <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
       </form>
@@ -661,7 +666,7 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
       <p class="hint own-note" data-own-explicit="<?= $ownExplicit === null ? '' : ($ownExplicit ? '1' : '0') ?>"><?= $esc(own_gallery_note($level, $ownExplicit)) ?></p>
     </div>
     <?php if (!gallery_is_closed()): $dlFolders = public_download_current()[0]; ?>
-    <div class="dl-block"<?= $private ? ' hidden' : '' ?>>
+    <div class="dl-block"<?= $effPrivate ? ' hidden' : '' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_downloads', 'dl', in_array($adminFolderPath, $dlFolders, true), 'Visitors can download originals', '', '', 'unlisted-form'); ?>
       <?php $dlRow = admin_downloads_inside_html($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? [], $adminFolderPath); if ($dlRow !== ''): ?>
       <div class="dl-inside" data-dl-inside data-csrf="<?= $esc($csrfToken) ?>"<?= in_array($adminFolderPath, $dlFolders, true) ? '' : ' hidden' ?>>

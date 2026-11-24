@@ -4296,6 +4296,36 @@ try:
         ok(k2.get("Shelf/Quiet/Kid") == "off" and k2.get("Shelf/Quiet") in ("dash", "on"), "[unlisted link] leaving the folder inside it out sticks: after Done and reopening, it is unticked (it used to come back ticked, and the link still showed it)", str(k2))
         b.js("document.querySelector('[data-sl-modal=ok]').click()"); b.drain(0.4)
         shutil.rmtree(SITE_L + "/Shelf")
+        # a folder's settings say what it follows: Fol is private, Fol/Mid/Leaf (two levels down) has no choice of its own
+        def wait_py(cond, secs=6.0):
+            end_ = time.time() + secs
+            while time.time() < end_:
+                if cond(): return True
+                b.drain(0.2)
+            return False
+        vp0 = b.js("[innerWidth, innerHeight]")
+        for d_ in ("Fol", "Fol/Mid", "Fol/Mid/Leaf"):
+            os.makedirs(SITE_L + "/" + d_, exist_ok=True); shutil.copy(SITE_L + "/pub.jpg", SITE_L + "/" + d_ + "/f1.jpg")
+        open(SITE_L + "/Fol/.gallery-items.php", "w").write(LGUARD + json.dumps({"restriction": "private", "items": [], "groups": []}) + "\n")
+        leaf_items = lambda: json.loads(open(SITE_L + "/Fol/Mid/Leaf/.gallery-items.php").read().split("\n", 1)[1]) if os.path.exists(SITE_L + "/Fol/Mid/Leaf/.gallery-items.php") else {}
+        b.goto(BL + "/?admin&classic=1&folder=Fol%2FMid%2FLeaf", 1.5)
+        fl = b.js("""(() => { const w = document.getElementById('vis-choice'); if (!w) return null; const labs = [...w.querySelectorAll('.vis-seg label')];
+          return {checked: (w.querySelector('input:checked') || {}).value, off: labs.filter(l => l.classList.contains('is-off')).map(l => l.dataset.v), dis: [...w.querySelectorAll('input:disabled')].map(i => i.value),
+                  note: (document.getElementById('vis-follow').hidden ? '' : document.getElementById('vis-follow').textContent.replace(/\\s+/g, ' ').trim()), link: (document.querySelector('#vis-follow a') || {}).getAttribute ? document.querySelector('#vis-follow a').getAttribute('href') : '',
+                  dashed: getComputedStyle(w.querySelector('input:checked + span')).borderStyle, dl: !!document.querySelector('.dl-block') && !document.querySelector('.dl-block').hidden}; })()""")
+        ok(fl and fl["checked"] == "private" and fl["off"] == ["public", "unlisted"] and fl["dis"] == ["public", "unlisted"] and fl["note"].startswith("Private because the folder above it, Fol, is Private.") and fl["link"].endswith("folder=Fol#settings") and fl["dashed"] == "dashed" and not fl["dl"], "[follow] a folder two levels below a private one shows Private as chosen (dashed), Public and Unlisted greyed, says it follows Fol with a link to it, and has no download switch", str(fl))
+        b.js("document.querySelector('#vis-choice input[value=public]').click()"); b.drain(0.6)
+        ok(not b.js("document.querySelector('#vis-choice .rowstate').textContent") and not os.path.exists(SITE_L + "/Fol/Mid/Leaf/.gallery-items.php") and b.js("document.querySelector('#vis-choice input:checked').value") == "private", "[follow] pressing a greyed button does nothing (nothing is saved, the chosen button stays)")
+        b.js("document.querySelector('#vis-choice input[value=private]').click()")
+        ok(wait_py(lambda: leaf_items().get("restriction") == "private"), "[follow] pressing Private, though it is already the one drawn, stores it on this folder (it stays private if Fol is opened up)", str(leaf_items()))
+        ok(b.js("document.getElementById('vis-follow').hidden") is True and b.js("document.querySelectorAll('#vis-choice input:disabled').length") == 0, "[follow] ...and the page then follows nothing: no note, nothing greyed")
+        b.js("document.querySelector('#vis-choice input[value=me]').click()"); b.drain(1.0)
+        ok(leaf_items().get("unlisted") is True and b.js("document.querySelector('#vis-choice input:checked').value") == "me", "[follow] pressing Only me works from a folder that was following")
+        b.viewport(390, 844, True); b.goto(BL + "/?admin&classic=1&folder=Fol%2FMid", 1.5)
+        pf = b.js("(() => ({wide: document.documentElement.scrollWidth > innerWidth + 1, note: !document.getElementById('vis-follow').hidden, labs: [...document.querySelectorAll('#vis-choice .seg label')].map(l => Math.round(l.getBoundingClientRect().top))}))()")
+        ok(not pf["wide"] and pf["note"] and len(set(pf["labs"])) == 1, "[follow] on a phone the folder's settings do not scroll sideways, the note shows, and the four buttons are still in one row", str(pf))
+        b.viewport(vp0[0], vp0[1])
+        shutil.rmtree(SITE_L + "/Fol")
         # folders inside a folder: ticking one ticks what is inside it, anything can then be unticked, and the link keeps what it leaves out
         for d in ("Euro/Paris", "Euro/Rome/Old", "Euro/Nice"):
             os.makedirs(SITE_L + "/" + d, exist_ok=True); shutil.copy(SITE_L + "/pub.jpg", SITE_L + "/" + d + "/x.jpg")

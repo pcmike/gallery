@@ -1944,6 +1944,12 @@
     var csrf = wrap.getAttribute('data-csrf'), node = wrap.querySelector('.rowstate'), desc = wrap.querySelector('.vis-desc'), modal = document.getElementById('priv-modal');
     var radios = [].slice.call(wrap.querySelectorAll('input[name=vis]')), level = wrap.getAttribute('data-level');
     var counts = { stay: +wrap.getAttribute('data-stay') || 0, open: +wrap.getAttribute('data-open') || 0 }, noun = wrap.getAttribute('data-noun') || 'photo', pending = null, descs = {};
+    // A folder cannot be more open than the folder it sits in: when a folder above is stricter than this folder's own setting, the folder follows it (the page says which
+    // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
+    var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
+    var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
+    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null;
+    function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function say(text, kind) {
@@ -1959,9 +1965,17 @@
     }
     function paint(l, own) {
       level = l; wrap.setAttribute('data-level', l);
-      radios.forEach(function (r) { r.checked = r.value === l; });
-      if (desc) desc.textContent = descs[l] || '';
-      var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = l === 'private' || l === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
+      var e = effective(l), following = e !== l;
+      wrap.classList.toggle('following', following);
+      radios.forEach(function (r) {
+        var off = following && RANK[r.value] < RANK[e], lab = r.closest('label');
+        r.checked = r.value === e; r.disabled = off;
+        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
+      });
+      if (followNote) followNote.hidden = !following;
+      if (followOwn) { var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = shows ? 'Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up.' : ''; }
+      if (desc) desc.textContent = descs[e] || '';
+      var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
       paintOwn(own);
     }
@@ -2017,9 +2031,10 @@
         .catch(function () { pending = null; say('Couldn\'t check: reload the page and try again.', 'err'); });
     }
     radios.forEach(function (r) {
-      r.addEventListener('change', function () {
-        if (!r.checked) return;
-        var to = r.value, kind = questionFor(level, to);
+      r.addEventListener('click', function () {   // (a click, not a change: a folder that follows a stricter one has that button drawn as chosen, and pressing it is a choice of its own)
+        var to = r.value;
+        if (r.disabled || to === level) return;
+        var kind = questionFor(level, to);
         if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
         send(to, function (ok) { if (!ok) paint(level, null); });
       });
