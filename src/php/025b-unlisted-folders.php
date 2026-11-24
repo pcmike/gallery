@@ -79,7 +79,15 @@ function folder_visibility_level($data) {
  *  the one that was actually set. This is what the folder's settings tell the owner, so that "Public" is never shown for a folder visitors cannot open. */
 function folder_follow_info($dir, $folderPath) {
     $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
-    $own = $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))];
+    $best = folder_above_info($dir, $folderPath);
+    if ($best === null || $rank[$best['level']] <= $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))]) return null;
+    return $best;
+}
+
+/** The strictest level among the folders above this one, whatever this folder's own setting is: ['level', 'path', 'label'], or null when every folder above is Public (or
+ *  there is none). Of several at the strictest level, the topmost. The folder's settings use it to offer "follow it again" for a folder that has a setting of its own. */
+function folder_above_info($dir, $folderPath) {
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
     $best = null; $bestRank = 0; $path = '';
     $parts = explode('/', (string) $folderPath); array_pop($parts);
     foreach ($parts as $segment) {
@@ -87,7 +95,7 @@ function folder_follow_info($dir, $folderPath) {
         $level = folder_visibility_level(folder_items_memo($dir, $path));
         if ($rank[$level] > $bestRank) { $bestRank = $rank[$level]; $best = ['level' => $level, 'path' => $path]; }   // (strictly stricter only: the topmost of a level stays)
     }
-    if ($best === null || $bestRank <= $own) return null;
+    if ($best === null) return null;
     $label = folder_display_meta($dir, $best['path'])['label'];
     $best['label'] = $label !== '' ? $label : basename($best['path']);
     return $best;

@@ -417,7 +417,7 @@
   .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
   .folder-priv .ico { width: 1em; height: 1em; }
   .folder-priv.own.unlisted { cursor: default; pointer-events: none; background: rgba(58,18,20,0.95); border-color: #ed4245; color: #ff9a9c; }   /* (Only me: darker than Private, so the two cannot be mistaken) */
-  .folder-priv.own.quiet { cursor: default; pointer-events: none; background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; it says so, it is not a button) */
+  .folder-priv.own.quiet { background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; a button, like the red Private one: it asks, then shows the folder to everyone) */
   .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
   .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
   .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
@@ -425,7 +425,7 @@
   .folder-priv.own::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
   .folder-priv.own:active { transform: scale(0.94); }
   .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } }
+  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } .folder-priv.own.quiet:hover { background: #9b7400; } }
   .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
   .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
   .folder-cover-count.has-priv-count { position: relative; }
@@ -627,6 +627,7 @@
   .gd-desc { margin: 2px 0 6px; font-size: 0.85rem; color: var(--muted); }
   .gd-notes { margin: 0 0 8px; padding: 8px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 0.88rem; }
   .gd-notes p { margin: 0 0 6px; } .gd-notes p:last-child { margin-bottom: 0; }
-  .folder-priv-banner.fpb-quiet { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); cursor: default; }
-  .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); }
+  .folder-priv-banner.fpb-quiet { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); }
+  .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.18); border-color: rgba(245,166,35,0.75); }
+  .folder-priv-banner.fpb-quiet:active { background: rgba(245,166,35,0.24); }
   .folder-priv-banner.fpb-quiet > .ico { color: #f5a623; }

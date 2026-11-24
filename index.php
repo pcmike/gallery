@@ -9700,7 +9700,15 @@ function folder_visibility_level($data) {
  *  the one that was actually set. This is what the folder's settings tell the owner, so that "Public" is never shown for a folder visitors cannot open. */
 function folder_follow_info($dir, $folderPath) {
     $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
-    $own = $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))];
+    $best = folder_above_info($dir, $folderPath);
+    if ($best === null || $rank[$best['level']] <= $rank[folder_visibility_level(folder_items_memo($dir, $folderPath))]) return null;
+    return $best;
+}
+
+/** The strictest level among the folders above this one, whatever this folder's own setting is: ['level', 'path', 'label'], or null when every folder above is Public (or
+ *  there is none). Of several at the strictest level, the topmost. The folder's settings use it to offer "follow it again" for a folder that has a setting of its own. */
+function folder_above_info($dir, $folderPath) {
+    $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
     $best = null; $bestRank = 0; $path = '';
     $parts = explode('/', (string) $folderPath); array_pop($parts);
     foreach ($parts as $segment) {
@@ -9708,7 +9716,7 @@ function folder_follow_info($dir, $folderPath) {
         $level = folder_visibility_level(folder_items_memo($dir, $path));
         if ($rank[$level] > $bestRank) { $bestRank = $rank[$level]; $best = ['level' => $level, 'path' => $path]; }   // (strictly stricter only: the topmost of a level stays)
     }
-    if ($best === null || $bestRank <= $own) return null;
+    if ($best === null) return null;
     $label = folder_display_meta($dir, $best['path'])['label'];
     $best['label'] = $label !== '' ? $label : basename($best['path']);
     return $best;
@@ -12210,19 +12218,22 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $descs = visibility_descriptions();
     $rank = ['public' => 0, 'unlisted' => 1, 'private' => 2, 'me' => 3];
-    $follow = folder_follow_info($GLOBALS['dir'], $adminFolderPath);   // (a stricter folder above: this folder, with no say of its own that is as strict, follows it)
+    $above = folder_above_info($GLOBALS['dir'], $adminFolderPath);     // (the strictest folder above, whatever this folder's own setting is)
+    $follow = $above !== null && $rank[$above['level']] > $rank[$level] ? $above : null;   // (a stricter folder above: this folder, with no say of its own that is as strict, follows it)
+    $sameAbove = $above !== null && $level !== 'public' && $rank[$above['level']] === $rank[$level];   // (its own setting is as strict as the folder above: pressing it again goes back to following)
     $eff = $follow !== null ? $follow['level'] : $level;               // (what visitors actually get)
     $effPrivate = $eff === 'private' || $eff === 'me';
     $ownExplicit = array_key_exists('ownGallery', $itemsHere) && is_bool($itemsHere['ownGallery']) ? $itemsHere['ownGallery'] : null;
     $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
     <div class="folder-switches">
-    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
+    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-above="<?= $above !== null ? $esc($above['level']) : '' ?>" data-above-name="<?= $above !== null ? $esc($above['label']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
       <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
       <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
         <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
-      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up.<?php endif; ?></span></p>
+      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up. <button type="button" class="linklike vf-remove">Remove it</button><?php endif; ?></span></p>
+      <p class="hint vis-same" id="vis-same"<?= $sameAbove ? '' : ' hidden' ?>><?php if ($sameAbove): ?>This folder has its own <?= $esc($names[$level]) ?> setting, as strict as <?= $esc($above['label']) ?> above it. Press <?= $esc($names[$level]) ?> again to follow <?= $esc($above['label']) ?> instead.<?php endif; ?></p>
       <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$eff]) ?></p>
       <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
         <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
@@ -21295,6 +21306,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </main>
 </div>
 <script>
+  // Backspace closes an open dialog the way Escape does, for a keyboard that has no Escape key. Never while typing in a field (there it deletes a letter). It asks the
+  // dialog's own Escape to run, so each one closes as it always does (a question is cancelled, nothing is changed).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+    var t = e.target;
+    if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
+    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
+    if (!open.length) return;
+    e.preventDefault(); e.stopPropagation();
+    open[open.length - 1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+  }, true);
   // ---- When the window comes back, what is shown may be out of date (a visitor came, a lockout happened, another browser changed something). Parts of the page
   // register here. Each is refreshed when the window becomes visible or gets focus again, and when its tab is opened, at most once every 15 seconds (api.min), and never
   // while the person is in the middle of something (a menu or dialog open): it waits and goes when that ends. A part keeps its own state across a refresh.
@@ -23245,8 +23267,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
     var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
     var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
-    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null;
+    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null, sameNote = wrap.querySelector('.vis-same');
+    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
     function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
+    function canUnset(l) { return l !== 'public' && !!aboveLevel && RANK[aboveLevel] >= RANK[l]; }   // (a setting of its own, with a folder above at least as strict to go back to following)
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function say(text, kind) {
@@ -23270,7 +23294,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
       });
       if (followNote) followNote.hidden = !following;
-      if (followOwn) { var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = shows ? 'Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up.' : ''; }
+      if (followOwn) {
+        var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = '';
+        if (shows) {
+          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up. '));
+          var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
+        }
+      }
+      if (sameNote) { var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l]; sameNote.hidden = !same; sameNote.textContent = same ? 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.' : ''; }
       if (desc) desc.textContent = descs[e] || '';
       var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
@@ -23305,10 +23336,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       document.getElementById('pm-ok').textContent = PLAIN[kind][2];
       modal.hidden = false; document.getElementById('pm-cancel').focus();
     }
-    function questionFor(from, to) {
-      if ((from === 'private' || from === 'me') && (to === 'public' || to === 'unlisted')) return 'open';
-      if (from === 'me' && to === 'private') return 'password';
-      if (from === 'unlisted' && to === 'public') return 'listed';
+    function questionFor(from, to) {   // (about what visitors get, so about the level each choice comes to once the folders above are counted)
+      var a = effective(from), b = effective(to);
+      if ((a === 'private' || a === 'me') && (b === 'public' || b === 'unlisted')) return 'open';
+      if (a === 'me' && b === 'private') return 'password';
+      if (a === 'unlisted' && b === 'public') return 'listed';
       return null;
     }
     function ask(to) {
@@ -23330,11 +23362,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     radios.forEach(function (r) {
       r.addEventListener('click', function () {   // (a click, not a change: a folder that follows a stricter one has that button drawn as chosen, and pressing it is a choice of its own)
         var to = r.value;
-        if (r.disabled || to === level) return;
+        if (r.disabled) return;
+        if (to === level) { if (!canUnset(level)) return; to = 'public'; }   // (pressing a folder's own setting again takes it away, when there is a folder above to follow instead)
         var kind = questionFor(level, to);
         if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
         send(to, function (ok) { if (!ok) paint(level, null); });
       });
+    });
+    wrap.addEventListener('click', function (e) {   // "Remove it": a folder's own setting that is looser than what it follows
+      if (!e.target.closest || !e.target.closest('.vf-remove')) return;
+      var to = 'public', kind = questionFor(level, to);
+      if (kind && modal) { if (kind === 'open') ask(to); else askPlain(to, kind); return; }
+      send(to, function (ok) { if (!ok) paint(level, null); });
     });
     if (modal) {
       document.getElementById('pm-cancel').addEventListener('click', closeModal);
@@ -27053,7 +27092,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     $vt = video_tile_parts($file, $videoDuration);
     // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
-    $ownerLock = ''; $hasAddr = false;
+    $ownerLock = ''; $hasAddr = false; $hasLink = false;
     if (is_admin_browser()) {
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
@@ -27080,6 +27119,10 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
             $hasAddr = true;
             $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New link: the old one stops working" aria-label="New link: the old one stops working">' . ui_icon('linkoff') . '</button>'
                 . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s link" aria-label="Copy this photo\'s link">' . ui_icon('link') . '</button>';
+        } else {
+            // Any other photo: a link button beside the pencil that opens the owner's small menu of links to it (see openOwnerLinkMenu).
+            $hasLink = true;
+            $ownerLock .= '<button type="button" class="link-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy a link to this photo" aria-label="Copy a link to this photo" aria-haspopup="true">' . ui_icon('link') . '</button>';
         }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
@@ -27090,7 +27133,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // buttons, never their parent: Tab stops on it first, Enter or Space presses it, and the press reaches the tile's own click handler, which opens the
     // viewer (or, while the owner is choosing photos, picks the tile). A mouse or a finger never touches it (it takes no pointer), so they act as before.
     $openBtn = '<button type="button" class="tile-open" aria-label="' . htmlspecialchars('Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . $altText, ENT_QUOTES, 'UTF-8') . '"></button>';
-    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($hasLink ? ' has-link' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($altText, ENT_QUOTES, 'UTF-8') . '">' . $openBtn . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -27281,7 +27324,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Unlisted (public, left out of every list): only the owner is told on the card, in amber, dashed when it is a folder above that makes it so.
     $quietPill = '';
     if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && $priv['state'] === '') {
-        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<span class="folder-priv own quiet" title="Unlisted: anyone with the address can open this folder, but it is left out of every list">Unlisted</span>';
+        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
         elseif (quiet_root_depth($dir, $folderPath . '/x') > 0) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted because a folder above it is">Unlisted</span>';
     }
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' || $quietPill !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
@@ -28292,7 +28335,7 @@ send_viewer_aware_cache_headers();
   .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
   .folder-priv .ico { width: 1em; height: 1em; }
   .folder-priv.own.unlisted { cursor: default; pointer-events: none; background: rgba(58,18,20,0.95); border-color: #ed4245; color: #ff9a9c; }   /* (Only me: darker than Private, so the two cannot be mistaken) */
-  .folder-priv.own.quiet { cursor: default; pointer-events: none; background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; it says so, it is not a button) */
+  .folder-priv.own.quiet { background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; a button, like the red Private one: it asks, then shows the folder to everyone) */
   .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
   .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
   .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
@@ -28300,7 +28343,7 @@ send_viewer_aware_cache_headers();
   .folder-priv.own::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
   .folder-priv.own:active { transform: scale(0.94); }
   .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } }
+  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } .folder-priv.own.quiet:hover { background: #9b7400; } }
   .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
   .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
   .folder-cover-count.has-priv-count { position: relative; }
@@ -28502,8 +28545,9 @@ send_viewer_aware_cache_headers();
   .gd-desc { margin: 2px 0 6px; font-size: 0.85rem; color: var(--muted); }
   .gd-notes { margin: 0 0 8px; padding: 8px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 0.88rem; }
   .gd-notes p { margin: 0 0 6px; } .gd-notes p:last-child { margin-bottom: 0; }
-  .folder-priv-banner.fpb-quiet { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); cursor: default; }
-  .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); }
+  .folder-priv-banner.fpb-quiet { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); }
+  .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.18); border-color: rgba(245,166,35,0.75); }
+  .folder-priv-banner.fpb-quiet:active { background: rgba(245,166,35,0.24); }
   .folder-priv-banner.fpb-quiet > .ico { color: #f5a623; }
   <?= video_tile_css() ?>
   .card:hover .tile-video { transform: scale(1.05); }
@@ -28589,6 +28633,13 @@ send_viewer_aware_cache_headers();
   .addr-toggle { position: absolute; bottom: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
   .addr-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
   .addr-new { left: 40px; } .addr-cur { left: 74px; }
+  /* The link button of an ordinary photo's tile: where the Only me photos have their first address button, and the same round button as the rest. */
+  .link-toggle { position: absolute; bottom: 6px; left: 40px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; box-sizing: border-box; width: 27px; height: 27px; padding: 0; }
+  .link-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .link-toggle::after { content: ''; position: absolute; inset: -3px; }
+  .owner-card.has-link .video-duration { left: 72px; }
+  @media (hover: hover) { .link-toggle { opacity: 0; } .card:hover .link-toggle, .link-toggle:focus-visible { opacity: 0.9; } }
+  .selecting .card .link-toggle { display: none; }
   /* The tile's round buttons (the lock when it has no word in it, the star, the pencil and the two address buttons) are exact circles of one size with one icon size.
      The lock with a word ("Folder", "Private") stays a pill. */
   .cover-toggle, .edit-toggle, .addr-toggle, .priv-toggle:not(.is-folder):not(.is-private), .priv-toggle.is-addr { box-sizing: border-box; width: 27px; height: 27px; padding: 0; justify-content: center; }
@@ -28600,14 +28651,14 @@ send_viewer_aware_cache_headers();
   .addr-toggle::after { content: ''; position: absolute; inset: -3px; }   /* (smaller: three buttons stand close together) */
   /* Over one of these two, the button itself answers: full strength, a white ring, a little larger, and a colour of its own
      (the accent for a plain one, a lighter red or gold for one that is already lit); pressed, it sinks back. */
-  .priv-toggle, .cover-toggle, .edit-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
-  .priv-toggle:active, .cover-toggle:active, .edit-toggle:active { transform: scale(0.92); }
+  .priv-toggle, .cover-toggle, .edit-toggle, .addr-toggle, .link-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
+  .priv-toggle:active, .cover-toggle:active, .edit-toggle:active, .addr-toggle:active, .link-toggle:active { transform: scale(0.92); }
   @media (hover: hover) {
-    .priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
+    .priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover, .addr-toggle:hover, .link-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
     .priv-toggle.is-private:hover { background: #f4585b; }
     .priv-toggle.is-folder:hover { background: rgba(237,66,69,0.38); border-color: #ff9a9c; color: #fff; }
     .cover-toggle.is-cover:hover { background: #ffd86b; }
-    .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active { transform: scale(1.02); }
+    .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active, .addr-toggle:hover:active, .link-toggle:hover:active { transform: scale(1.02); }
   }
   .lb-sharepop { position: fixed; z-index: 150; top: 66px; right: 12px; box-sizing: border-box; width: min(460px, calc(100vw - 24px)); padding: 14px 16px; background: #1b1b1e; border: 1px solid #38383f; border-radius: 12px; color: #eaeaea; box-shadow: 0 14px 44px rgba(0,0,0,0.6); font-size: 0.92rem; line-height: 1.45; }
   .lb-sharepop p { margin: 6px 0 12px; color: #c2c2c9; }
@@ -28617,6 +28668,18 @@ send_viewer_aware_cache_headers();
   .lb-sharepop .lsp-btns button { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 12px; background: #26262b; border: 1px solid #3a3a42; border-radius: 9px; color: #eaeaea; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .lb-sharepop .lsp-btns .lsp-share { flex: 1.6 1 0; background: #5865f2; border-color: #5865f2; color: #fff; }
   .lb-sharepop .lsp-btns .lsp-share:hover { background: #6b77f0; }
+  /* The owner's menu of links to a photo: a list of rows, each a short name with one grey line under it. */
+  .lb-sharepop.lm-menu { width: min(300px, calc(100vw - 24px)); padding: 6px; right: auto; --lm-x: 50%; }
+  /* The pointer: a small square turned on its corner, on the edge nearest the button, over the middle of it (below the button: it points up; above it: it points down). */
+  .lm-menu::before { content: ''; position: absolute; left: var(--lm-x); width: 12px; height: 12px; margin-left: -6px; box-sizing: border-box; background: #1b1b1e; border: 1px solid #38383f; transform: rotate(45deg); pointer-events: none; }
+  .lm-menu.lm-below::before { top: -7px; border-right: 0; border-bottom: 0; }
+  .lm-menu.lm-above::before { bottom: -7px; border-left: 0; border-top: 0; }
+  .lm-menu .lm-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; box-sizing: border-box; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; color: #eaeaea; font: inherit; text-align: left; cursor: pointer; }
+  .lm-menu .lm-row:hover, .lm-menu .lm-row:focus-visible { background: #2a2a31; outline: none; }
+  .lm-menu .lm-row .ico { width: 1.15em; height: 1.15em; flex: none; margin-top: 2px; color: #aab2ff; }
+  .lm-menu .lm-tx { display: flex; flex-direction: column; min-width: 0; }
+  .lm-menu .lm-tx strong { font-size: 0.95rem; color: #fff; }
+  .lm-menu .lm-tx small { margin-top: 1px; font-size: 0.78rem; line-height: 1.3; color: #a8a8b0; }
   .lb-sharepop .lsp-btns .lsp-copy:hover { background: #303036; }
   .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
   .lb-sharepop .lsp-fine { margin: 10px 0 0; font-size: 0.82rem; color: #8e8e96; }
@@ -29517,9 +29580,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <?php endif; ?>
 <?= $lockForm ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) !== 'private' && folder_is_quiet($dir, $currentFolderPath)): ?>
-  <div class="folder-priv-banner fpb-note fpb-quiet" id="folder-quiet-note" role="note">
+  <div class="folder-priv-banner fpb-quiet" id="folder-quiet-note" role="button" tabindex="0" title="Show this folder to everyone" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('link') ?>
-    <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong></div>
+    <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong>
+      <em class="fpb-hint">Show it to everyone&hellip;</em></div>
   </div>
 <?php endif; ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
@@ -29547,6 +29611,16 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
       <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
       <div class="fp-btns"><button type="button" id="fp-cancel">Cancel</button><button type="button" class="primary" id="fp-ok">Make public</button></div>
+    </div>
+  </div>
+<?php endif; ?>
+<?php if (is_admin_browser() && AUTO_GROUP_BY_FOLDER): ?>
+  <div class="fp-modal" id="fq-modal" role="dialog" aria-modal="true" aria-labelledby="fq-modal-title" hidden>
+    <div class="fp-modal-card">
+      <h3 id="fq-modal-title">Show this folder to everyone?</h3>
+      <p class="fp-hint" id="fq-folder" style="margin:0 0 8px" hidden></p>
+      <p class="fp-hint">It will appear on the gallery's page, among the folders, on the map and in the counts, for every visitor. Not right? Cancel and leave it Unlisted.</p>
+      <div class="fp-btns"><button type="button" id="fq-cancel">Cancel</button><button type="button" class="primary" id="fq-ok">Show it</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -29737,9 +29811,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
   const ownerState = <?php
       if (is_admin_browser()) {
-          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; }   // (the address itself when it is known, so Copy needs no round trip)
-          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
@@ -29923,6 +29997,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   function closeLightbox() {
     if (window.__ssStop) window.__ssStop();   // (a slideshow ends with the viewer)
     if (window.__infoClose) window.__infoClose();   // (and so does the info panel)
+    if (typeof closeLinkPopup === 'function') closeLinkPopup();   // (and the owner's menu of links, however the viewer is closed)
     const back = lbReturnTo; lbReturnTo = null;
     if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
@@ -30723,7 +30798,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const modal = document.getElementById('fp-modal');
     if (!modal) return;
     const $ = function (id) { return document.getElementById(id); }, noun = modal.getAttribute('data-noun') || 'photo';
-    const triggers = [].slice.call(document.querySelectorAll('#folder-priv-banner, button.folder-priv.own'));
+    const triggers = [].slice.call(document.querySelectorAll('#folder-priv-banner, button.folder-priv.own:not(.quiet)'));
     if (!triggers.length) return;
     const many = function (k) { return k + ' ' + noun + (k === 1 ? '' : 's'); };
     const say = function (text) {
@@ -30754,6 +30829,46 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       modal.hidden = true;
       fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
         const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'toggle_folder_restriction');
+        return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      }).then(json).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'not saved');
+        say('This folder is public now'); setTimeout(function () { location.reload(); }, 500);
+      }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); if (from) from.focus(); });
+    });
+  })();
+
+  // The note on an Unlisted folder's page, and the amber Unlisted pill on its card: pressing either asks whether to show the folder to everyone (make it Public, which
+  // puts it in every list), and only a yes does. The same step as the folder settings' Unlisted-to-Public question.
+  (function () {
+    const modal = document.getElementById('fq-modal');
+    if (!modal) return;
+    const $ = function (id) { return document.getElementById(id); };
+    const triggers = [].slice.call(document.querySelectorAll('#folder-quiet-note, button.folder-priv.own.quiet'));
+    if (!triggers.length) return;
+    const say = function (text) {
+      const t = $('owner-toast'); if (!t) return;
+      t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
+    };
+    const json = function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
+    let folder = '', from = null;
+    const closeIt = function () { modal.hidden = true; if (from) from.focus(); };
+    const ask = function (el) {
+      from = el; folder = el.getAttribute('data-folder') || '';
+      const card = el.closest('.folder-cover'), label = card && card.querySelector('.folder-cover-label'), name = $('fq-folder');
+      if (name) { name.textContent = label ? label.textContent : ''; name.hidden = !label; }
+      modal.hidden = false; $('fq-cancel').focus();
+    };
+    triggers.forEach(function (el) {
+      el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); ask(el); });
+      el.addEventListener('keydown', function (e) { if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); ask(el); } });
+    });
+    $('fq-cancel').addEventListener('click', closeIt);
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeIt(); });
+    modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIt(); } });
+    $('fq-ok').addEventListener('click', function () {
+      modal.hidden = true;
+      fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
+        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted');
         return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       }).then(json).then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');
@@ -31422,6 +31537,19 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     e.preventDefault();
     b.click();
   });
+  // Backspace does what Escape does, for a keyboard that has no Escape key: it closes the box or menu that is open, or, with none, the viewer. Never while typing in a field
+  // (there it deletes a letter). It asks the dialog's own Escape to run, so each one closes as it always does (a question is cancelled; the viewer's info panel or editor, if
+  // open, goes first, as with Escape).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+    var t = e.target;
+    if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
+    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
+    var target = open.length ? open[open.length - 1] : (lightbox.classList.contains('open') ? lightbox : null);
+    if (!target) return;
+    e.preventDefault(); e.stopPropagation();
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
     // Another box opened over the viewer (the owner's "Share just this photo", the QR code, a question) has the keys, and so does any field:
@@ -31569,8 +31697,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   };
   lightboxCopyBtn.addEventListener('click', () => {
     if (ownerIsUnlisted(files[current])) { ownerAddress(files[current], false, lightboxCopyBtn); return; }   // (an Only me photo is opened by its own address, not a plain link)
-    // A plain link to a private photo only opens for people who already have access, so the owner is asked what they mean.
-    if (ownerState && ownerState.priv[files[current]] && window.GalleryShare) { openPrivateLinkPopup(); return; }
+    // The owner gets a small menu of links to this photo (what is offered depends on what the photo is); everyone else copies the viewer link at once.
+    if (ownerState) { openOwnerLinkMenu(files[current], lightboxCopyBtn); return; }
     copyPhotoLink();
   });
   // Only me folders (the owner only): a photo in one has an address of its own that opens that one photo for anyone who has it. These
@@ -32083,27 +32211,75 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   };
   window.__infoHide = function () { infoSet(false); };
   window.__infoClose = function () { infoSet(false); if (infoBtn) infoBtn.hidden = true; };
-<?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
-  let linkPop = null;
+<?php if (is_admin_browser()): ?>
+  // The owner's menu of links to a photo (opened by the link button on a tile and by the viewer's link button): what to copy depends on what the photo is.
+  //  Public or Unlisted: the viewer link (the photo in the gallery), the picture link (the image itself, viewing size) and, only where a stranger could download it,
+  //  the original's link. Private: Share just this photo (a share link), and the viewer link, which only people who already have access can open. An Only me photo has
+  //  its own address and its own buttons, so it never gets this menu.
+  let linkPop = null, linkPopFrom = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }
-  function linkPopKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLinkPopup(); } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') closeLinkPopup(); }
-  function linkPopAway(e) { if (linkPop && !linkPop.contains(e.target) && e.target !== lightboxCopyBtn && !lightboxCopyBtn.contains(e.target)) closeLinkPopup(); }
-  function openPrivateLinkPopup() {
-    if (linkPop) { closeLinkPopup(); return; }
-    const file = files[current];
-    linkPop = document.createElement('div'); linkPop.className = 'lb-sharepop'; linkPop.setAttribute('role', 'dialog'); linkPop.setAttribute('aria-label', 'This photo is private');
-    linkPop.innerHTML = '<div class="lsp-h"><?= ui_icon('lock') ?> This photo is private</div><p>A plain link only opens for people who already have access. To let someone see just this photo, make a share link for it.</p>'
-      + '<div class="lsp-btns"><button type="button" class="lsp-share"><?= ui_icon('share') ?> Share just this photo&hellip;</button><button type="button" class="lsp-copy"><?= ui_icon('copy') ?> Copy link</button></div>'
-      + '<p class="lsp-fine">Share links are managed in the Shares tab.</p>';
+  function linkPopKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const f = linkPopFrom; closeLinkPopup(); if (f && f.focus) { try { f.focus({ preventScroll: true }); } catch (x) {} } } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') closeLinkPopup(); }
+  function linkPopAway(e) { if (linkPop && !linkPop.contains(e.target) && !(linkPopFrom && linkPopFrom.contains && linkPopFrom.contains(e.target))) closeLinkPopup(); }   // (a press anywhere else: the photo, the page, another button, the empty space)
+  function ownerLinkRows(file) {
+    const isVideo = /\.(mov|mp4)$/i.test(file), rows = [];
+    const priv = !!(ownerState && ownerState.priv && ownerState.priv[file]);
+    <?php if (ENABLE_SHARE_LINKS): ?>if (priv && window.GalleryShare) rows.push({ kind: 'share', icon: 'share', name: 'Share just this photo\u2026', hint: 'a share link you can end, with a date and a log' });<?php endif; ?>
+
+    rows.push({ kind: 'page', icon: 'link', name: 'Viewer link', hint: priv ? 'opens it in the gallery, for people who already have access' : 'opens the photo in the gallery' });
+    if (!priv) {
+      rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, at viewing size' });
+      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the full file (visitors may download it here)' });
+    }
+    return rows;
+  }
+  function ownerLinkUrl(file, kind) {
+    const root = new URL(galleryRootHref, window.location.href), base = root.origin + root.pathname, slash = file.lastIndexOf('/');
+    if (kind === 'picture') return base + (/\.(mov|mp4)$/i.test(file) ? '?video=' : '?img=') + encodeURIComponent(file) + (/\.(mov|mp4)$/i.test(file) ? '' : '&size=full');
+    if (kind === 'original') return base + '?original=' + encodeURIComponent(file);
+    return base + (slash > 0 ? '?folder=' + encodeURIComponent(file.slice(0, slash)) + '&photo=' : '?photo=') + encodeURIComponent(file);
+  }
+  function openOwnerLinkMenu(file, anchor) {
+    if (linkPop) { const same = linkPopFrom === anchor; closeLinkPopup(); if (same) return; }
+    const rows = ownerLinkRows(file), icons = { link: '<?= ui_icon('link') ?>', gallery: '<?= ui_icon('gallery') ?>', video: '<?= ui_icon('video') ?>', download: '<?= ui_icon('download') ?>', share: '<?= ui_icon('share') ?>' };
+    linkPop = document.createElement('div'); linkPopFrom = anchor;
+    linkPop.className = 'lb-sharepop lm-menu'; linkPop.setAttribute('role', 'menu'); linkPop.setAttribute('aria-label', 'Links to this photo');
+    rows.forEach((r) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'lm-row'; b.setAttribute('role', 'menuitem'); b.setAttribute('data-kind', r.kind);
+      b.innerHTML = icons[r.icon] + '<span class="lm-tx"><strong></strong><small></small></span>';
+      b.querySelector('strong').textContent = r.name; b.querySelector('small').textContent = r.hint;
+      b.addEventListener('click', () => {
+        closeLinkPopup();
+        if (r.kind === 'share') { window.GalleryShare.quick({ kind: 'photos', files: [file], allPrivate: true, anyPrivate: true }); return; }
+        copyToClipboard(ownerLinkUrl(file, r.kind)).then(() => { if (anchor && anchor.isConnected !== false) flashCopied(anchor); });
+      });
+      linkPop.appendChild(b);
+    });
     document.body.appendChild(linkPop);
-    linkPop.querySelector('.lsp-share').addEventListener('click', () => { closeLinkPopup(); window.GalleryShare.quick({ kind: 'photos', files: [file], allPrivate: true, anyPrivate: true }); });
-    linkPop.querySelector('.lsp-copy').addEventListener('click', () => { closeLinkPopup(); copyPhotoLink(); });
+    // Beside the button that was pressed, with a small pointer at it: below it when there is room, above it when not, always kept on the screen.
+    const r = anchor.getBoundingClientRect(), w = linkPop.offsetWidth, h = linkPop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight, gap = 9;
+    const below = r.bottom + gap + h <= vh - 24 || r.top - gap - h < 8;   // (below when there is comfortable room; otherwise above, over the photo if need be)
+    const cx = r.left + r.width / 2, left = Math.max(12, Math.min(cx - w / 2, vw - w - 12));
+    linkPop.classList.add(below ? 'lm-below' : 'lm-above');
+    linkPop.style.right = 'auto'; linkPop.style.left = left + 'px';
+    linkPop.style.top = Math.max(8, below ? r.bottom + gap : r.top - gap - h) + 'px';
+    linkPop.style.setProperty('--lm-x', Math.max(18, Math.min(cx - left, w - 18)) + 'px');   // (the pointer, over the middle of the button)
+    const first = linkPop.querySelector('.lm-row'); if (first) { try { first.focus({ preventScroll: true }); } catch (x) {} }
     document.addEventListener('keydown', linkPopKey, true); document.addEventListener('pointerdown', linkPopAway, true);
   }
-  // (moving to another photo, or closing the viewer, closes the question)
+  // (moving to another photo, or closing the viewer, closes the menu)
   document.addEventListener('click', (e) => { if (linkPop && e.target.closest && e.target.closest('.lightbox .close, .lightbox .nav, .lightbox-close-row')) closeLinkPopup(); }, true);
+  // It sits by the button it came from, so it goes when the page moves or changes size.
+  window.addEventListener('scroll', () => { if (linkPop) closeLinkPopup(); }, true);
+  window.addEventListener('resize', () => { if (linkPop) closeLinkPopup(); });
+  // The link button on a tile (the card itself opens the viewer, so the button keeps the press to itself).
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest ? e.target.closest('.link-toggle') : null;
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    openOwnerLinkMenu(b.getAttribute('data-file'), b);
+  }, true);
 <?php else: ?>
-  function openPrivateLinkPopup() { copyPhotoLink(); }
+  function openOwnerLinkMenu() {}
 <?php endif; ?>
 
   // The "this link expires on ..." line for someone using a share link: the time in their own zone, amber in the last day, and a dismissal kept for as long as the end time and that state stay the same.

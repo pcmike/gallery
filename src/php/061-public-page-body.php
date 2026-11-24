@@ -431,9 +431,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <?php endif; ?>
 <?= $lockForm ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) !== 'private' && folder_is_quiet($dir, $currentFolderPath)): ?>
-  <div class="folder-priv-banner fpb-note fpb-quiet" id="folder-quiet-note" role="note">
+  <div class="folder-priv-banner fpb-quiet" id="folder-quiet-note" role="button" tabindex="0" title="Show this folder to everyone" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('link') ?>
-    <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong></div>
+    <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong>
+      <em class="fpb-hint">Show it to everyone&hellip;</em></div>
   </div>
 <?php endif; ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
@@ -461,6 +462,16 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
       <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
       <div class="fp-btns"><button type="button" id="fp-cancel">Cancel</button><button type="button" class="primary" id="fp-ok">Make public</button></div>
+    </div>
+  </div>
+<?php endif; ?>
+<?php if (is_admin_browser() && AUTO_GROUP_BY_FOLDER): ?>
+  <div class="fp-modal" id="fq-modal" role="dialog" aria-modal="true" aria-labelledby="fq-modal-title" hidden>
+    <div class="fp-modal-card">
+      <h3 id="fq-modal-title">Show this folder to everyone?</h3>
+      <p class="fp-hint" id="fq-folder" style="margin:0 0 8px" hidden></p>
+      <p class="fp-hint">It will appear on the gallery's page, among the folders, on the map and in the counts, for every visitor. Not right? Cancel and leave it Unlisted.</p>
+      <div class="fp-btns"><button type="button" id="fq-cancel">Cancel</button><button type="button" class="primary" id="fq-ok">Show it</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -651,9 +662,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
   const ownerState = <?php
       if (is_admin_browser()) {
-          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; }   // (the address itself when it is known, so Copy needs no round trip)
-          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain

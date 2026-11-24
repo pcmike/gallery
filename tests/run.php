@@ -1542,7 +1542,7 @@ check('[owner lock] ...and back to public', in_array('a-early.jpg', $soOrder(), 
 // The owner's star on each tile and the two buttons in the viewer: one tap to make a photo its folder's cover.
 check('[owner cover] the owner gets a star on every tile, none gold while no cover is chosen', preg_match_all('#<button type="button" class="cover-toggle" data-file="#', $soOwnerPage) === 6 && !str_contains($soOwnerPage, 'cover-toggle is-cover'));
 check('[owner cover] the viewer has a cover button and a private button for the owner, left of the zoom button', preg_match('#id="lightbox-cover"[^>]*>.*?id="lightbox-private"[^>]*>.*?id="lightbox-zoom"#s', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'const ownerState = {'));
-check('[owner cover] hovering either overlay button lights it (full strength, a ring, a colour of its own), and pressing it sinks it', str_contains($soOwnerPage, '.priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover {') && str_contains($soOwnerPage, '.priv-toggle:active, .cover-toggle:active, .edit-toggle:active {'));
+check('[owner cover] hovering any of the overlay buttons (the lock, the star, the pencil and the two address buttons) lights it (full strength, a ring, a colour of its own), and pressing it sinks it', str_contains($soOwnerPage, '.priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover, .addr-toggle:hover, .link-toggle:hover {') && str_contains($soOwnerPage, '.priv-toggle:active, .cover-toggle:active, .edit-toggle:active, .addr-toggle:active, .link-toggle:active {'));
 check('[badges] the caption, location and link badges on a tile light up under the pointer like the owner\'s buttons, and sink when pressed', str_contains($soOwnerPage, '.item-badge:hover {') && str_contains($soOwnerPage, '.item-badge:active {'));
 $soVisitorPage = http_get("$baseSo/")[1];
 check('[owner cover] a visitor gets no stars, no viewer buttons and no owner state', !str_contains($soVisitorPage, 'cover-toggle"') && !str_contains($soVisitorPage, 'id="lightbox-cover"') && !str_contains($soVisitorPage, 'id="lightbox-private"') && str_contains($soVisitorPage, 'const ownerState = null;'));
@@ -1550,7 +1550,7 @@ $soCoverReply = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' 
 [, $soOwnerPage2] = http_get("$baseSo/", ["Cookie: $soCookie"]);
 check('[owner cover] pressing a star saves that photo as the folder\'s cover (the same save as the admin\'s), and only it is gold', str_contains($soCoverReply[1] ?? '', '"ok":true') && str_contains($soOwnerPage2, 'class="cover-toggle is-cover" data-file="c-mid.jpg"') && substr_count($soOwnerPage2, 'cover-toggle is-cover') === 1 && str_contains($soOwnerPage2, '"c-mid.jpg":true') && str_contains($soOwnerPage2, '"b-late.jpg":false'));
 // Arrange: the owner places photos next to each other by hand; each placement is a stack that follows its anchor through every sort.
-check('[select] the owner gets the Select button, its bar (with the Arrange part here) and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="select-btn"') && str_contains($soOwnerPage2, 'id="select-bar"') && str_contains($soOwnerPage2, 'data-select="release"') && str_contains($soOwnerPage2, 'class="card owner-card" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="select-btn"') && !str_contains($soVisitorPage, 'id="select-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
+check('[select] the owner gets the Select button, its bar (with the Arrange part here) and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="select-btn"') && str_contains($soOwnerPage2, 'id="select-bar"') && str_contains($soOwnerPage2, 'data-select="release"') && str_contains($soOwnerPage2, 'class="card owner-card has-link" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="select-btn"') && !str_contains($soVisitorPage, 'id="select-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
 check('[select] the Select button replaces Arrange on the strip: no Arrange button any more, and the bar offers Select all, Clear, Make private, Make public and Done', !str_contains($soOwnerPage2, 'id="arrange-btn"') && !str_contains($soOwnerPage2, 'id="arrange-bar"') && preg_match('#data-select="all".*data-select="clear".*data-select="done".*data-select="private".*data-select="public"#s', $soOwnerPage2) === 1);
 // The pencil and the editor in the viewer, for the owner only.
 check('[editor] the owner gets a pencil on every tile and in the viewer, and the editor sheet with its fields, three switches and Prev, Done, Next', preg_match_all('#<button type="button" class="edit-toggle" data-file="#', $soOwnerPage2) === 6 && str_contains($soOwnerPage2, 'id="lightbox-edit"') && str_contains($soOwnerPage2, 'id="lb-editor"') && (function ($page) { $at = -1; foreach (['lbe-caption', 'lbe-web', 'lbe-private', 'lbe-loc', 'lbe-cover', 'lbe-prev', 'lbe-done', 'lbe-next'] as $id) { $p = strpos($page, 'id="' . $id . '"', $at + 1); if ($p === false) return false; $at = $p; } return true; })($soOwnerPage2));   // (in this order; by position, not one long regex: the page has grown past what the regex engine will backtrack through)
@@ -1809,6 +1809,15 @@ $quLf = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') ===
 $quLfOpen = array_values(array_filter($quLinkFolders, fn ($o) => ($o['p'] ?? '') === 'Open'))[0] ?? [];
 check('[unlisted] the share-link form is given the Unlisted folder flagged "q" (not "u", which asks the Only me question), and an ordinary folder neither', ($quLf['q'] ?? null) === true && ($quLf['u'] ?? null) === false && ($quLfOpen['q'] ?? null) === false && ($quLfOpen['u'] ?? null) === false, json_encode($quLf));
 $quSet('Trips/QuietBox', 'public');
+// ---- the owner's Unlisted card badge and the note on the folder's page are buttons that ask (then make the folder Public); a visitor has neither
+$quSet('Trips/QuietBox', 'unlisted');
+$quCards = http_get("$baseQu/?folder=Trips", $quOwn)[1];
+check('[unlisted badge] the owner\'s card for an Unlisted folder carries an amber "Unlisted" button with the folder\'s path (as the red Private one does), and the question it opens is on the page', str_contains($quCards, '<button type="button" class="folder-priv own quiet" data-folder="Trips/QuietBox"') && str_contains($quCards, 'id="fq-modal"') && str_contains($quCards, 'Show this folder to everyone?'));
+$quInner = http_get("$baseQu/?folder=Trips%2FQuietBox", $quOwn)[1];
+check('[unlisted badge] ...the note on the folder\'s own page is a button too (with its folder), saying "Show it to everyone"', str_contains($quInner, 'id="folder-quiet-note" role="button" tabindex="0"') && str_contains($quInner, 'data-folder="Trips/QuietBox"') && str_contains($quInner, 'Show it to everyone'));
+$quStranger = http_get("$baseQu/?folder=Trips", ['User-Agent: Mozilla/5.0 test'])[1] . http_get("$baseQu/?folder=Trips%2FQuietBox", ['User-Agent: Mozilla/5.0 test'])[1];
+check('[unlisted badge] a visitor sees neither the badge, the note nor the question', !str_contains($quStranger, 'folder-priv own quiet') && !str_contains($quStranger, 'folder-quiet-note') && !str_contains($quStranger, 'fq-modal'));
+$quSet('Trips/QuietBox', 'public');
 /* ---- second look at Unlisted folders (an independent review's findings): an Only me photo inside an Unlisted folder, a link's preview picture, a one-photo link,
  * an Unlisted folder inside an Unlisted folder, a page that is out of date, the pickers and counts. Every top folder here is Unlisted (so a preview picture has
  * nowhere else to come from), plus one private folder. */
@@ -1908,7 +1917,6 @@ $q3Tabs = http_get("$baseQ3/?admin#collections", $q3Own)[1];
 check('[unlisted, review] ...and the collections list counts them as "1 Unlisted"', str_contains($q3Tabs, 'cm-pill quiet">2 Unlisted') || str_contains($q3Tabs, 'cm-pill quiet">1 Unlisted'));
 $q3Nested = $q3Make('Nest and the one inside it', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Nest', 'Nest/Inner'])]);
 check('[unlisted, review] a link that names both Nest and the folder inside it brings both (the nearest folder named decides)', $q3Nested && str_contains(http_get("$baseQ3/?folder=Nest%2FInner", array_merge($q3Nested['cookie'] ?? [], $q3Typed), false)[1], 'INNER-SENTINEL'));
-
 /* ---- a folder's settings say what it follows: a folder with no choice as strict as the folders above it follows the strictest of them (the topmost of a level), at any depth ---- */
 echo "== Folder settings: what a folder follows ==\n";
 $fxF4 = new_fixture_dir('follow');
@@ -1955,6 +1963,41 @@ $f4Set('Fam/Brazil', 'public');
 $f4Set('Fam', 'public');
 $f4After = $f4Info('Fam/Brazil');
 check('[follow] opening the folder above up (Fam to Public) ends it: the folder inside is Public again, with nothing greyed', $f4After['follow'] === '' && $f4After['checked'] === 'public' && $f4After['disabled'] === [] && $f4After['noteHidden']);
+/* ---- a folder's own setting can be taken away again (pressing it a second time): the page says so, and what it would go back to following ---- */
+$f4Set('Fam', 'private'); $f4Set('Fam/Brazil/Y2016', 'private'); $f4Set('Chain/Mid', 'unlisted');
+$f4Same = $f4Info('Fam/Brazil/Y2016');
+check('[unset] a folder with its own Private under a private folder says so (own setting as strict as the folder above) and what pressing it again does', $f4Same['follow'] === '' && $f4Same['checked'] === 'private' && preg_match('~data-above="private" data-above-name="Fam"~', $f4Same['page']) === 1 && preg_match('~<p class="hint vis-same" id="vis-same">This folder has its own Private setting, as strict as Fam above it\. Press Private again to follow Fam instead\.</p>~', $f4Same['page']) === 1, json_encode(array_diff_key($f4Same, ['page' => 1])));
+$f4Top = $f4Info('Fam'); $f4OpenKid = $f4Info('Open/Kid');
+check('[unset] a folder with nothing to follow (a top-level private folder, or one under a public folder) says nothing of it: no "above" data, the note stays hidden', preg_match('~data-above=""~', $f4Top['page']) === 1 && preg_match('~<p class="hint vis-same" id="vis-same" hidden>~', $f4Top['page']) === 1 && preg_match('~data-above=""~', $f4OpenKid['page']) === 1 && preg_match('~id="vis-same" hidden~', $f4OpenKid['page']) === 1);
+$f4Loose = $f4Info('Chain/Mid');
+check('[unset] a folder whose own setting is looser than what it follows (Unlisted under Private) offers "Remove it" beside the line that says its own choice takes over', preg_match('~<span class="vf-own">Its own choice, Unlisted, takes over if Chain is opened up\. <button type="button" class="linklike vf-remove">Remove it</button></span>~', $f4Loose['page']) === 1 && preg_match('~id="vis-same" hidden~', $f4Loose['page']) === 1);
+$f4Un = $f4Set('Fam/Brazil/Y2016', 'public'); $f4Info2 = $f4Info('Fam/Brazil/Y2016');
+check('[unset] taking the setting away (the "Public" choice stores nothing) leaves the folder following Fam again, dashed, with nothing of its own stored', ($f4Un['ok'] ?? null) === true && !array_key_exists('restriction', read_data_file("$fxF4/Fam/Brazil/Y2016/.gallery-items.php")) && $f4Info2['follow'] === 'private' && $f4Info2['from'] === 'Fam' && $f4Info2['checked'] === 'private');
+/* ---- the owner's link menu: a round link button on an ordinary photo's tile (not on an Only me photo, which has its own two, and never for a visitor), and what the menu knows about each photo ---- */
+echo "== Owner link menu ==\n";
+$fxMn = new_fixture_dir('linkmenu');
+foreach (['Pub', 'Hush', 'Quiet', 'Mine', 'Dl'] as $mnD) { mkdir("$fxMn/$mnD", 0777, true); make_jpeg("$fxMn/$mnD/p.jpg", 40, 40, 90, 60, 120); }
+file_put_contents("$fxMn/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mn-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxMn/index.php");
+$portMn = find_free_port(); start_server($fxMn, $portMn); $baseMn = "http://127.0.0.1:$portMn";
+[, , $mnH1] = http_post("$baseMn/?admin", ['access_code' => 'mn-admin-pw-1'], [], false);
+$mnOwn = ['Cookie: ' . extract_cookie_header($mnH1)];
+$mnCsrf = (string) extract_csrf_token(http_get("$baseMn/?admin", $mnOwn)[1]);
+$mnAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseMn/?admin$q", $f + ['csrf_token' => $mnCsrf], array_merge($mnOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$mnAdmin(['action' => 'set_folder_visibility', 'level' => 'private'], '&folder=Hush');
+$mnAdmin(['action' => 'set_folder_visibility', 'level' => 'unlisted'], '&folder=Quiet');
+$mnAdmin(['action' => 'set_folder_visibility', 'level' => 'me'], '&folder=Mine');
+$mnDl = $mnAdmin(['action' => 'toggle_folder_downloads', 'dl' => '1'], '&folder=Dl');
+$mnPage = fn (string $folder, array $hdr = null) => http_get("$baseMn/?folder=" . rawurlencode($folder), $hdr ?? $mnOwn)[1];
+$mnState = function (string $page) { return preg_match('~const ownerState = (\{.*?\});\n~s', $page, $m) ? json_decode($m[1], true) : null; };
+check('[link menu] the fixture turns downloads on for Dl only', ($mnDl['ok'] ?? null) === true, json_encode($mnDl));
+$mnPub = $mnPage('Pub'); $mnHush = $mnPage('Hush'); $mnQuiet = $mnPage('Quiet'); $mnMine = $mnPage('Mine'); $mnDlPage = $mnPage('Dl');
+check('[link menu] an ordinary photo\'s tile (Public, Unlisted or Private) has a link button with its file, and the menu\'s script is on the page', str_contains($mnPub, 'class="link-toggle" data-file="Pub/p.jpg"') && str_contains($mnQuiet, 'class="link-toggle" data-file="Quiet/p.jpg"') && str_contains($mnHush, 'class="link-toggle" data-file="Hush/p.jpg"') && str_contains($mnPub, 'function openOwnerLinkMenu(file, anchor)'));
+check('[link menu] ...an Only me photo has its own two address buttons and no link button (it never gets the menu)', !str_contains($mnMine, 'class="link-toggle"') && substr_count($mnMine, 'addr-toggle addr-new') === 1 && substr_count($mnMine, 'addr-toggle addr-cur') === 1);
+$mnStranger = http_get("$baseMn/?folder=Pub", ['User-Agent: Mozilla/5.0 test'])[1] . http_get("$baseMn/?folder=Quiet", ['User-Agent: Mozilla/5.0 test'])[1];
+check('[link menu] a visitor gets no link button, no menu and none of its words', !str_contains($mnStranger, 'class="link-toggle"') && !str_contains($mnStranger, 'function openOwnerLinkMenu(file') && !str_contains($mnStranger, 'Viewer link') && !str_contains($mnStranger, 'Picture link'));
+$mnS1 = $mnState($mnPub); $mnS2 = $mnState($mnDlPage); $mnS3 = $mnState($mnHush); $mnS4 = $mnState($mnQuiet);
+check('[link menu] the page tells the menu whether a stranger could download each original: not in Pub, Quiet or Hush, yes in Dl (where downloads are on)', ($mnS1['dl']['Pub/p.jpg'] ?? null) === false && ($mnS4['dl']['Quiet/p.jpg'] ?? null) === false && ($mnS3['dl']['Hush/p.jpg'] ?? null) === false && ($mnS2['dl']['Dl/p.jpg'] ?? null) === true, json_encode([$mnS1['dl'] ?? null, $mnS2['dl'] ?? null]));
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
@@ -2422,7 +2465,7 @@ $portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.
 [, $vmAdmin] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
 [, , $vmAdminHd] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
 [, $vmOwnerPage] = http_get("$baseVm/", ['Cookie: ' . extract_cookie_header($vmAdminHd)]);
-check('[video mark] the admin page has no thumbnail grid or per-photo forms any more; a video on the owner\'s gallery page is a video tile (play mark, length) with its pencil beside the length', !str_contains($vmAdmin, 'class="thumb-grid"') && !str_contains($vmAdmin, 'class="item-editor"') && preg_match('#class="card owner-card vtile"[^>]*data-file="clip\.mp4"|class="card owner-card vtile"[^>]*data-strip#', $vmOwnerPage) === 1 && str_contains($vmOwnerPage, 'class="edit-toggle" data-file="clip.mp4"') && str_contains($vmOwnerPage, '.owner-card .video-duration { left: 38px; }'));
+check('[video mark] the admin page has no thumbnail grid or per-photo forms any more; a video on the owner\'s gallery page is a video tile (play mark, length) with its pencil beside the length', !str_contains($vmAdmin, 'class="thumb-grid"') && !str_contains($vmAdmin, 'class="item-editor"') && preg_match('#class="card owner-card has-link vtile"[^>]*data-file="clip\.mp4"|class="card owner-card has-link vtile"[^>]*data-strip#', $vmOwnerPage) === 1 && str_contains($vmOwnerPage, 'class="edit-toggle" data-file="clip.mp4"') && str_contains($vmOwnerPage, '.owner-card .video-duration { left: 38px; }'));
 $vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
 check('[wording] with videos switched on the strip\'s button and bar say "media" (Select media, Tap media to select); without them "photos"', str_contains($vmOwnerPage, 'title="Select media"') && str_contains($vmOwnerPage, 'Tap media to select') && !str_contains($vmAdmin, 'data-tab="photos"') && str_contains($vmAdmin, 'data-tab="settings"'));
 check('[health] Settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . (preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $verM) ? $verM[1] : '?')) && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
@@ -7238,7 +7281,7 @@ check('[share kit] the owner\'s gallery pages and the admin page carry the share
 check('[share this folder] a private folder\'s page has a Share button in the icon strip for the owner, and a public folder\'s page does not', str_contains($shRome, 'class="map-combo-btn page-share" data-gs-folder="Rome"') && !str_contains($shOpen, 'page-share" data-gs-folder'));
 check('[share this folder] on the front page, a private folder\'s card has its link icon ask what to share (owner), while a public folder\'s keeps the plain copy link', preg_match('/folder-permalink-copy"[^>]*data-gs-folder="Rome"/', $shRoot) === 1 && !str_contains($shRoot, 'data-gs-folder="Open"') && preg_match('/folder-permalink-copy" href="[^"]*Open[^"]*" title="Copy link"/', $shRoot) === 1);
 check('[share this folder] the Private tab offers Share… on each private folder (and none on the front page row)', str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder="Rome" data-gs-label=') && str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder="Pisa"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder=""'));
-check('[share photos] the owner\'s Select bar has a Share… button, and the viewer\'s link button asks about a private photo; nobody else gets either', str_contains($shRoot, 'data-select="share"') && str_contains($shRoot, 'This photo is private') && !str_contains(http_get("$baseS/")[1], 'data-select="share"') && !str_contains(http_get("$baseS/")[1], 'This photo is private') && !str_contains($shHolderPage, 'This photo is private'));
+check('[share photos] the owner\'s Select bar has a Share… button, and the owner\'s link menu offers Share just this photo for a private photo; nobody else gets either', str_contains($shRoot, 'data-select="share"') && str_contains($shRoot, "kind: 'share'") && str_contains($shRoot, 'Viewer link') && !str_contains(http_get("$baseS/")[1], 'data-select="share"') && !str_contains(http_get("$baseS/")[1], 'Viewer link') && !str_contains(http_get("$baseS/")[1], 'function openOwnerLinkMenu(file') && !str_contains($shHolderPage, 'Viewer link') && !str_contains($shHolderPage, 'function openOwnerLinkMenu(file'));
 
 // the photo picker's list
 $shPick = http_get("$baseS/?admin&linkphotos=Rome", $shOwner)[1]; $shPickRoot = http_get("$baseS/?admin&linkphotos=", $shOwner)[1];
@@ -7316,8 +7359,9 @@ $pvLogoutForm = []; foreach (html_post_forms(http_get("$baseS/?admin", ["Cookie:
 check('[sign-out] the admin\'s Log out with a preview open ends the preview too: no preview cookie is left, and the link\'s private view is gone (the picture is refused as for a stranger)', $pvLogoutForm !== [] && !str_contains($pvLeftB, 'gallery_preview_') && !$pvAdminOpen($pvLeftB) && http_get("$baseS/?img=Rome%2Fr1.jpg&size=thumb", ["Cookie: $pvLeftB"])[0] === $pvStranger, $pvLeftB);
 // with share links switched off none of the pieces appear
 file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slshare-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => false, 'TRACK_VIEWS' => true]));
-$shOffPage = http_get("$baseS/?folder=Rome", $shOwner)[1];
-check('[share kit] with share links switched off the owner gets none of the pieces (no kit, no Share buttons, no popup question)', !str_contains($shOffPage, '__shareCfg') && !str_contains($shOffPage, 'page-share" data-gs-folder') && !str_contains($shOffPage, 'data-select="share"') && !str_contains($shOffPage, 'This photo is private'));
+[, , $shOffH] = http_post("$baseS/?admin", ['access_code' => 'slshare-admin-1'], [], false); $shOffOwner = ['Cookie: ' . extract_cookie_header($shOffH)];   // (rewriting the settings ended the owner's session: sign in again, or this is a visitor's page and proves nothing)
+$shOffPage = http_get("$baseS/?folder=Rome", $shOffOwner)[1];
+check('[share kit] with share links switched off the owner gets none of the pieces (no kit, no Share buttons, no Share just this photo row in the link menu)', !str_contains($shOffPage, '__shareCfg') && !str_contains($shOffPage, 'page-share" data-gs-folder') && !str_contains($shOffPage, 'data-select="share"') && !str_contains($shOffPage, "kind: 'share'") && str_contains($shOffPage, 'Viewer link'));
 
 echo "== share links: photo locations as a link holder sees them ==\n";
 

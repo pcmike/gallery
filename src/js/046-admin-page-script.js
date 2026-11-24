@@ -1,3 +1,14 @@
+  // Backspace closes an open dialog the way Escape does, for a keyboard that has no Escape key. Never while typing in a field (there it deletes a letter). It asks the
+  // dialog's own Escape to run, so each one closes as it always does (a question is cancelled, nothing is changed).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+    var t = e.target;
+    if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
+    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
+    if (!open.length) return;
+    e.preventDefault(); e.stopPropagation();
+    open[open.length - 1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+  }, true);
   // ---- When the window comes back, what is shown may be out of date (a visitor came, a lockout happened, another browser changed something). Parts of the page
   // register here. Each is refreshed when the window becomes visible or gets focus again, and when its tab is opened, at most once every 15 seconds (api.min), and never
   // while the person is in the middle of something (a menu or dialog open): it waits and goes when that ends. A part keeps its own state across a refresh.
@@ -1948,8 +1959,10 @@
     // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
     var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
     var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
-    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null;
+    var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null, sameNote = wrap.querySelector('.vis-same');
+    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
     function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
+    function canUnset(l) { return l !== 'public' && !!aboveLevel && RANK[aboveLevel] >= RANK[l]; }   // (a setting of its own, with a folder above at least as strict to go back to following)
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function say(text, kind) {
@@ -1973,7 +1986,14 @@
         if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
       });
       if (followNote) followNote.hidden = !following;
-      if (followOwn) { var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = shows ? 'Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up.' : ''; }
+      if (followOwn) {
+        var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = '';
+        if (shows) {
+          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up. '));
+          var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
+        }
+      }
+      if (sameNote) { var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l]; sameNote.hidden = !same; sameNote.textContent = same ? 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.' : ''; }
       if (desc) desc.textContent = descs[e] || '';
       var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
@@ -2008,10 +2028,11 @@
       document.getElementById('pm-ok').textContent = PLAIN[kind][2];
       modal.hidden = false; document.getElementById('pm-cancel').focus();
     }
-    function questionFor(from, to) {
-      if ((from === 'private' || from === 'me') && (to === 'public' || to === 'unlisted')) return 'open';
-      if (from === 'me' && to === 'private') return 'password';
-      if (from === 'unlisted' && to === 'public') return 'listed';
+    function questionFor(from, to) {   // (about what visitors get, so about the level each choice comes to once the folders above are counted)
+      var a = effective(from), b = effective(to);
+      if ((a === 'private' || a === 'me') && (b === 'public' || b === 'unlisted')) return 'open';
+      if (a === 'me' && b === 'private') return 'password';
+      if (a === 'unlisted' && b === 'public') return 'listed';
       return null;
     }
     function ask(to) {
@@ -2033,11 +2054,18 @@
     radios.forEach(function (r) {
       r.addEventListener('click', function () {   // (a click, not a change: a folder that follows a stricter one has that button drawn as chosen, and pressing it is a choice of its own)
         var to = r.value;
-        if (r.disabled || to === level) return;
+        if (r.disabled) return;
+        if (to === level) { if (!canUnset(level)) return; to = 'public'; }   // (pressing a folder's own setting again takes it away, when there is a folder above to follow instead)
         var kind = questionFor(level, to);
         if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
         send(to, function (ok) { if (!ok) paint(level, null); });
       });
+    });
+    wrap.addEventListener('click', function (e) {   // "Remove it": a folder's own setting that is looser than what it follows
+      if (!e.target.closest || !e.target.closest('.vf-remove')) return;
+      var to = 'public', kind = questionFor(level, to);
+      if (kind && modal) { if (kind === 'open') ask(to); else askPlain(to, kind); return; }
+      send(to, function (ok) { if (!ok) paint(level, null); });
     });
     if (modal) {
       document.getElementById('pm-cancel').addEventListener('click', closeModal);

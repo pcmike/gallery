@@ -109,7 +109,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     $vt = video_tile_parts($file, $videoDuration);
     // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
-    $ownerLock = ''; $hasAddr = false;
+    $ownerLock = ''; $hasAddr = false; $hasLink = false;
     if (is_admin_browser()) {
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
@@ -136,6 +136,10 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
             $hasAddr = true;
             $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New link: the old one stops working" aria-label="New link: the old one stops working">' . ui_icon('linkoff') . '</button>'
                 . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s link" aria-label="Copy this photo\'s link">' . ui_icon('link') . '</button>';
+        } else {
+            // Any other photo: a link button beside the pencil that opens the owner's small menu of links to it (see openOwnerLinkMenu).
+            $hasLink = true;
+            $ownerLock .= '<button type="button" class="link-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy a link to this photo" aria-label="Copy a link to this photo" aria-haspopup="true">' . ui_icon('link') . '</button>';
         }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
@@ -146,7 +150,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // buttons, never their parent: Tab stops on it first, Enter or Space presses it, and the press reaches the tile's own click handler, which opens the
     // viewer (or, while the owner is choosing photos, picks the tile). A mouse or a finger never touches it (it takes no pointer), so they act as before.
     $openBtn = '<button type="button" class="tile-open" aria-label="' . htmlspecialchars('Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . $altText, ENT_QUOTES, 'UTF-8') . '"></button>';
-    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($hasLink ? ' has-link' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($altText, ENT_QUOTES, 'UTF-8') . '">' . $openBtn . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -337,7 +341,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Unlisted (public, left out of every list): only the owner is told on the card, in amber, dashed when it is a folder above that makes it so.
     $quietPill = '';
     if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && $priv['state'] === '') {
-        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<span class="folder-priv own quiet" title="Unlisted: anyone with the address can open this folder, but it is left out of every list">Unlisted</span>';
+        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
         elseif (quiet_root_depth($dir, $folderPath . '/x') > 0) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted because a folder above it is">Unlisted</span>';
     }
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' || $quietPill !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';

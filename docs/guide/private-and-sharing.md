@@ -38,6 +38,10 @@ Each folder's settings have one choice, four buttons in a row, with a sentence u
 
 Moving from Private or Only me to Public or Unlisted asks first, with the counts, as opening a private folder always did. Two other moves ask once, in plain words and with no counts: **Only me to Private** (people with the private-view password would be able to open it) and **Unlisted to Public** (it would appear in every list). Everything that only hides a folder (to Unlisted, Private or Only me) just happens. A page that is out of date changes nothing: the choice is refused and the buttons show where the folder stands.
 
+**A folder's own setting can be taken away.** A folder with a setting of its own that has a folder above it at least as strict (its own Private under a private folder) says so, and pressing the chosen button again takes its own setting away, so it goes back to following the folder above. Where its own setting is looser than what it follows (Unlisted under Private), the line that says so has a **Remove it** link. The questions follow what visitors actually get: taking away a setting that changes nothing for them asks nothing.
+
+**The badges on the cards.** The red **Private** badge on a folder's card, and the red banner on a private folder's page, ask whether to make the folder public (with the counts). The amber **Unlisted** badge and the note on an Unlisted folder's page work the same way and ask *Show this folder to everyone?* (it would appear in every list). **Only me** is a label only: opening it up is done in the folder's settings.
+
 **A folder inside a stricter folder follows it.** A folder can't be more open than the one it sits in (a private folder hides everything beneath it, at any depth, and the folders inside an Unlisted folder follow it), so a folder with no choice of its own as strict as that is not really Public. Its settings say so: the button of what it follows is drawn as chosen, with a dashed edge, the buttons looser than that are greyed out, and a line says *Private because the folder above it, family, is Private. Change it there; this folder follows it.* The strictest folder above decides, and of several at that level the topmost, the one you actually set. If the folder has a choice of its own that is looser (Unlisted under Private), the line adds that it takes over when the folder above is opened up. Pressing a button as strict as the one followed (Private, or Only me) stores it on this folder, so it stays that way if the folder above is opened later.
 
 **The lock beside a folder** (in the admin's folder tree and the phone Menu while the gallery is shown Flat) only shows who can see it: open for Public, open and amber for Unlisted, closed for Private and Only me (dimmed for a folder that is so because one above it is). Pressing it opens that folder's settings, where the choice is made; it never changes a folder by itself. **Gallery of its own** stays a switch under the buttons (see [A gallery of its own](#a-gallery-of-its-own)): off to start with, except that it is **on by itself for an Unlisted folder** until you switch it off (that choice is kept), and greyed out for Only me, where it would change nothing.
@@ -64,6 +68,16 @@ A folder can be **Only me**: for the folder you keep for yourself and share from
 
 Like a private folder, it is only as closed as the server rule that makes a bare photo address answer 403 (the Health check says whether it is in place).
 
+### Your menu of links to a photo
+
+For you only. The **link button** on a photo's tile (beside the pencil) and the link button in the viewer open a small menu, with a pointer at the button, on whichever side of it has room (it can open over the photo). What it offers depends on the photo:
+
+- **Public or Unlisted:** **Viewer link** (the photo in the gallery), **Picture link** (the image itself, at viewing size; **Video link** for a video) and, only in a folder where visitors may download originals, **Original link**.
+- **Private:** **Share just this photo…** (a share link you can end, with a date and a log) and the **Viewer link**, which only people who already have access can open. There is no picture link: a stranger could not open it.
+- **Only me:** no menu. These photos have their own two buttons and their own address (below).
+
+A press anywhere outside the menu, Escape, or Backspace closes it; so does scrolling or changing the window's size.
+
 ### An Only me photo's own link
 
 Each photo in an Only me folder has a link that opens **that one photo** for anyone who has it, and it is short: eight letters and digits, `https://example.com/photos/Ab3x9Qz2`. Where the server's one-word rule is not set up (see *Share links*), the same link is `https://example.com/photos/?Ab3x9Qz2`; **Copy link** checks which one works and copies that. The page is that photo alone: no grid, no other photos, no way into the folder, kept out of search engines, and the link is not passed on to other sites. The page never says what the photo is called or where it lives: the pictures, the video, the downloads' requests, the map pin and the message preview all call the photo by its code, and a link preview shows the gallery's own title (a download you have allowed does keep the file's own name). A wrong code is answered exactly like a link that does not exist. For you, signed in, the link opens the gallery's own page with the photo in the viewer over its folder (closing the viewer leaves you on that folder's grid), not the stripped-down page.
@@ -86,7 +100,7 @@ A share link lets someone see private things for a while, without a password and
 ### Making a link
 Wherever you are looking at something private, you can share it:
 - **A private folder:** the **Share** button in the icon strip of its page, the link icon on its card on the main page, or **Share…** on its row of the *Private folders* list on the Edited tab.
-- **A photo:** the viewer's link button on a private photo asks *Share just this photo…* or *Copy link* (a plain link only opens for people who already have access).
+- **A photo:** the link button in the viewer, or on the photo's tile (beside the pencil), opens [your menu of links to it](#your-menu-of-links-to-a-photo): for a private photo, *Share just this photo…* (a share link) or the *Viewer link* (a plain link only opens for people who already have access).
 - **Several photos:** **Select**, pick them, **Share…**.
 - **Anything, with every option:** **+ New link** in the Shares tab.
 

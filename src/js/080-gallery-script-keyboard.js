@@ -6,6 +6,19 @@
     e.preventDefault();
     b.click();
   });
+  // Backspace does what Escape does, for a keyboard that has no Escape key: it closes the box or menu that is open, or, with none, the viewer. Never while typing in a field
+  // (there it deletes a letter). It asks the dialog's own Escape to run, so each one closes as it always does (a question is cancelled; the viewer's info panel or editor, if
+  // open, goes first, as with Escape).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+    var t = e.target;
+    if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
+    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
+    var target = open.length ? open[open.length - 1] : (lightbox.classList.contains('open') ? lightbox : null);
+    if (!target) return;
+    e.preventDefault(); e.stopPropagation();
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
     // Another box opened over the viewer (the owner's "Share just this photo", the QR code, a question) has the keys, and so does any field:
@@ -153,7 +166,7 @@
   };
   lightboxCopyBtn.addEventListener('click', () => {
     if (ownerIsUnlisted(files[current])) { ownerAddress(files[current], false, lightboxCopyBtn); return; }   // (an Only me photo is opened by its own address, not a plain link)
-    // A plain link to a private photo only opens for people who already have access, so the owner is asked what they mean.
-    if (ownerState && ownerState.priv[files[current]] && window.GalleryShare) { openPrivateLinkPopup(); return; }
+    // The owner gets a small menu of links to this photo (what is offered depends on what the photo is); everyone else copies the viewer link at once.
+    if (ownerState) { openOwnerLinkMenu(files[current], lightboxCopyBtn); return; }
     copyPhotoLink();
   });

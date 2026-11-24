@@ -326,7 +326,7 @@
     const modal = document.getElementById('fp-modal');
     if (!modal) return;
     const $ = function (id) { return document.getElementById(id); }, noun = modal.getAttribute('data-noun') || 'photo';
-    const triggers = [].slice.call(document.querySelectorAll('#folder-priv-banner, button.folder-priv.own'));
+    const triggers = [].slice.call(document.querySelectorAll('#folder-priv-banner, button.folder-priv.own:not(.quiet)'));
     if (!triggers.length) return;
     const many = function (k) { return k + ' ' + noun + (k === 1 ? '' : 's'); };
     const say = function (text) {
@@ -357,6 +357,46 @@
       modal.hidden = true;
       fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
         const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'toggle_folder_restriction');
+        return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      }).then(json).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'not saved');
+        say('This folder is public now'); setTimeout(function () { location.reload(); }, 500);
+      }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); if (from) from.focus(); });
+    });
+  })();
+
+  // The note on an Unlisted folder's page, and the amber Unlisted pill on its card: pressing either asks whether to show the folder to everyone (make it Public, which
+  // puts it in every list), and only a yes does. The same step as the folder settings' Unlisted-to-Public question.
+  (function () {
+    const modal = document.getElementById('fq-modal');
+    if (!modal) return;
+    const $ = function (id) { return document.getElementById(id); };
+    const triggers = [].slice.call(document.querySelectorAll('#folder-quiet-note, button.folder-priv.own.quiet'));
+    if (!triggers.length) return;
+    const say = function (text) {
+      const t = $('owner-toast'); if (!t) return;
+      t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
+    };
+    const json = function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
+    let folder = '', from = null;
+    const closeIt = function () { modal.hidden = true; if (from) from.focus(); };
+    const ask = function (el) {
+      from = el; folder = el.getAttribute('data-folder') || '';
+      const card = el.closest('.folder-cover'), label = card && card.querySelector('.folder-cover-label'), name = $('fq-folder');
+      if (name) { name.textContent = label ? label.textContent : ''; name.hidden = !label; }
+      modal.hidden = false; $('fq-cancel').focus();
+    };
+    triggers.forEach(function (el) {
+      el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); ask(el); });
+      el.addEventListener('keydown', function (e) { if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); ask(el); } });
+    });
+    $('fq-cancel').addEventListener('click', closeIt);
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeIt(); });
+    modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIt(); } });
+    $('fq-ok').addEventListener('click', function () {
+      modal.hidden = true;
+      fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
+        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted');
         return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       }).then(json).then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');
