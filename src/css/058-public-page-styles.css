@@ -631,3 +631,4 @@
   .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.18); border-color: rgba(245,166,35,0.75); }
   .folder-priv-banner.fpb-quiet:active { background: rgba(245,166,35,0.24); }
   .folder-priv-banner.fpb-quiet > .ico { color: #f5a623; }
+  .folder-priv-banner.fpb-note.fpb-quiet:hover, .folder-priv-banner.fpb-note.fpb-quiet:active { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); transform: none; }   /* (the plain note: nothing to press) */

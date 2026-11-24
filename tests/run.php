@@ -1974,6 +1974,23 @@ check('[unset] a folder whose own setting is looser than what it follows (Unlist
 check('[unset] the page tells its script where the strictest folder above is (its path, for the link), as well as its level and name', preg_match('~data-above="private" data-above-name="Fam" data-above-path="Fam"~', $f4Same['page']) === 1);
 $f4Un = $f4Set('Fam/Brazil/Y2016', 'public'); $f4Info2 = $f4Info('Fam/Brazil/Y2016');
 check('[unset] taking the setting away (the "Public" choice stores nothing) leaves the folder following Fam again, dashed, with nothing of its own stored', ($f4Un['ok'] ?? null) === true && !array_key_exists('restriction', read_data_file("$fxF4/Fam/Brazil/Y2016/.gallery-items.php")) && $f4Info2['follow'] === 'private' && $f4Info2['from'] === 'Fam' && $f4Info2['checked'] === 'private');
+/* ---- the independent review's second round: a stale page about the folders ABOVE, the nested Unlisted mark, and what the badge and note do ---- */
+$f4Set('Fam', 'private'); $f4Set('Fam/Brazil/Y2016', 'private');
+$f4Stale = json_decode(http_post("$baseF4/?admin&folder=" . rawurlencode('Fam/Brazil/Y2016'), ['action' => 'set_folder_visibility', 'level' => 'public', 'was' => 'private', 'above' => '', 'csrf_token' => $f4Csrf], array_merge($f4Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+check('[review 2] a choice made on a page that believes there is nothing above (the folder above has changed since) is refused, whatever the folder\'s own level, and nothing is changed', ($f4Stale['ok'] ?? null) === false && ($f4Stale['stale'] ?? null) === true && (read_data_file("$fxF4/Fam/Brazil/Y2016/.gallery-items.php")['restriction'] ?? null) === 'private', json_encode($f4Stale));
+$f4Fresh = json_decode(http_post("$baseF4/?admin&folder=" . rawurlencode('Fam/Brazil/Y2016'), ['action' => 'set_folder_visibility', 'level' => 'public', 'was' => 'private', 'above' => 'private', 'csrf_token' => $f4Csrf], array_merge($f4Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+check('[review 2] ...and the same choice from a page that knows what is above (the strictest folder above is Private) goes through', ($f4Fresh['ok'] ?? null) === true && !array_key_exists('restriction', read_data_file("$fxF4/Fam/Brazil/Y2016/.gallery-items.php")));
+$f4Set('Quiet', 'unlisted'); $f4Set('Quiet/Kid', 'unlisted');
+$f4Nest = $f4Info('Quiet/Kid');
+check('[review 2] an Unlisted folder inside an Unlisted one says it is Unlisted in its own right, that it is left off the folder above\'s page too, and that pressing it again would show it there (not "as strict: follow")', $f4Nest['follow'] === '' && preg_match('~data-above="unlisted"~', $f4Nest['page']) === 1 && str_contains($f4Nest['page'], 'This folder is Unlisted in its own right, so it is left off the page of Quiet above it as well.') && !str_contains($f4Nest['page'], 'as strict as Quiet'), json_encode(array_diff_key($f4Nest, ['page' => 1])));
+check('[review 2] the settings\' no-JavaScript form carries what the page believes about the folders above as well as the folder\'s own level', str_contains($f4Nest['page'], '<input type="hidden" name="was" value="unlisted"><input type="hidden" name="above" value="unlisted">'));
+$f4Own2 = ['Cookie: ' . extract_cookie_header($f4H1)];
+$f4Card = http_get("$baseF4/?folder=Quiet", $f4Own2)[1]; $f4NestPage = http_get("$baseF4/?folder=" . rawurlencode('Quiet/Kid'), $f4Own2)[1];
+$f4Set('Quiet/Kid', 'public'); $f4InhPage = http_get("$baseF4/?folder=" . rawurlencode('Quiet/Kid'), $f4Own2)[1]; $f4TopPage = http_get("$baseF4/?folder=Quiet", $f4Own2)[1];
+check('[review 2] the Unlisted badge on a card and the note on the folder\'s page are buttons only where pressing them does what they say: not on a folder that is Unlisted in its own right under an Unlisted one (the card is a plain label, the page a plain note), nor on one that is Unlisted only because a folder above is', !str_contains($f4Card, 'class="folder-priv own quiet"') && str_contains($f4Card, 'folder-priv inh quiet') && str_contains($f4NestPage, 'id="folder-quiet-info"') && !str_contains($f4NestPage, 'id="folder-quiet-note"') && str_contains($f4InhPage, 'id="folder-quiet-info"') && str_contains($f4InhPage, 'Unlisted because a folder above it is') && !str_contains($f4InhPage, 'id="folder-quiet-note"'));
+$f4RootPage = http_get("$baseF4/", $f4Own2)[1];
+check('[review 2] ...while the top Unlisted folder keeps its button, on its card and on its page', str_contains($f4TopPage, 'id="folder-quiet-note" role="button"') && str_contains($f4RootPage, '<button type="button" class="folder-priv own quiet" data-folder="Quiet"'));
+$f4Set('Quiet', 'public');
 /* ---- the owner's link menu: a round link button on an ordinary photo's tile (not on an Only me photo, which has its own two, and never for a visitor), and what the menu knows about each photo ---- */
 echo "== Owner link menu ==\n";
 $fxMn = new_fixture_dir('linkmenu');
@@ -1999,6 +2016,7 @@ $mnStranger = http_get("$baseMn/?folder=Pub", ['User-Agent: Mozilla/5.0 test'])[
 check('[link menu] a visitor gets no link button, no menu and none of its words', !str_contains($mnStranger, 'class="link-toggle"') && !str_contains($mnStranger, 'function openOwnerLinkMenu(file') && !str_contains($mnStranger, 'Viewer link') && !str_contains($mnStranger, 'Picture link'));
 $mnS1 = $mnState($mnPub); $mnS2 = $mnState($mnDlPage); $mnS3 = $mnState($mnHush); $mnS4 = $mnState($mnQuiet);
 check('[link menu] the page tells the menu whether a stranger could download each original: not in Pub, Quiet or Hush, yes in Dl (where downloads are on)', ($mnS1['dl']['Pub/p.jpg'] ?? null) === false && ($mnS4['dl']['Quiet/p.jpg'] ?? null) === false && ($mnS3['dl']['Hush/p.jpg'] ?? null) === false && ($mnS2['dl']['Dl/p.jpg'] ?? null) === true, json_encode([$mnS1['dl'] ?? null, $mnS2['dl'] ?? null]));
+check('[link menu] the menu\'s words say what each link is: the picture link is the image as the viewer shows it, the original is the file as a download; and the page tells the menu whether the gallery is closed', str_contains($mnPub, 'the image itself, as the viewer shows it') && str_contains($mnPub, 'the original file, as a download') && (($mnState($mnPub)['closed'] ?? null) === false));
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
@@ -9403,6 +9421,9 @@ check('[Flat] ...an Unlisted folder\'s is open and amber (class q), an Only me f
 $flLevel('public'); $flUnl = $flLevel('unlisted', 'sub1');
 check('[Flat] ...a folder inside an Unlisted folder shows Unlisted too, dimmed, because the folder above is (and one inside a private folder shows closed and dimmed)', ($flUnl['ok'] ?? null) === true && str_contains($flTree(), 'class="flock q inh" data-lock-path="sub1/deep" data-level="unlisted"') && ($flLevel('private', 'sub1')['ok'] ?? null) === true && str_contains($flTree(), 'class="flock on inh" data-lock-path="sub1/deep" data-level="private"'));
 $flLevel('public', 'sub1');
+$flLevel('me', 'sub1'); $flLevel('private', 'sub1/deep');
+check('[review 2] a private folder inside an Only me folder shows the same level on the lock as its own settings page does: Only me, dimmed (it used to say Private)', str_contains($flTree(), 'class="flock on inh" data-lock-path="sub1/deep" data-level="me"'));
+$flLevel('public', 'sub1/deep'); $flLevel('public', 'sub1');
 $flLevel('private');
 check('[Flat] the lock\'s title says what pressing it does (open the folder\'s settings), and the old one-press action is still there for older pages but nothing in the tree uses it', str_contains($flTree(), "Private: press for this folder's settings") || str_contains($flTree(), 'press for this folder&#039;s settings'));
 

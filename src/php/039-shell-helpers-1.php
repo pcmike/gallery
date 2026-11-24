@@ -42,12 +42,10 @@ function folder_lock_toggles_shown() {
  *  Only me, open when it is public, open and amber when it is Unlisted; dimmed when a folder above it is what makes it so. */
 function folder_lock_button($path, $csrf, $cls = 'flock') {
     $dir = $GLOBALS['dir'];
-    $data = folder_items_memo($dir, $path);
-    $own = folder_visibility_level($data);   // (public, unlisted, private, me: this folder's own setting)
-    $inhPrivate = $own !== 'private' && $own !== 'me' && folder_above_is_private($dir, $path);
-    $inhQuiet = $own === 'public' && !$inhPrivate && folder_is_quiet($dir, $path);
-    $level = $inhPrivate ? 'private' : ($inhQuiet ? 'unlisted' : $own);
-    $inh = $inhPrivate || $inhQuiet;
+    $own = folder_visibility_level(folder_items_memo($dir, $path));   // (public, unlisted, private, me: this folder's own setting)
+    $follow = folder_follow_info($dir, $path);                         // (a stricter folder above: what the folder's settings say it follows, and so what visitors get)
+    $level = $follow !== null ? $follow['level'] : $own;
+    $inh = $follow !== null;
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $on = $level === 'private' || $level === 'me';
     $title = $names[$level] . ($inh ? ' (because a folder above it is)' : '') . ': press for this folder\'s settings, where you change who can see it';

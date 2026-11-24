@@ -1623,7 +1623,7 @@
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
         // An Only me folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
-        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && un[o.p] && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
+        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
           if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
           syncForm(form);
@@ -2006,7 +2006,11 @@
           var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
         }
       }
-      if (sameNote) { var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l]; sameNote.hidden = !same; sameNote.textContent = same ? 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.' : ''; }
+      if (sameNote) {
+        var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l];
+        sameNote.hidden = !same;
+        sameNote.textContent = !same ? '' : (l === 'unlisted' ? 'This folder is Unlisted in its own right, so it is left off the page of ' + aboveName + ' above it as well. Press Unlisted again to take that away (it would then show on that page).' : 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.');
+      }
       if (desc) desc.textContent = descs[e] || '';
       var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
@@ -2014,7 +2018,7 @@
     }
     function send(to, done) {
       var body = new URLSearchParams();
-      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level);   // (the level this page showed: the server refuses a choice made on a stale page)
+      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level); body.set('above', aboveLevel);   // (the level this page showed: the server refuses a choice made on a stale page)
       say('Saving…', 'busy');
       fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
@@ -2032,6 +2036,7 @@
     // putting an Unlisted folder on show (Unlisted to Public). Each asks once, in plain words, with no counts.
     var PLAIN = {
       password: ['Let people with the private-view password open this folder?', 'Everyone you have given the private-view password will be able to open this folder and see what is in it (photos marked private on their own stay private). Not right? Cancel and leave it Only me.', 'Let them in'],
+      inparent: ['Show this folder on the page of the folder above it?', 'It is Unlisted in its own right, so it is left off the page of the folder above it too. Without that mark it will appear there, and come along with a share link that names that folder. Not right? Cancel and leave it as it is.', 'Show it there'],
       listed: ['Show this folder to everyone?', 'It will appear on the gallery\'s page, among the folders, on the map and in the counts, for every visitor. Not right? Cancel and leave it Unlisted.', 'Show it']
     };
     function askPlain(to, kind) {
@@ -2043,6 +2048,7 @@
     }
     function questionFor(from, to) {   // (about what visitors get, so about the level each choice comes to once the folders above are counted)
       var a = effective(from), b = effective(to);
+      if (from === 'unlisted' && aboveLevel === 'unlisted' && to !== 'unlisted' && b === 'unlisted') return 'inparent';   // (an Unlisted folder inside an Unlisted one is left off its parent's page by its own mark: taking it away lists it there)
       if ((a === 'private' || a === 'me') && (b === 'public' || b === 'unlisted')) return 'open';
       if (a === 'me' && b === 'private') return 'password';
       if (a === 'unlisted' && b === 'public') return 'listed';

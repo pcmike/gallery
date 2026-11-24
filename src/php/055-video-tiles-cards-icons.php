@@ -341,7 +341,8 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Unlisted (public, left out of every list): only the owner is told on the card, in amber, dashed when it is a folder above that makes it so.
     $quietPill = '';
     if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && $priv['state'] === '') {
-        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
+        if (folder_quiet_cached($dir, $folderPath) && !quiet_folder_above($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
+        elseif (folder_quiet_cached($dir, $folderPath)) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted in its own right, and because a folder above it is: it is left off that folder\'s page too. Change it in this folder\'s settings">Unlisted</span>';
         elseif (quiet_root_depth($dir, $folderPath . '/x') > 0) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted because a folder above it is">Unlisted</span>';
     }
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' || $quietPill !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';

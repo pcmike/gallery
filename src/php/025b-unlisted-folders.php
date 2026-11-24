@@ -43,6 +43,14 @@ function quiet_root_depth($dir, $file) {
     return $found;
 }
 
+/** Is any folder ABOVE this one (not the folder itself) Unlisted? Then pressing "Show it to everyone" on this folder cannot do what it says: the folder above keeps it unlisted. */
+function quiet_folder_above($dir, $folderPath) {
+    $parts = explode('/', (string) $folderPath); array_pop($parts);
+    $path = '';
+    foreach ($parts as $segment) { $path = $path === '' ? $segment : $path . '/' . $segment; if (folder_quiet_cached($dir, $path)) return true; }
+    return false;
+}
+
 /** The path of the nearest Unlisted folder $file sits in, or '' when it is in none. */
 function quiet_root_path($dir, $file) {
     $depth = quiet_root_depth($dir, $file);

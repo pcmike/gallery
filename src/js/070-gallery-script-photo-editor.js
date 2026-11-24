@@ -396,7 +396,7 @@
     $('fq-ok').addEventListener('click', function () {
       modal.hidden = true;
       fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
-        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted');
+        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted'); body.set('above', '');   // (the button is only drawn where no folder above is stricter)
         return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       }).then(json).then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');

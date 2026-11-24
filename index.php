@@ -9664,6 +9664,14 @@ function quiet_root_depth($dir, $file) {
     return $found;
 }
 
+/** Is any folder ABOVE this one (not the folder itself) Unlisted? Then pressing "Show it to everyone" on this folder cannot do what it says: the folder above keeps it unlisted. */
+function quiet_folder_above($dir, $folderPath) {
+    $parts = explode('/', (string) $folderPath); array_pop($parts);
+    $path = '';
+    foreach ($parts as $segment) { $path = $path === '' ? $segment : $path . '/' . $segment; if (folder_quiet_cached($dir, $path)) return true; }
+    return false;
+}
+
 /** The path of the nearest Unlisted folder $file sits in, or '' when it is in none. */
 function quiet_root_path($dir, $file) {
     $depth = quiet_root_depth($dir, $file);
@@ -11196,6 +11204,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $labels = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
             return ['type' => 'error', 'stale' => true, 'level' => $nowLevel, 'text' => 'This folder was changed since the page was opened: it is ' . $labels[$nowLevel] . ' now. Nothing was changed; choose again.'];
         }
+        // The question the page asked (or did not ask) was worked out from the folders above this one as they were when the page was drawn: if the strictest of them is
+        // not what the page believed, the folder's own level can be right and the answer still wrong (a stale tab could open a folder with no question), so nothing is changed.
+        $aboveClaimed = $_POST['above'] ?? null;
+        if (is_string($aboveClaimed) && in_array($aboveClaimed, ['', 'public', 'unlisted', 'private', 'me'], true)) {
+            $aboveNow = folder_above_info($dir, $adminFolderPath)['level'] ?? '';
+            if ($aboveClaimed !== $aboveNow) return ['type' => 'error', 'stale' => true, 'level' => $nowLevel, 'text' => 'The folders above this one were changed since the page was opened. Nothing was changed: reload the page.'];
+        }
         items_update($adminFolderReal, function (&$data) use ($level) {
             unset($data['restriction'], $data['unlisted'], $data['quiet']);
             if ($level === 'unlisted') { $data['quiet'] = true; }
@@ -12233,9 +12248,9 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
         <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
       <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><span class="vf-text"><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?></span> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up. <button type="button" class="linklike vf-remove">Remove it</button><?php endif; ?></span></p>
-      <p class="hint vis-same" id="vis-same"<?= $sameAbove ? '' : ' hidden' ?>><?php if ($sameAbove): ?>This folder has its own <?= $esc($names[$level]) ?> setting, as strict as <?= $esc($above['label']) ?> above it. Press <?= $esc($names[$level]) ?> again to follow <?= $esc($above['label']) ?> instead.<?php endif; ?></p>
+      <p class="hint vis-same" id="vis-same"<?= $sameAbove ? '' : ' hidden' ?>><?php if ($sameAbove && $level === 'unlisted'): ?>This folder is Unlisted in its own right, so it is left off the page of <?= $esc($above['label']) ?> above it as well. Press Unlisted again to take that away (it would then show on that page).<?php elseif ($sameAbove): ?>This folder has its own <?= $esc($names[$level]) ?> setting, as strict as <?= $esc($above['label']) ?> above it. Press <?= $esc($names[$level]) ?> again to follow <?= $esc($above['label']) ?> instead.<?php endif; ?></p>
       <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$eff]) ?></p>
-      <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
+      <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>"><input type="hidden" name="above" value="<?= $above !== null ? $esc($above['level']) : '' ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
         <select name="level" aria-label="Who can see this folder"><?php foreach ($names as $v => $nm): ?><option value="<?= $esc($v) ?>"<?= $level === $v ? ' selected' : '' ?>><?= $esc($nm) ?></option><?php endforeach; ?></select> <button type="submit">Save</button>
       </form>
     </div>
@@ -19175,12 +19190,10 @@ function folder_lock_toggles_shown() {
  *  Only me, open when it is public, open and amber when it is Unlisted; dimmed when a folder above it is what makes it so. */
 function folder_lock_button($path, $csrf, $cls = 'flock') {
     $dir = $GLOBALS['dir'];
-    $data = folder_items_memo($dir, $path);
-    $own = folder_visibility_level($data);   // (public, unlisted, private, me: this folder's own setting)
-    $inhPrivate = $own !== 'private' && $own !== 'me' && folder_above_is_private($dir, $path);
-    $inhQuiet = $own === 'public' && !$inhPrivate && folder_is_quiet($dir, $path);
-    $level = $inhPrivate ? 'private' : ($inhQuiet ? 'unlisted' : $own);
-    $inh = $inhPrivate || $inhQuiet;
+    $own = folder_visibility_level(folder_items_memo($dir, $path));   // (public, unlisted, private, me: this folder's own setting)
+    $follow = folder_follow_info($dir, $path);                         // (a stricter folder above: what the folder's settings say it follows, and so what visitors get)
+    $level = $follow !== null ? $follow['level'] : $own;
+    $inh = $follow !== null;
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $on = $level === 'private' || $level === 'me';
     $title = $names[$level] . ($inh ? ' (because a folder above it is)' : '') . ': press for this folder\'s settings, where you change who can see it';
@@ -22931,7 +22944,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           st.scope = tops; st.except = left;
         } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
         // An Only me folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
-        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && un[o.p] && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
+        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
           if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
           syncForm(form);
@@ -23314,7 +23327,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
         }
       }
-      if (sameNote) { var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l]; sameNote.hidden = !same; sameNote.textContent = same ? 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.' : ''; }
+      if (sameNote) {
+        var same = !following && canUnset(l) && RANK[aboveLevel] === RANK[l];
+        sameNote.hidden = !same;
+        sameNote.textContent = !same ? '' : (l === 'unlisted' ? 'This folder is Unlisted in its own right, so it is left off the page of ' + aboveName + ' above it as well. Press Unlisted again to take that away (it would then show on that page).' : 'This folder has its own ' + NAMES[l] + ' setting, as strict as ' + aboveName + ' above it. Press ' + NAMES[l] + ' again to follow ' + aboveName + ' instead.');
+      }
       if (desc) desc.textContent = descs[e] || '';
       var dl = document.querySelector('.dl-block'); if (dl) dl.hidden = e === 'private' || e === 'me';   // (a private folder offers visitors nothing: the download switch is for one that is open)
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
@@ -23322,7 +23339,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function send(to, done) {
       var body = new URLSearchParams();
-      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level);   // (the level this page showed: the server refuses a choice made on a stale page)
+      body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level); body.set('above', aboveLevel);   // (the level this page showed: the server refuses a choice made on a stale page)
       say('Saving…', 'busy');
       fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
@@ -23340,6 +23357,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // putting an Unlisted folder on show (Unlisted to Public). Each asks once, in plain words, with no counts.
     var PLAIN = {
       password: ['Let people with the private-view password open this folder?', 'Everyone you have given the private-view password will be able to open this folder and see what is in it (photos marked private on their own stay private). Not right? Cancel and leave it Only me.', 'Let them in'],
+      inparent: ['Show this folder on the page of the folder above it?', 'It is Unlisted in its own right, so it is left off the page of the folder above it too. Without that mark it will appear there, and come along with a share link that names that folder. Not right? Cancel and leave it as it is.', 'Show it there'],
       listed: ['Show this folder to everyone?', 'It will appear on the gallery\'s page, among the folders, on the map and in the counts, for every visitor. Not right? Cancel and leave it Unlisted.', 'Show it']
     };
     function askPlain(to, kind) {
@@ -23351,6 +23369,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function questionFor(from, to) {   // (about what visitors get, so about the level each choice comes to once the folders above are counted)
       var a = effective(from), b = effective(to);
+      if (from === 'unlisted' && aboveLevel === 'unlisted' && to !== 'unlisted' && b === 'unlisted') return 'inparent';   // (an Unlisted folder inside an Unlisted one is left off its parent's page by its own mark: taking it away lists it there)
       if ((a === 'private' || a === 'me') && (b === 'public' || b === 'unlisted')) return 'open';
       if (a === 'me' && b === 'private') return 'password';
       if (a === 'unlisted' && b === 'public') return 'listed';
@@ -27337,7 +27356,8 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Unlisted (public, left out of every list): only the owner is told on the card, in amber, dashed when it is a folder above that makes it so.
     $quietPill = '';
     if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && $priv['state'] === '') {
-        if (folder_quiet_cached($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
+        if (folder_quiet_cached($dir, $folderPath) && !quiet_folder_above($dir, $folderPath)) $quietPill = '<button type="button" class="folder-priv own quiet" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Unlisted: anyone with the address can open this folder, but it is left out of every list. Press to show it to everyone">Unlisted</button>';   // (a button, as the red Private one is: it asks, then makes the folder Public)
+        elseif (folder_quiet_cached($dir, $folderPath)) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted in its own right, and because a folder above it is: it is left off that folder\'s page too. Change it in this folder\'s settings">Unlisted</span>';
         elseif (quiet_root_depth($dir, $folderPath . '/x') > 0) $quietPill = '<span class="folder-priv inh quiet" title="Unlisted because a folder above it is">Unlisted</span>';
     }
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' || $quietPill !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
@@ -28562,6 +28582,7 @@ send_viewer_aware_cache_headers();
   .folder-priv-banner.fpb-quiet:hover { background: rgba(245,166,35,0.18); border-color: rgba(245,166,35,0.75); }
   .folder-priv-banner.fpb-quiet:active { background: rgba(245,166,35,0.24); }
   .folder-priv-banner.fpb-quiet > .ico { color: #f5a623; }
+  .folder-priv-banner.fpb-note.fpb-quiet:hover, .folder-priv-banner.fpb-note.fpb-quiet:active { background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.45); transform: none; }   /* (the plain note: nothing to press) */
   <?= video_tile_css() ?>
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
@@ -28692,6 +28713,7 @@ send_viewer_aware_cache_headers();
   .lm-menu .lm-row .ico { width: 1.15em; height: 1.15em; flex: none; margin-top: 2px; color: #aab2ff; }
   .lm-menu .lm-tx { display: flex; flex-direction: column; min-width: 0; }
   .lm-menu .lm-tx strong { font-size: 0.95rem; color: #fff; }
+  .lm-menu .lm-note { margin: 4px 10px 6px; padding-top: 8px; border-top: 1px solid #34343a; font-size: 0.78rem; line-height: 1.35; color: #d6b36a; }
   .lm-menu .lm-tx small { margin-top: 1px; font-size: 0.78rem; line-height: 1.3; color: #a8a8b0; }
   .lb-sharepop .lsp-btns .lsp-copy:hover { background: #303036; }
   .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
@@ -29592,12 +29614,21 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
-<?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) !== 'private' && folder_is_quiet($dir, $currentFolderPath)): ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && !folder_above_is_private($dir, $currentFolderPath . '/x') && folder_is_quiet($dir, $currentFolderPath)): ?>
+  <?php // Unlisted: a button that asks whether to show the folder to everyone, only where that is what pressing it does (the folder's own mark, with no Unlisted folder above it); otherwise a plain note ?>
+  <?php $quietOwn = folder_quiet_cached($dir, $currentFolderPath); $quietUp = quiet_folder_above($dir, $currentFolderPath); ?>
+  <?php if ($quietOwn && !$quietUp): ?>
   <div class="folder-priv-banner fpb-quiet" id="folder-quiet-note" role="button" tabindex="0" title="Show this folder to everyone" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('link') ?>
     <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong>
       <em class="fpb-hint">Show it to everyone&hellip;</em></div>
   </div>
+  <?php else: ?>
+  <div class="folder-priv-banner fpb-note fpb-quiet" id="folder-quiet-info" role="note">
+    <?= ui_icon('link') ?>
+    <div><strong><?= $quietOwn ? 'Unlisted in its own right, and because a folder above it is: anyone with the address can open this folder, but it is left off that folder\'s page too' : 'Unlisted because a folder above it is: anyone with the address can open this folder, but it is left out of every list' ?></strong></div>
+  </div>
+  <?php endif; ?>
 <?php endif; ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
   <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // An Only me folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
@@ -29826,7 +29857,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
           foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
-          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'closed' => gallery_is_closed(), 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
@@ -30881,7 +30912,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     $('fq-ok').addEventListener('click', function () {
       modal.hidden = true;
       fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
-        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted');
+        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'set_folder_visibility'); body.set('level', 'public'); body.set('was', 'unlisted'); body.set('above', '');   // (the button is only drawn where no folder above is stricter)
         return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       }).then(json).then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');
@@ -32240,8 +32271,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 
     rows.push({ kind: 'page', icon: 'link', name: 'Viewer link', hint: priv ? 'opens it in the gallery, for people who already have access' : 'opens the photo in the gallery' });
     if (!priv) {
-      rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, at viewing size' });
-      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the full file (visitors may download it here)' });
+      rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, as the viewer shows it' });
+      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the original file, as a download (visitors may download it here)' });
     }
     return rows;
   }
@@ -32267,6 +32298,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       });
       linkPop.appendChild(b);
     });
+    if (ownerState && ownerState.closed) { const n = document.createElement('p'); n.className = 'lm-note'; n.textContent = 'This gallery is closed: these links open only for people who are signed in or have a share link.'; linkPop.appendChild(n); }
     document.body.appendChild(linkPop);
     // Beside the button that was pressed, with a small pointer at it: below it when there is room, above it when not, always kept on the screen.
     const r = anchor.getBoundingClientRect(), w = linkPop.offsetWidth, h = linkPop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight, gap = 9;

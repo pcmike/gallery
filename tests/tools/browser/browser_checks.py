@@ -4375,6 +4375,20 @@ try:
         ok(b.js("!document.getElementById('fq-modal').hidden"), "[unlisted badge] ...and opens the same question")
         b.js("document.getElementById('fq-ok').click()"); b.drain(2.0)
         ok(not quiet_on(), "[unlisted badge] Show it makes the folder Public (the Unlisted mark is gone from the folder's file)", open(quiet_file).read()[:120])
+        # an Unlisted folder inside an Unlisted one is Unlisted in its own right: taking its mark away lists it on the page above, so that asks
+        os.makedirs(SITE_L + "/Shelf/Quiet/Inner", exist_ok=True); shutil.copy(SITE_L + "/pub.jpg", SITE_L + "/Shelf/Quiet/Inner/i1.jpg")
+        open(SITE_L + "/Shelf/Quiet/.gallery-items.php", "w").write(LGUARD + json.dumps({"quiet": True, "items": [], "groups": []}) + "\n")
+        inner_file = SITE_L + "/Shelf/Quiet/Inner/.gallery-items.php"
+        open(inner_file, "w").write(LGUARD + json.dumps({"quiet": True, "items": [], "groups": []}) + "\n")
+        inner_on = lambda: '"quiet":true' in open(inner_file).read().replace(" ", "")
+        b.goto(BL + "/?admin&classic=1&folder=Shelf%2FQuiet%2FInner&nest=1", 1.5)
+        ok("in its own right" in b.js("document.getElementById('vis-same').textContent") and not b.js("document.getElementById('vis-same').hidden"), "[nested unlisted] the folder says it is Unlisted in its own right and is left off the page above as well")
+        b.js("document.querySelector('#vis-choice input[value=unlisted]').click()"); b.drain(0.8)
+        ok(b.js("!document.getElementById('priv-modal').hidden") and b.js("document.getElementById('priv-modal-title').textContent") == "Show this folder on the page of the folder above it?" and inner_on(), "[nested unlisted] pressing Unlisted again asks first (it would show on the page above), and changes nothing yet")
+        b.js("document.getElementById('pm-cancel').click()"); b.drain(0.4)
+        ok(inner_on() and b.js("document.querySelector('#vis-choice input:checked').value") == "unlisted", "[nested unlisted] Cancel leaves it Unlisted")
+        b.js("document.querySelector('#vis-choice input[value=unlisted]').click()"); b.drain(0.8); b.js("document.getElementById('pm-ok').click()"); b.drain(1.5)
+        ok(not inner_on(), "[nested unlisted] Show it there takes the folder's own mark away", open(inner_file).read()[:100])
         shutil.rmtree(SITE_L + "/Shelf")
         # a folder's settings say what it follows: Fol is private, Fol/Mid/Leaf (two levels down) has no choice of its own
         def wait_py(cond, secs=6.0):

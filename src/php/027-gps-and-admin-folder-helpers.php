@@ -968,6 +968,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $labels = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
             return ['type' => 'error', 'stale' => true, 'level' => $nowLevel, 'text' => 'This folder was changed since the page was opened: it is ' . $labels[$nowLevel] . ' now. Nothing was changed; choose again.'];
         }
+        // The question the page asked (or did not ask) was worked out from the folders above this one as they were when the page was drawn: if the strictest of them is
+        // not what the page believed, the folder's own level can be right and the answer still wrong (a stale tab could open a folder with no question), so nothing is changed.
+        $aboveClaimed = $_POST['above'] ?? null;
+        if (is_string($aboveClaimed) && in_array($aboveClaimed, ['', 'public', 'unlisted', 'private', 'me'], true)) {
+            $aboveNow = folder_above_info($dir, $adminFolderPath)['level'] ?? '';
+            if ($aboveClaimed !== $aboveNow) return ['type' => 'error', 'stale' => true, 'level' => $nowLevel, 'text' => 'The folders above this one were changed since the page was opened. Nothing was changed: reload the page.'];
+        }
         items_update($adminFolderReal, function (&$data) use ($level) {
             unset($data['restriction'], $data['unlisted'], $data['quiet']);
             if ($level === 'unlisted') { $data['quiet'] = true; }

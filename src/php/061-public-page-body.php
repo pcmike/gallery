@@ -430,12 +430,21 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
-<?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) !== 'private' && folder_is_quiet($dir, $currentFolderPath)): ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && $currentCollectionPage === null && AUTO_GROUP_BY_FOLDER && !folder_above_is_private($dir, $currentFolderPath . '/x') && folder_is_quiet($dir, $currentFolderPath)): ?>
+  <?php // Unlisted: a button that asks whether to show the folder to everyone, only where that is what pressing it does (the folder's own mark, with no Unlisted folder above it); otherwise a plain note ?>
+  <?php $quietOwn = folder_quiet_cached($dir, $currentFolderPath); $quietUp = quiet_folder_above($dir, $currentFolderPath); ?>
+  <?php if ($quietOwn && !$quietUp): ?>
   <div class="folder-priv-banner fpb-quiet" id="folder-quiet-note" role="button" tabindex="0" title="Show this folder to everyone" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('link') ?>
     <div><strong>Unlisted: anyone with the address can open this folder, but it is left out of every list</strong>
       <em class="fpb-hint">Show it to everyone&hellip;</em></div>
   </div>
+  <?php else: ?>
+  <div class="folder-priv-banner fpb-note fpb-quiet" id="folder-quiet-info" role="note">
+    <?= ui_icon('link') ?>
+    <div><strong><?= $quietOwn ? 'Unlisted in its own right, and because a folder above it is: anyone with the address can open this folder, but it is left off that folder\'s page too' : 'Unlisted because a folder above it is: anyone with the address can open this folder, but it is left out of every list' ?></strong></div>
+  </div>
+  <?php endif; ?>
 <?php endif; ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
   <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // An Only me folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
@@ -664,7 +673,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
           foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
-          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'closed' => gallery_is_closed(), 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain

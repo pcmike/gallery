@@ -14,8 +14,8 @@
 
     rows.push({ kind: 'page', icon: 'link', name: 'Viewer link', hint: priv ? 'opens it in the gallery, for people who already have access' : 'opens the photo in the gallery' });
     if (!priv) {
-      rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, at viewing size' });
-      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the full file (visitors may download it here)' });
+      rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, as the viewer shows it' });
+      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the original file, as a download (visitors may download it here)' });
     }
     return rows;
   }
@@ -41,6 +41,7 @@
       });
       linkPop.appendChild(b);
     });
+    if (ownerState && ownerState.closed) { const n = document.createElement('p'); n.className = 'lm-note'; n.textContent = 'This gallery is closed: these links open only for people who are signed in or have a share link.'; linkPop.appendChild(n); }
     document.body.appendChild(linkPop);
     // Beside the button that was pressed, with a small pointer at it: below it when there is room, above it when not, always kept on the screen.
     const r = anchor.getBoundingClientRect(), w = linkPop.offsetWidth, h = linkPop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight, gap = 9;
