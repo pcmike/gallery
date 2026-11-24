@@ -12227,12 +12227,12 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
     <div class="folder-switches">
-    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-above="<?= $above !== null ? $esc($above['level']) : '' ?>" data-above-name="<?= $above !== null ? $esc($above['label']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
+    <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-above="<?= $above !== null ? $esc($above['level']) : '' ?>" data-above-name="<?= $above !== null ? $esc($above['label']) : '' ?>" data-above-path="<?= $above !== null ? $esc($above['path']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
       <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
       <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
         <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
-      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up. <button type="button" class="linklike vf-remove">Remove it</button><?php endif; ?></span></p>
+      <p class="hint vis-follow" id="vis-follow"<?= $follow !== null ? '' : ' hidden' ?>><span class="vf-text"><?php if ($follow !== null): ?><strong><?= $esc($names[$follow['level']]) ?></strong> because the folder above it, <a href="?admin&amp;folder=<?= $esc(rawurlencode($follow['path'])) ?>#settings"><?= $esc($follow['label']) ?></a>, is <?= $esc($names[$follow['level']]) ?>. Change it there; this folder follows it.<?php endif; ?></span> <span class="vf-own"<?= $follow !== null && $level !== 'public' ? '' : ' hidden' ?>><?php if ($follow !== null && $level !== 'public'): ?>Its own choice, <?= $esc($names[$level]) ?>, takes over if <?= $esc($follow['label']) ?> is opened up. <button type="button" class="linklike vf-remove">Remove it</button><?php endif; ?></span></p>
       <p class="hint vis-same" id="vis-same"<?= $sameAbove ? '' : ' hidden' ?>><?php if ($sameAbove): ?>This folder has its own <?= $esc($names[$level]) ?> setting, as strict as <?= $esc($above['label']) ?> above it. Press <?= $esc($names[$level]) ?> again to follow <?= $esc($above['label']) ?> instead.<?php endif; ?></p>
       <p class="hint vis-desc" aria-live="polite"><?= $esc($descs[$eff]) ?></p>
       <form method="post" class="nojs-only"><input type="hidden" name="csrf_token" value="<?= $esc($csrfToken) ?>"><input type="hidden" name="action" value="set_folder_visibility"><input type="hidden" name="was" value="<?= $esc($level) ?>">   <?php // what the page does without JavaScript: the same choice, and a Save button ?>
@@ -23266,10 +23266,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // A folder cannot be more open than the folder it sits in: when a folder above is stricter than this folder's own setting, the folder follows it (the page says which
     // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
     var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
-    var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
     var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null, sameNote = wrap.querySelector('.vis-same');
-    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
-    function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
+    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '', abovePath = wrap.getAttribute('data-above-path') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
+    // What visitors get for a choice of this folder's own: that choice, or the strictest folder above when that is stricter (the folder follows it). Worked out from the folder above
+    // each time, not from how the page was drawn, so it is right after a choice is made or taken away.
+    function effective(l) { return aboveLevel && RANK[aboveLevel] > RANK[l] ? aboveLevel : l; }
     function canUnset(l) { return l !== 'public' && !!aboveLevel && RANK[aboveLevel] >= RANK[l]; }   // (a setting of its own, with a folder above at least as strict to go back to following)
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
@@ -23291,13 +23292,25 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       radios.forEach(function (r) {
         var off = following && RANK[r.value] < RANK[e], lab = r.closest('label');
         r.checked = r.value === e; r.disabled = off;
-        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
+        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + aboveName + ' is ' + NAMES[aboveLevel] + ')'; else lab.removeAttribute('title'); }
       });
-      if (followNote) followNote.hidden = !following;
+      if (followNote) {
+        followNote.hidden = !following;
+        var tx = followNote.querySelector('.vf-text');
+        if (tx) {   // (built here, so it is there whenever the folder starts to follow, not only when the page was drawn that way)
+          tx.textContent = '';
+          if (following) {
+            var st = document.createElement('strong'); st.textContent = NAMES[e]; tx.appendChild(st);
+            tx.appendChild(document.createTextNode(' because the folder above it, '));
+            var a = document.createElement('a'); a.href = '?admin&folder=' + encodeURIComponent(abovePath) + '#settings'; a.textContent = aboveName; tx.appendChild(a);
+            tx.appendChild(document.createTextNode(', is ' + NAMES[aboveLevel] + '. Change it there; this folder follows it.'));
+          }
+        }
+      }
       if (followOwn) {
         var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = '';
         if (shows) {
-          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up. '));
+          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + aboveName + ' is opened up. '));
           var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
         }
       }

@@ -1958,10 +1958,11 @@
     // A folder cannot be more open than the folder it sits in: when a folder above is stricter than this folder's own setting, the folder follows it (the page says which
     // one), the button of what it follows is the one drawn as chosen, and the buttons looser than that cannot be pressed. `level` stays the folder's OWN setting.
     var RANK = { public: 0, unlisted: 1, 'private': 2, me: 3 }, NAMES = { public: 'Public', unlisted: 'Unlisted', 'private': 'Private', me: 'Only me' };
-    var followLevel = wrap.getAttribute('data-follow') || '', fromName = wrap.getAttribute('data-from-name') || '';
     var followNote = wrap.querySelector('.vis-follow'), followOwn = followNote ? followNote.querySelector('.vf-own') : null, sameNote = wrap.querySelector('.vis-same');
-    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
-    function effective(l) { return followLevel && RANK[followLevel] > RANK[l] ? followLevel : l; }
+    var aboveLevel = wrap.getAttribute('data-above') || '', aboveName = wrap.getAttribute('data-above-name') || '', abovePath = wrap.getAttribute('data-above-path') || '';   // (the strictest folder above, even when this folder's own setting is as strict)
+    // What visitors get for a choice of this folder's own: that choice, or the strictest folder above when that is stricter (the folder follows it). Worked out from the folder above
+    // each time, not from how the page was drawn, so it is right after a choice is made or taken away.
+    function effective(l) { return aboveLevel && RANK[aboveLevel] > RANK[l] ? aboveLevel : l; }
     function canUnset(l) { return l !== 'public' && !!aboveLevel && RANK[aboveLevel] >= RANK[l]; }   // (a setting of its own, with a folder above at least as strict to go back to following)
     try { descs = JSON.parse(wrap.getAttribute('data-descs')) || {}; } catch (e) {}
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
@@ -1983,13 +1984,25 @@
       radios.forEach(function (r) {
         var off = following && RANK[r.value] < RANK[e], lab = r.closest('label');
         r.checked = r.value === e; r.disabled = off;
-        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + fromName + ' is ' + NAMES[followLevel] + ')'; else lab.removeAttribute('title'); }
+        if (lab) { lab.classList.toggle('is-off', off); if (off) lab.title = 'Cannot be more open than the folder above it (' + aboveName + ' is ' + NAMES[aboveLevel] + ')'; else lab.removeAttribute('title'); }
       });
-      if (followNote) followNote.hidden = !following;
+      if (followNote) {
+        followNote.hidden = !following;
+        var tx = followNote.querySelector('.vf-text');
+        if (tx) {   // (built here, so it is there whenever the folder starts to follow, not only when the page was drawn that way)
+          tx.textContent = '';
+          if (following) {
+            var st = document.createElement('strong'); st.textContent = NAMES[e]; tx.appendChild(st);
+            tx.appendChild(document.createTextNode(' because the folder above it, '));
+            var a = document.createElement('a'); a.href = '?admin&folder=' + encodeURIComponent(abovePath) + '#settings'; a.textContent = aboveName; tx.appendChild(a);
+            tx.appendChild(document.createTextNode(', is ' + NAMES[aboveLevel] + '. Change it there; this folder follows it.'));
+          }
+        }
+      }
       if (followOwn) {
         var shows = following && l !== 'public'; followOwn.hidden = !shows; followOwn.textContent = '';
         if (shows) {
-          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + fromName + ' is opened up. '));
+          followOwn.appendChild(document.createTextNode('Its own choice, ' + NAMES[l] + ', takes over if ' + aboveName + ' is opened up. '));
           var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'linklike vf-remove'; rm.textContent = 'Remove it'; followOwn.appendChild(rm);
         }
       }
