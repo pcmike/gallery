@@ -6540,11 +6540,20 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
     return $cache[$folderRel];
 }
 
-/** Is any folder marked "Gallery of its own"? The gallery's own settings file says so (kept by the switch), so a gallery that uses none
- *  reads nothing more and sets no cookie. */
+/** Is any folder (or collection) a "Gallery of its own", by its own mark or because it is Unlisted? Worked out from the folders themselves, once a request, from settings
+ *  files the page has read already to decide what a visitor may see (they are shared: folder_items_memo), so a folder copied in from another gallery, restored from a
+ *  backup or edited by hand counts at once, with no note to keep in step. A gallery that uses none sets no cookie and changes no header. (Versions up to 2.6.7 read a note
+ *  in the gallery's own settings file instead, `ownGalleries`; it is still written, for them, and no longer read.) */
 function own_galleries_in_use($dir) {
     static $in = null;
-    return $in ?? ($in = (items_read($dir)['ownGalleries'] ?? null) === true);
+    if ($in !== null) return $in;
+    if (AUTO_GROUP_BY_FOLDER) {
+        foreach (all_folder_paths($GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])) as $p) {
+            if ($p !== '' && folder_own_gallery_cached($dir, $p)) return $in = true;
+        }
+    }
+    foreach (collections_list() as $r) { if (!empty($r['ownGallery'])) return $in = true; }
+    return $in = false;
 }
 
 /** The nearest folder at or above $folderPath marked "Gallery of its own", or null: the top of what someone who arrived inside it is offered. */
@@ -9632,9 +9641,8 @@ function serve_photo_info($dir, $mediaExtensions, $self) {
  * 009-notes-grouping-and-order.php): $groups and $files are filtered there, so every count, list and allowlist after it agrees. Pages that are
  * MEANT to reach it keep its photos in that list: a page inside the folder (?folder=<it or a folder in it>), and a share link that names it.
  * Nothing here asks "is anything Unlisted?" first, on purpose: a folder moved in from another gallery, restored from a backup or edited by hand
- * carries the setting without any note anywhere else, and must be left out all the same. (The one thing that does use a note is the tidiness of "Gallery of
- * its own", which an Unlisted folder has by default: the gallery's own settings file says whether any folder has it, so a gallery that has none reads nothing
- * and sets no cookie. Such a folder keeps its way back until its owner presses a button for it once; it is still left out of every list.)
+ * carries the setting without any note anywhere else, and must be left out all the same. (The tidiness of "Gallery of its own", which an Unlisted folder has by default,
+ * is worked out from the folders in the same way: see own_galleries_in_use.)
  * ----------------------------------------------------------------------- */
 
 /** One folder's own Unlisted setting, read once per request (and reset with the other folder settings when one is saved). */
@@ -19253,9 +19261,9 @@ function admin_nav_counts($dir, $files) {
     $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => [], 'changes' => []];
     $inactive = count(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
     $notesOn = scan_gallery_md_files($dir)['files'] !== [];
-    $closed = gallery_is_closed(); $of = $closed ? 8 : 9;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
+    $closed = gallery_is_closed(); $of = $closed ? 9 : 10;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
     $on = (int) AUTO_GROUP_BY_FOLDER + (int) ENABLE_VIDEO + (int) ENABLE_PHOTO_LOCATION + (int) ENABLE_SHARE_LINKS + (int) (ENABLE_PUBLIC_DOWNLOAD && !$closed)
-        + (int) (TRACK_VIEWS || LOG_PUBLIC_VISITS) + (int) (!$inactive && $notesOn) + (int) ENABLE_THUMBNAIL_CACHE + (int) COUNTRY_LOOKUP;
+        + (int) (TRACK_VIEWS || LOG_PUBLIC_VISITS) + (int) (!$inactive && $notesOn) + (int) ENABLE_THUMBNAIL_CACHE + (int) COUNTRY_LOOKUP + (int) INFO_PANEL;   // (nine switches and the photo info panel: one "On" chip each on the Features page)
     if ($inactive > 0) $out['features'][] = ['text' => (string) $inactive, 'kind' => 'warn', 'title' => $inactive . ' feature' . ($inactive === 1 ? '' : 's') . ' to set up'];
     else $out['features'][] = ['text' => $on . '/' . $of, 'kind' => '', 'title' => $on . ' of the ' . $of . ' features you can switch on are on'];
     if (ENABLE_SHARE_LINKS) {
@@ -29856,7 +29864,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   const ownerState = <?php
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether this photo's folder lets a stranger download originals: the menu offers the original's link when that is so and the photo is public, which it learns from `priv`, kept up to date when the lock on a tile is pressed)
           echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'closed' => gallery_is_closed(), 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;

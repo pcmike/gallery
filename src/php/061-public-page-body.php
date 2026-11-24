@@ -672,7 +672,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   const ownerState = <?php
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = []; $ownerDl = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $f, $itemsData) && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether a stranger could download the original: the menu offers its link only then)
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; $ownerDl[$f] = ENABLE_PUBLIC_DOWNLOAD && public_download_folder_covers($f); }   // (the address itself when it is known, so Copy needs no round trip; and whether this photo's folder lets a stranger download originals: the menu offers the original's link when that is so and the photo is public, which it learns from `priv`, kept up to date when the lock on a tile is pressed)
           echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'dl' => (object) $ownerDl, 'closed' => gallery_is_closed(), 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;

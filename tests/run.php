@@ -2017,6 +2017,34 @@ check('[link menu] a visitor gets no link button, no menu and none of its words'
 $mnS1 = $mnState($mnPub); $mnS2 = $mnState($mnDlPage); $mnS3 = $mnState($mnHush); $mnS4 = $mnState($mnQuiet);
 check('[link menu] the page tells the menu whether a stranger could download each original: not in Pub, Quiet or Hush, yes in Dl (where downloads are on)', ($mnS1['dl']['Pub/p.jpg'] ?? null) === false && ($mnS4['dl']['Quiet/p.jpg'] ?? null) === false && ($mnS3['dl']['Hush/p.jpg'] ?? null) === false && ($mnS2['dl']['Dl/p.jpg'] ?? null) === true, json_encode([$mnS1['dl'] ?? null, $mnS2['dl'] ?? null]));
 check('[link menu] the menu\'s words say what each link is: the picture link is the image as the viewer shows it, the original is the file as a download; and the page tells the menu whether the gallery is closed', str_contains($mnPub, 'the image itself, as the viewer shows it') && str_contains($mnPub, 'the original file, as a download') && (($mnState($mnPub)['closed'] ?? null) === false));
+// ---- the menu's download answer is about the folder only (the photo's privacy, which the tile's lock changes without a reload, is applied by the menu)
+$mnAdmin(['action' => 'set_folder_visibility', 'level' => 'private'], '&folder=Dl');
+$mnDlPriv = $mnState($mnPage('Dl'));
+check('[link menu] the download answer does not depend on whether the photo is private now (a photo flipped public with its tile lock then gets the Original row with no reload): in a private folder that allows downloads it is still true, and the page says the photo is private', ($mnDlPriv['dl']['Dl/p.jpg'] ?? null) === true && ($mnDlPriv['priv']['Dl/p.jpg'] ?? null) === true, json_encode([$mnDlPriv['dl'] ?? null, $mnDlPriv['priv'] ?? null]));
+$mnAdmin(['action' => 'set_folder_visibility', 'level' => 'public'], '&folder=Dl');
+// ---- the Features number counts the photo info panel (it has its own row and its own On chip on the Features page)
+$mnBadge = function () use ($baseMn, &$mnOwn) { return preg_match('~data-tab="features">Features\s*<span class="count[^"]*"[^>]*>(\d+)/(\d+)</span>~', http_get("$baseMn/?admin&shell=1", $mnOwn)[1], $m) ? [(int) $m[1], (int) $m[2]] : null; };
+$mnB0 = $mnBadge();
+file_put_contents("$fxMn/.gallery-config.php", cfg_text(array_merge(cfg_read("$fxMn/.gallery-config.php"), ['INFO_PANEL' => true])));   // (keeping the settings already there: the download switch saved above is one of them)
+[, , $mnH2] = http_post("$baseMn/?admin", ['access_code' => 'mn-admin-pw-1'], [], false); $mnOwn = ['Cookie: ' . extract_cookie_header($mnH2)];
+$mnB1 = $mnBadge();
+check('[features badge] the sidebar\'s Features number is out of 10 (the photo info panel is one of them), and switching the info panel on adds one to it', $mnB0 !== null && $mnB1 !== null && $mnB0[1] === 10 && $mnB1[1] === 10 && $mnB1[0] === $mnB0[0] + 1, json_encode([$mnB0, $mnB1]));
+/* ---- "Gallery of its own" is worked out from the folders, not from a note: a folder that carries the mark (Unlisted, or its own switch) counts at once, with no note in the gallery's own settings file and no button pressed ---- */
+echo "== Gallery of its own: from the folders ==\n";
+$fxDv = new_fixture_dir('derive');
+foreach (['Alb', 'Alb/Sub', 'Own', 'Pub', 'Pub/Kid'] as $dvD) { mkdir("$fxDv/$dvD", 0777, true); make_jpeg("$fxDv/$dvD/p.jpg", 40, 40, 90, 60, 120); }
+$dvWrite = fn (string $folder, array $data) => file_put_contents("$fxDv/$folder/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($data));
+$dvWrite('Alb', ['quiet' => true, 'items' => []]);       // (Unlisted, written by hand: as if copied in from another gallery)
+$dvWrite('Own', ['ownGallery' => true, 'items' => []]);   // (its own switch, written by hand)
+file_put_contents("$fxDv/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'dv-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxDv/index.php");
+$portDv = find_free_port(); start_server($fxDv, $portDv); $baseDv = "http://127.0.0.1:$portDv";
+$dvCrumb = fn (string $folder) => (function () use ($baseDv, $folder) { $r = http_get("$baseDv/?folder=" . rawurlencode($folder), ['Sec-Fetch-Site: none', 'User-Agent: Mozilla/5.0 test'], false); return [preg_match('~<p class="breadcrumb">(.*?)</p>~s', $r[1], $m) ? $m[1] : null, $r[0]]; })();
+check('[own gallery derived] the gallery\'s own settings file has no note that a folder is a gallery of its own (the folders carry the marks, as after a copy from another gallery)', !is_file("$fxDv/.gallery-items.php") || !array_key_exists('ownGalleries', read_data_file("$fxDv/.gallery-items.php")));
+[$dvA, $dvAs] = $dvCrumb('Alb'); [$dvO, $dvOs] = $dvCrumb('Own'); [$dvP, $dvPs] = $dvCrumb('Pub/Kid'); [$dvAS, $dvASs] = $dvCrumb('Alb/Sub');
+check('[own gallery derived] arriving by a typed address on an Unlisted folder that was never touched here: no way up, no folder beside it', $dvAs === 200 && $dvA === null, "status $dvAs crumb " . json_encode($dvA));
+check('[own gallery derived] ...the same for a folder with its own mark (the switch written by hand)', $dvOs === 200 && $dvO === null, "status $dvOs crumb " . json_encode($dvO));
+check('[own gallery derived] ...a folder inside the Unlisted one stops its way back at that folder, and an ordinary folder keeps its way up', $dvASs === 200 && str_contains((string) $dvAS, 'folder=Alb"') && !str_contains((string) $dvAS, 'href="?folder=Pub"') && $dvPs === 200 && str_contains((string) $dvP, 'folder=Pub"'));
 
 // ---- Photo info: the panel's rows, the per-folder switch and what a folder takes from the folder above, the location gate, and what is never shown ----
 echo "== photo info panel ==\n";
@@ -6761,7 +6789,7 @@ $ncAfter = http_get("$baseS2/?admin&shell=1", $shOwner)[1];
 check('[shell] a paused link is not counted as in use', ($ncLive - 1 > 0 ? preg_match('~data-tab="links">Shares\s*<span class="count"[^>]*>' . ($ncLive - 1) . '</span>~', $ncAfter) === 1 : !preg_match('~data-tab="links">Shares\s*<span class="count"[^>]*>\d+</span>~', $ncAfter)));
 write_data_file("$fxS2/.gallery-links.php", $ncSave);
 preg_match_all('~<span class="ft-chip ft-on">~', http_get("$baseS2/?admin", $shOwner)[1], $ncOn); preg_match_all('~<span class="ft-chip ft-need">~', http_get("$baseS2/?admin", $shOwner)[1], $ncNeed);
-check('[shell] Features shows how many of the 9 features you can switch on are on, and that is the number of "On" chips on the Features page (one that needs setup is shown alone, in amber)', $ncNeed[0] ? preg_match('~data-tab="features">Features\s*<span class="count warn"[^>]*>' . count($ncNeed[0]) . '</span>~', $shBody) === 1 : preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>' . count($ncOn[0]) . '/9</span>~', $shBody) === 1, 'on=' . count($ncOn[0]) . ' need=' . count($ncNeed[0]) . ' shell=' . (preg_match('~data-tab="features">Features.{0,160}~s', $shBody, $dbg) ? strip_tags($dbg[0]) : 'none'));
+check('[shell] Features shows how many of the 10 features you can switch on are on, and that is the number of "On" chips on the Features page (one that needs setup is shown alone, in amber)', $ncNeed[0] ? preg_match('~data-tab="features">Features\s*<span class="count warn"[^>]*>' . count($ncNeed[0]) . '</span>~', $shBody) === 1 : preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>' . count($ncOn[0]) . '/10</span>~', $shBody) === 1, 'on=' . count($ncOn[0]) . ' need=' . count($ncNeed[0]) . ' shell=' . (preg_match('~data-tab="features">Features.{0,160}~s', $shBody, $dbg) ? strip_tags($dbg[0]) : 'none'));
 $ncHealth = preg_match('~(\d+) things? to look at~', http_get("$baseS2/?admin", $shOwner)[1], $ncH) ? (int) $ncH[1] : 0;
 check('[shell] Settings has a red number only when the Health check has something to fix, and it is that number', $ncHealth > 0 ? preg_match('~data-tab="site">Settings\s*<span class="count bad"[^>]*>' . $ncHealth . '</span>~', $shBody) === 1 : !str_contains($shBody, 'count bad'), "health=$ncHealth");
 [, $ncFrag] = http_get("$baseS2/?admin&shellcounts=1", $shOwner);
@@ -6773,7 +6801,7 @@ file_put_contents("$fxNc/notes.md", "{gallery}\n\nHello\n"); copy($indexSrc, "$f
 $portNc = find_free_port(); start_server($fxNc, $portNc); $baseNc = "http://127.0.0.1:$portNc";
 [, , $ncLogin] = http_post("$baseNc/?admin", ['access_code' => 'nc-admin-pw-1'], [], false); $ncCk = ["Cookie: " . extract_cookie_header($ncLogin)];
 $ncFeat = http_get("$baseNc/?admin", $ncCk)[1];
-check('[features] a notes page that is in use shows On (with its sentence), and the count of features on includes it', preg_match('~Notes <span class="ft-chip ft-on">On</span>~', $ncFeat) === 1 && str_contains($ncFeat, 'A notes page is in use.') && preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>(\d)/9</span>~', http_get("$baseNc/?admin&shell=1", $ncCk)[1], $ncM) === 1 && (int) $ncM[1] === preg_match_all('~<span class="ft-chip ft-on">~', $ncFeat));
+check('[features] a notes page that is in use shows On (with its sentence), and the count of features on includes it', preg_match('~Notes <span class="ft-chip ft-on">On</span>~', $ncFeat) === 1 && str_contains($ncFeat, 'A notes page is in use.') && preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>(\d)/10</span>~', http_get("$baseNc/?admin&shell=1", $ncCk)[1], $ncM) === 1 && (int) $ncM[1] === preg_match_all('~<span class="ft-chip ft-on">~', $ncFeat));
 file_put_contents("$fxNc/other.md", "no marker here\n");
 $ncFeat2 = http_get("$baseNc/?admin", $ncCk)[1];
 check('[features] a notes file without {gallery} makes the row say Needs setup, and the sidebar shows that alone, in amber', str_contains($ncFeat2, 'ft-need') && preg_match('~data-tab="features">Features\s*<span class="count warn"[^>]*>1</span>~', http_get("$baseNc/?admin&shell=1", $ncCk)[1]) === 1);
@@ -7878,7 +7906,7 @@ $cShare = http_get("$baseC/?admin", $cOwn)[1];
 check('[closed] while the gallery is closed, the public-log setting says nothing more is logged (the sentence lives with the row, shown only then)', str_contains($cShare, 'The gallery is closed, so nobody opens it without a link: nothing more is logged here while it stays closed.'));
 check('[closed] Features does not say "Visitors cannot download" while the gallery is closed: the row says it is each link\'s own choice and its button goes to Shares (the setting it would point at is hidden)', str_contains($cShare, 'Visitor downloads <span class="ft-chip ft-opt">Per link</span>') && str_contains($cShare, 'Each share link has its own choice of whether its visitors may download.') && str_contains($cShare, 'adminGoTo(\'links\');">→ Shares') && !str_contains($cShare, 'Visitors cannot download original photos.'));
 check('[closed] no setting is hidden by a closed gallery any more (the download choice is on each folder), so no group of Settings claims a hidden one', !str_contains($cShare, '<span class="site-hid"'));
-check('[closed] the sidebar\'s Features number counts 8 switches while the gallery is closed (downloads are each link\'s own)', preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>\d/8</span>~', http_get("$baseC/?admin&shell=1", $cOwn)[1]) === 1);
+check('[closed] the sidebar\'s Features number counts 9 switches while the gallery is closed (downloads are each link\'s own)', preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>\d/9</span>~', http_get("$baseC/?admin&shell=1", $cOwn)[1]) === 1);
 check('[settings] ...and an open gallery shows no "hidden" note on any group either', !str_contains(http_get("$baseNc/?admin", $ncCk)[1], '<span class="site-hid"'));
 check('[closed] a closed gallery with nothing logged shows no "public address" section on the Shares tab (it would have nothing to say), and Settings tells how to sign in', !str_contains($cShare, '<strong>Closed.</strong>') && !str_contains($cShare, '<div class="sl-grp">The public address') && str_contains($cShare, 'name="set_CLOSE_PUBLIC_GALLERY"') && str_contains($cShare, 'Close the public gallery'));
 
@@ -10310,8 +10338,8 @@ $fxNn = new_fixture_dir('nolnames');
 mkdir("$fxNn/SecretDrawer", 0777, true);
 make_jpeg("$fxNn/front.jpg", 60, 60, 20, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-SENTINEL.jpg", 60, 60, 80, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-TWO.jpg", 60, 60, 100, 40, 90);
 make_minimal_mp4("$fxNn/SecretDrawer/NOTLISTED-VIDEO.mp4", 3);
-file_put_contents("$fxNn/SecretDrawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true, 'allowOriginals' => true, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['caption' => 'A CAPTION OF THE PHOTO', 'web' => 'https://example.com/?x=1', 'location' => ['lat' => 48.85, 'lng' => 2.29, 'label' => 'A PLACE'], 'locationVisibility' => 'show']]]));
-file_put_contents("$fxNn/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['ownGalleries' => true, 'items' => [], 'groups' => []]));   // (a Gallery of its own somewhere: the page is built with the navigation that goes with it)
+file_put_contents("$fxNn/SecretDrawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true, 'allowOriginals' => true, 'ownGallery' => true, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['caption' => 'A CAPTION OF THE PHOTO', 'web' => 'https://example.com/?x=1', 'location' => ['lat' => 48.85, 'lng' => 2.29, 'label' => 'A PLACE'], 'locationVisibility' => 'show']]]));
+file_put_contents("$fxNn/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['ownGalleries' => true, 'items' => [], 'groups' => []]));   // (the gallery's note that some folder is a Gallery of its own: written for older versions; this one works it out from the folders, and SecretDrawer carries the mark above)
 file_put_contents("$fxNn/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nn-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'nn-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true, 'TRACK_VIEWS' => true, 'PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_ROOT' => true, 'PUBLIC_DOWNLOAD_FOLDERS' => ['SecretDrawer']]));
 copy($indexSrc, "$fxNn/index.php");
 $portNn = find_free_port(); start_server($fxNn, $portNn); $baseNn = "http://127.0.0.1:$portNn";

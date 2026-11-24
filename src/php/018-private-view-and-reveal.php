@@ -166,11 +166,20 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
     return $cache[$folderRel];
 }
 
-/** Is any folder marked "Gallery of its own"? The gallery's own settings file says so (kept by the switch), so a gallery that uses none
- *  reads nothing more and sets no cookie. */
+/** Is any folder (or collection) a "Gallery of its own", by its own mark or because it is Unlisted? Worked out from the folders themselves, once a request, from settings
+ *  files the page has read already to decide what a visitor may see (they are shared: folder_items_memo), so a folder copied in from another gallery, restored from a
+ *  backup or edited by hand counts at once, with no note to keep in step. A gallery that uses none sets no cookie and changes no header. (Versions up to 2.6.7 read a note
+ *  in the gallery's own settings file instead, `ownGalleries`; it is still written, for them, and no longer read.) */
 function own_galleries_in_use($dir) {
     static $in = null;
-    return $in ?? ($in = (items_read($dir)['ownGalleries'] ?? null) === true);
+    if ($in !== null) return $in;
+    if (AUTO_GROUP_BY_FOLDER) {
+        foreach (all_folder_paths($GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])) as $p) {
+            if ($p !== '' && folder_own_gallery_cached($dir, $p)) return $in = true;
+        }
+    }
+    foreach (collections_list() as $r) { if (!empty($r['ownGallery'])) return $in = true; }
+    return $in = false;
 }
 
 /** The nearest folder at or above $folderPath marked "Gallery of its own", or null: the top of what someone who arrived inside it is offered. */

@@ -105,9 +105,9 @@ function admin_nav_counts($dir, $files) {
     $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => [], 'changes' => []];
     $inactive = count(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
     $notesOn = scan_gallery_md_files($dir)['files'] !== [];
-    $closed = gallery_is_closed(); $of = $closed ? 8 : 9;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
+    $closed = gallery_is_closed(); $of = $closed ? 9 : 10;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
     $on = (int) AUTO_GROUP_BY_FOLDER + (int) ENABLE_VIDEO + (int) ENABLE_PHOTO_LOCATION + (int) ENABLE_SHARE_LINKS + (int) (ENABLE_PUBLIC_DOWNLOAD && !$closed)
-        + (int) (TRACK_VIEWS || LOG_PUBLIC_VISITS) + (int) (!$inactive && $notesOn) + (int) ENABLE_THUMBNAIL_CACHE + (int) COUNTRY_LOOKUP;
+        + (int) (TRACK_VIEWS || LOG_PUBLIC_VISITS) + (int) (!$inactive && $notesOn) + (int) ENABLE_THUMBNAIL_CACHE + (int) COUNTRY_LOOKUP + (int) INFO_PANEL;   // (nine switches and the photo info panel: one "On" chip each on the Features page)
     if ($inactive > 0) $out['features'][] = ['text' => (string) $inactive, 'kind' => 'warn', 'title' => $inactive . ' feature' . ($inactive === 1 ? '' : 's') . ' to set up'];
     else $out['features'][] = ['text' => $on . '/' . $of, 'kind' => '', 'title' => $on . ' of the ' . $of . ' features you can switch on are on'];
     if (ENABLE_SHARE_LINKS) {

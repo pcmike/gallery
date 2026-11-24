@@ -11,9 +11,8 @@
  * 009-notes-grouping-and-order.php): $groups and $files are filtered there, so every count, list and allowlist after it agrees. Pages that are
  * MEANT to reach it keep its photos in that list: a page inside the folder (?folder=<it or a folder in it>), and a share link that names it.
  * Nothing here asks "is anything Unlisted?" first, on purpose: a folder moved in from another gallery, restored from a backup or edited by hand
- * carries the setting without any note anywhere else, and must be left out all the same. (The one thing that does use a note is the tidiness of "Gallery of
- * its own", which an Unlisted folder has by default: the gallery's own settings file says whether any folder has it, so a gallery that has none reads nothing
- * and sets no cookie. Such a folder keeps its way back until its owner presses a button for it once; it is still left out of every list.)
+ * carries the setting without any note anywhere else, and must be left out all the same. (The tidiness of "Gallery of its own", which an Unlisted folder has by default,
+ * is worked out from the folders in the same way: see own_galleries_in_use.)
  * ----------------------------------------------------------------------- */
 
 /** One folder's own Unlisted setting, read once per request (and reset with the other folder settings when one is saved). */

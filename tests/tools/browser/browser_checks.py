@@ -677,7 +677,7 @@ try:
     b.js("try { sessionStorage.clear(); } catch (e) {}"); b.goto(BB + "/?admin", 2.0)
     b0 = b.js("JSON.stringify({tab: document.querySelector('.tab-panel.active').dataset.tab, head: !document.getElementById('admin-folder-head').hidden, first: document.querySelector('.side-group a').textContent.trim(), folders: [...document.querySelectorAll('.admin-folder-nav a .fname')].map(a => a.textContent), rows: document.querySelectorAll('.ft-row').length, switches: document.querySelectorAll('#features input[type=checkbox]').length})")
     b0 = json.loads(b0)
-    ok(b0["tab"] == "features" and not b0["head"] and re.fullmatch(r"Features( \d+/[789])?", b0["first"] or "") and b0["folders"] == ["Root"] and b0["rows"] >= 14 and b0["switches"] == 0, "[features] a fresh install (nothing configured yet) opens on Features: no folder tabs there, the page is the first entry of the sidebar's whole-gallery group, it has its rows and not one switch; the Folders list has Root", str(b0))
+    ok(b0["tab"] == "features" and not b0["head"] and re.fullmatch(r"Features( \d+/(9|10))?", b0["first"] or "") and b0["folders"] == ["Root"] and b0["rows"] >= 14 and b0["switches"] == 0, "[features] a fresh install (nothing configured yet) opens on Features: no folder tabs there, the page is the first entry of the sidebar's whole-gallery group, it has its rows and not one switch; the Folders list has Root", str(b0))
     b.js("[...document.querySelectorAll('#features .ft-row')].find(r => r.textContent.includes('Subfolders')).querySelector('button').click()"); b.drain(3.0)
     jmp = b.js("(() => { const r = document.getElementById('setting-AUTO_GROUP_BY_FOLDER'), q = r.getBoundingClientRect(); return {tab: document.querySelector('.tab-panel.active').dataset.tab, open: r.closest('details').open, inView: q.top >= -2 && q.bottom <= innerHeight, top: Math.round(q.top), bottom: Math.round(q.bottom), sy: Math.round(scrollY), ih: innerHeight}; })()")
     ok(jmp["tab"] == "site" and jmp["open"] and jmp["inView"], "[features] a feature's button jumps to its setting: Settings opens on that group with the row in view", str(jmp))
@@ -4236,6 +4236,13 @@ try:
         ok(mn is not None and mn["rows"] == ["page", "picture"] and mn["hints"] and mn["inside"] and not mn["lightbox"], "[menu] pressing it opens the menu by the button (it stays on the screen, each row has its grey line) without opening the viewer", str(mn))
         b.js("document.querySelector('.lm-row[data-kind=page]').click()"); b.drain(0.4)
         ok((b.js("window.__copied") or "").endswith("?photo=pub.jpg") and b.js("!document.querySelector('.lb-sharepop')"), "[menu] a row copies its link and closes the menu", str(b.js("window.__copied")))
+        # the Original row follows the photo's privacy as the tile's lock changes it (no reload), where the folder allows downloads
+        tile_rows = lambda: (b.js("[...document.querySelectorAll('.card.owner-card')].find(x => x.getAttribute('data-file') === 'pub.jpg').querySelector('.link-toggle').click()"), b.drain(0.3), b.js("(() => { const r = [...document.querySelectorAll('.lb-sharepop.lm-menu .lm-row')].map(x => x.dataset.kind); closeLinkPopup(); return r; })()"))[2]
+        b.js("ownerState.dl['pub.jpg'] = true; ownerState.priv['pub.jpg'] = false")
+        r_pub = tile_rows()
+        b.js("ownerState.priv['pub.jpg'] = true"); r_priv = tile_rows()
+        b.js("ownerState.priv['pub.jpg'] = false"); r_back = tile_rows()
+        ok(r_pub == ["page", "picture", "original"] and "original" not in r_priv and "picture" not in r_priv and r_back == r_pub, "[menu] where the folder allows downloads, the Original row follows the photo's privacy as it changes (private: no picture or original row; public again: all three), with no reload", str([r_pub, r_priv, r_back]))
         bk2 = lambda: (b.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}), b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}), b.drain(0.4))
         b.js("[...document.querySelectorAll('.card.owner-card')].find(x => x.getAttribute('data-file') === 'pub.jpg').querySelector('.link-toggle').click()"); b.drain(0.4); bk2()
         ok(b.js("!document.querySelector('.lb-sharepop')"), "[keys] Backspace closes the link menu, as Escape does")
