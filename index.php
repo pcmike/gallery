@@ -10909,6 +10909,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
 
+    // What the photos and videos in the gallery take on their disks, for the Health check's disk card: counted here, on request, not while the admin page is drawn (it can be slow).
+    if ($action === 'health_media_size') {
+        session_write_close();   // (a long count must not hold up the admin's other requests)
+        admin_json_exit(['ok' => true, 'text' => ''] + health_media_figures($dir, $files));
+    }
+
     // What the gallery knows and doesn't know about each folder's files (Prepare media's list).
     if ($action === 'media_report') {
         session_write_close();
@@ -18311,7 +18317,7 @@ function health_volumes($dir, $files) {
         if (!isset($by[$key])) {
             $free = @disk_free_space($p); $tot = @disk_total_space($p);
             if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
-            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false];
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key]];
         }
         if ($by[$key] === false) continue;
         if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
@@ -18322,13 +18328,45 @@ function health_volumes($dir, $files) {
         if (!$v) continue;
         $isHome = in_array('the gallery folder', $v['names'], true);
         $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
-        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
+        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs']];
     }
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
-    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; } else $uniq[$k] = $v; }
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); } else $uniq[$k] = $v; }
     $out = array_values($uniq);
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
+}
+
+/** How much room the gallery's own photos and videos take: every media file the gallery shows (a mapped folder's too), added up from the room each file takes on its disk (what
+ *  `du` reports, read without running a program), not from how full the disk is. [bytes, files counted, files in all, bytes by device, whether all were counted]. A very big gallery or a slow disk cuts the count short after about two
+ *  seconds (the figure is then "at least"). */
+function health_media_size($dir, $files, $budget = 8.0) {
+    static $cache = [];
+    $ck = rtrim((string) $dir, '/') . '|' . count((array) $files);
+    if (isset($cache[$ck])) return $cache[$ck];
+    $total = 0.0; $n = 0; $byDev = []; $t0 = microtime(true); $all = count((array) $files); $complete = true;
+    foreach ((array) $files as $f) {
+        if (($n % 200) === 0 && microtime(true) - $t0 > $budget) { $complete = false; break; }
+        $n++;
+        $st = @stat(resolve_real_path($dir, (string) $f)); if (!$st) continue;
+        // The room the file takes on the disk (the blocks it is given, which is what `du` adds up), not how long it is: a few KB more for a small file, less on a disk that compresses.
+        // A disk that does not say (no block count, or none for a file that is not empty) is measured by the file's length.
+        $size = isset($st['blocks']) && $st['blocks'] > 0 ? (float) $st['blocks'] * 512 : (float) $st['size'];
+        $total += $size; $dev = (string) $st['dev']; $byDev[$dev] = ($byDev[$dev] ?? 0.0) + $size;
+    }
+    return $cache[$ck] = ['bytes' => $total, 'counted' => $n, 'files' => $all, 'byDev' => $byDev, 'complete' => $complete];
+}
+
+/** What the disk card and the list of disks show for "what the gallery takes": the card's [label, figure, tooltip] and, for each disk of the list in its order, the figure for that
+ *  disk. Counting every file can be slow (a network disk, a big gallery), so the page never does it while it is drawn: it asks for this once it is up, and keeps the answer. */
+function health_media_figures($dir, $files) {
+    $ms = health_media_size($dir, $files);
+    $text = health_bytes($ms['bytes']) . ($ms['complete'] ? '' : '+');
+    $tip = $ms['complete'] ? 'The photos and videos in the gallery take ' . $text . ' (' . number_format($ms['counted']) . ' file' . ($ms['counted'] === 1 ? '' : 's') . ')'
+        : 'The photos and videos in the gallery take at least ' . health_bytes($ms['bytes']) . ' (counted ' . number_format($ms['counted']) . ' of ' . number_format($ms['files']) . ' files, then stopped: it is a big gallery or a slow disk)';
+    $vols = [];
+    foreach (health_volumes($dir, $files) as $v) { $mine = 0.0; foreach ($v['devs'] as $dv) $mine += $ms['byDev'][$dv] ?? 0.0; $vols[] = health_bytes($mine); }
+    return ['used' => ['Disk used', $text, $tip . '. Press to see the free space instead'], 'vols' => count($vols) > 1 ? $vols : [], 'files' => (int) $ms['files'], 'at' => time()];
 }
 
 /** A "How to fix" fold for a row that needs a change on the server (something the gallery can't do from its own folder). $steps: a list of lines, each a text (`like this` is
@@ -18410,14 +18448,21 @@ function health_strip($dir, $files) {
     $out[] = ['Folders', number_format($folders)];
     $vols = health_volumes($dir, $files);
     if ($vols) {
-        // One card for the disk, with the room taken and the room left: it shows the used space to start with and a press turns it over to the free space (the page remembers the choice).
-        // The figures are the lowest-on-room disk's. With more than one disk a second small card opens the list of them all.
-        $v0 = $vols[0]; $used0 = max(0.0, $v0['total'] - $v0['free']); $usedPct = $v0['total'] > 0 ? (int) round($used0 / $v0['total'] * 100) : 0;
-        $disk = ['used' => ['Disk used', health_bytes($used0), health_bytes($used0) . ' used of ' . health_bytes($v0['total']) . ' (' . $usedPct . '%). Press to see the free space instead'],
-                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%). Press to see the used space instead']];
+        // One card for the disk, with the room the gallery's photos and videos take and the room left: it shows what the gallery takes to start with and a press turns it over to the
+        // free space on the disk lowest on room (the page remembers the choice). "Used" is the gallery's own, added up from its files, not how full the disk is (that has the
+        // operating system and everything else on it). Adding up every file is not something to do each time the admin is drawn (on a network disk it is a round trip per file), so the
+        // page draws a placeholder here and the browser asks for the figure after it is up, keeping the answer (see health_media_figures). With more than one disk a second small card
+        // opens the list of them all.
+        $v0 = $vols[0];
+        $usedText = '…'; $usedTip = 'Counting what the photos and videos in the gallery take. Press to see the free space instead';
+        $disk = ['used' => ['Disk used', $usedText, $usedTip],
+                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%) on the disk lowest on room. Press to see what the gallery takes instead']];
         $lines = null;
-        if (count($vols) > 1) { $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), health_bytes(max(0.0, $v['total'] - $v['free']))]; }
-        $out[] = ['Disk used', health_bytes($used0), $lines, null, $disk['used'][2], '', $disk];
+        if (count($vols) > 1) {
+            $lines = [];
+            foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), '…'];
+        }
+        $out[] = ['Disk used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
     }
     $hasLog = visitlog_find() !== null && visitlog_driver_ok();
     if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
@@ -18493,8 +18538,8 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[3] . ' used, ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
-      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h"><?= count($si[2]) ?> disks, the lowest on room first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[3]) ?></b> used, <b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-files="<?= (int) ($si[7] ?? 0) ?>" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[3] . ' in the gallery, ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h"><?= count($si[2]) ?> disks, the lowest on room first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b class="hs-gal"><?= $esc($l[3]) ?></b> in the gallery, <b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -21795,7 +21840,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
             const open = panel.classList.contains('show-all');
             panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
-            if (window.__healthDisk) window.__healthDisk(panel);   // (the disk card goes back to the side this browser chose)
+            if (window.__healthDisk) window.__healthDisk(panel, true);   // (the disk card goes back to the side this browser chose, and what the gallery takes is counted again: Check again was asked for)
             if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
           })
           .catch(function () { location.reload(); });
@@ -23832,16 +23877,45 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
       if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
     });
-    // The disk card shows the space used to start with; a press turns it over to the space free, and back. The choice is kept in this browser (nothing is sent anywhere).
+    // The disk card shows what the gallery's photos and videos take to start with; a press turns it over to the space free on the disk, and back. The choice is kept in this browser
+    // (nothing is sent anywhere). What the gallery takes is counted by the server on request, not while the page is drawn (on a network disk that is a round trip per file): the card is
+    // drawn with "…", filled in from what this browser remembers (with the time it was counted), and counted again only when that is a day old, when the number of files in the gallery
+    // has changed, or when Check again is pressed.
     (function () {
-      var KEY = 'galleryHealthDisk';
+      var KEY = 'galleryHealthDisk', FIG = 'galleryMediaSize', DAY = 86400, busy = false;
       function mode() { try { return localStorage.getItem(KEY) === 'free' ? 'free' : 'used'; } catch (e) { return 'used'; } }
       function paintDisk(btn, m) {
         var d; try { d = JSON.parse(btn.getAttribute('data-disk')); } catch (e) { return; }
         var x = d && d[m]; if (!x) return;
         btn.setAttribute('data-disk-mode', m); btn.querySelector('b').textContent = x[1]; btn.querySelector('small').textContent = x[0]; btn.title = x[2];
       }
-      window.__healthDisk = function (root) { [].forEach.call((root || document).querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); }); };
+      function ago(at) { var s = Math.max(0, Math.round(Date.now() / 1000 - at)); return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' minutes ago' : s < 129600 ? Math.round(s / 3600) + ' hours ago' : Math.round(s / 86400) + ' days ago'; }
+      function readFig() { try { var f = JSON.parse(localStorage.getItem(FIG) || 'null'); return f && f.used && f.at ? f : null; } catch (e) { return null; } }
+      function apply(root, f) {   // the figures put into the card (for what the gallery takes) and into the list of disks
+        [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) {
+          var d; try { d = JSON.parse(b.getAttribute('data-disk')); } catch (e) { return; }
+          d.used = [f.used[0], f.used[1], f.used[2].replace(/\. Press to see the free space instead$/, '') + '; counted ' + ago(f.at) + '. Press to see the free space instead'];
+          b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
+        });
+        [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
+      }
+      function count(root, panel) {
+        if (busy || !panel) return; busy = true;
+        var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_media_size');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { busy = false; if (!j || !j.ok || !j.used) return; try { localStorage.setItem(FIG, JSON.stringify({ at: j.at, files: j.files, used: j.used, vols: j.vols })); } catch (e) {} apply(document, { at: j.at, used: j.used, vols: j.vols }); })
+          .catch(function () { busy = false; });
+      }
+      // root: where the cards are; force: count again whatever is remembered (Check again)
+      window.__healthDisk = function (root, force) {
+        root = root || document;
+        [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); });
+        var card = root.querySelector('.hs-disk'); if (!card) return;
+        var panel = document.getElementById('health-panel'), f = readFig(), files = card.getAttribute('data-files');
+        if (f) apply(root, f);   // (what was counted last, with its age, while a new count is made if one is due)
+        if (force || !f || String(f.files) !== String(files) || Date.now() / 1000 - f.at >= DAY) count(root, panel);
+      };
       document.addEventListener('click', function (e) {
         var b = e.target.closest ? e.target.closest('.hs-disk') : null; if (!b) return;
         var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';

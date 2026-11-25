@@ -5386,19 +5386,47 @@ try:
         d0 = b.js("(() => { const p = " + HP + "; return {label: p.querySelector('.ht-label').textContent, strip: [...p.querySelectorAll('.health-strip .hs-t small')].map(x => x.textContent), acts: [...p.querySelectorAll('[data-backup-act]')].map(x => x.dataset.backupAct), sugg: !!p.querySelector('.health-sugg-n')}; })()")
         ok(d0["label"] == "Details" and "Backup" in d0["strip"] and "Photos" in d0["strip"] and d0["acts"] == ["run", "download"] and d0["sugg"], "[dashboard] the fold button says Details, the numbers strip is there (photos, backup...), and the backup row has Back up now and Download", str(d0))
         shot(b, "60-health-dashboard")
-        # the disk card shows the used space to start with, turns over to the free space when pressed, and the choice is remembered (also through Check again)
-        dk = lambda: b.js("(() => { const p = " + HP + "; const d = p.querySelector('.hs-disk'); return d ? {label: d.querySelector('small').textContent, value: d.querySelector('b').textContent, mode: d.dataset.diskMode, title: d.title} : null; })()")
+        # the disk card: what the gallery's media take (counted by the server on request, after the page is up, and remembered), turned over to the free space when pressed
+        dk = lambda: b.js("(() => { const p = " + HP + "; const d = p.querySelector('.hs-disk'); return d ? {label: d.querySelector('small').textContent, value: d.querySelector('b').textContent, mode: d.dataset.diskMode, title: d.title, files: d.dataset.files} : null; })()")
+        def dk_wait(cond, secs=8.0):
+            end_ = time.time() + secs
+            while time.time() < end_:
+                v = dk()
+                if v and cond(v): return v
+                b.drain(0.2)
+            return dk()
+        fig = lambda: b.js("(() => { try { return JSON.parse(localStorage.getItem('galleryMediaSize')); } catch (e) { return null; } })()")
+        b.js("localStorage.removeItem('galleryMediaSize'); localStorage.removeItem('galleryHealthDisk')")
+        b.goto(BK + "/?admin&classic=1", 1.5); b.js("adminGoTo('site')")
+        dk0 = dk_wait(lambda v: v["value"] != "…")
+        ok(dk0 is not None and dk0["label"] == "Disk used" and dk0["mode"] == "used" and dk0["value"] not in ("", "…") and "take" in dk0["title"] and "files" in dk0["title"] and "counted" in dk0["title"], "[disk card] the page is drawn with a placeholder, and the card then fills in with what the gallery's photos and videos take (a tooltip with how many files and when they were counted)", str(dk0))
+        f0 = fig()
+        ok(f0 is not None and f0["files"] == int(dk0["files"]) and f0["used"][1] == dk0["value"], "[disk card] ...and the browser remembers the figure, the number of files and the time", str(f0))
+        # an ordinary visit does not count again: a remembered figure for this many files, counted a moment ago, stays as it is (a made-up one, so a recount would show)
+        b.js("(() => { const f = JSON.parse(localStorage.getItem('galleryMediaSize')); f.used[1] = 'FAKE 1 KB'; f.at = Math.floor(Date.now() / 1000); localStorage.setItem('galleryMediaSize', JSON.stringify(f)); })()")
+        b.goto(BK + "/?admin&classic=1", 1.5); b.js("adminGoTo('site')"); b.drain(2.5)
+        ok(dk()["value"] == "FAKE 1 KB", "[disk card] another visit shows what is remembered at once and does not count again (no counting on every admin page load)", str(dk()))
+        # a figure more than a day old is counted again
+        b.js("(() => { const f = JSON.parse(localStorage.getItem('galleryMediaSize')); f.at = Math.floor(Date.now() / 1000) - 2 * 86400; localStorage.setItem('galleryMediaSize', JSON.stringify(f)); })()")
+        b.goto(BK + "/?admin&classic=1", 1.5); b.js("adminGoTo('site')")
+        ok(dk_wait(lambda v: v["value"] != "FAKE 1 KB")["value"] != "FAKE 1 KB", "[disk card] a remembered figure more than a day old is counted again")
+        # so is one for a different number of files (something was added or removed)
+        b.js("(() => { const f = JSON.parse(localStorage.getItem('galleryMediaSize')); f.used[1] = 'FAKE 2 KB'; f.files = f.files + 7; f.at = Math.floor(Date.now() / 1000); localStorage.setItem('galleryMediaSize', JSON.stringify(f)); })()")
+        b.goto(BK + "/?admin&classic=1", 1.5); b.js("adminGoTo('site')")
+        ok(dk_wait(lambda v: v["value"] != "FAKE 2 KB")["value"] != "FAKE 2 KB", "[disk card] a remembered figure for a different number of files is counted again")
+        # turned over
         dk0 = dk()
-        ok(dk0 is not None and dk0["label"] == "Disk used" and dk0["mode"] == "used" and "used of" in dk0["title"] and dk0["value"] != "", "[disk card] the numbers strip has one disk card that shows the space USED to start with, and its tooltip says how much of the disk that is", str(dk0))
         b.js("document.querySelector('.hs-disk').click()"); b.drain(0.3)
         dk1 = dk()
-        ok(dk1["label"] == "Disk free" and dk1["mode"] == "free" and "free of" in dk1["title"] and dk1["value"] != dk0["value"], "[disk card] pressing it turns it over to the space FREE (a different figure, labelled Disk free)", str(dk1))
+        ok(dk1["label"] == "Disk free" and dk1["mode"] == "free" and "free of" in dk1["title"] and dk1["value"] != dk0["value"], "[disk card] pressing it turns it over to the space FREE on the disk (a different figure, labelled Disk free)", str(dk1))
         b.goto(BK + "/?admin&classic=1", 1.5); b.js("adminGoTo('site')"); b.drain(0.6)
         ok(dk()["label"] == "Disk free", "[disk card] ...and the choice is still there after the page is loaded again")
+        # Check again counts again, and keeps the side chosen
+        b.js("(() => { const f = JSON.parse(localStorage.getItem('galleryMediaSize')); f.used[1] = 'FAKE 3 KB'; f.at = Math.floor(Date.now() / 1000); localStorage.setItem('galleryMediaSize', JSON.stringify(f)); })()")
         b.js("document.querySelector('[data-health-refresh]').click()"); b.drain(2.5)
         ok(dk() is not None and dk()["label"] == "Disk free", "[disk card] ...and after Check again draws the panel anew")
         b.js("document.querySelector('.hs-disk').click()"); b.drain(0.3)
-        ok(dk()["label"] == "Disk used" and dk()["value"] == dk0["value"], "[disk card] pressing it again goes back to the used space (the same figure as at the start)", str(dk()))
+        ok(dk_wait(lambda v: v["value"] != "FAKE 3 KB")["value"] not in ("FAKE 3 KB", "…") and dk()["label"] == "Disk used", "[disk card] pressing it again goes back to what the gallery takes, and Check again has counted it afresh (the remembered made-up figure is gone)", str(dk()))
         # the backup holds password hashes and the install secret: the browser asks for its address the way a stranger would. This test server has no rule refusing .gallery- files, so it must say so.
         ok(kwait(krow("The backup can't be fetched") + " && " + krow("The backup can't be fetched") + ".textContent.includes(\"Anyone who finds the backup's address can download it\")", 10) and b.js(krow("The backup can't be fetched") + ".classList.contains('loud')"), "[dashboard] the backup's address is tested from the browser: with no server rule refusing .gallery- files the row is loud and says anyone who finds the address can download it", b.js("(() => { const r = " + krow("The backup can't be fetched") + "; return r ? r.textContent.replace(/\\s+/g, ' ').slice(0, 300) : 'no row'; })()"))
         # ...and the fix is right in the row: a "How to fix" fold with the nginx and Apache rules, shown only because the test failed (and its Copy button works from the page)

@@ -461,7 +461,7 @@
             const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
             const open = panel.classList.contains('show-all');
             panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
-            if (window.__healthDisk) window.__healthDisk(panel);   // (the disk card goes back to the side this browser chose)
+            if (window.__healthDisk) window.__healthDisk(panel, true);   // (the disk card goes back to the side this browser chose, and what the gallery takes is counted again: Check again was asked for)
             if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
           })
           .catch(function () { location.reload(); });
@@ -2498,16 +2498,45 @@
       var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
       if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
     });
-    // The disk card shows the space used to start with; a press turns it over to the space free, and back. The choice is kept in this browser (nothing is sent anywhere).
+    // The disk card shows what the gallery's photos and videos take to start with; a press turns it over to the space free on the disk, and back. The choice is kept in this browser
+    // (nothing is sent anywhere). What the gallery takes is counted by the server on request, not while the page is drawn (on a network disk that is a round trip per file): the card is
+    // drawn with "…", filled in from what this browser remembers (with the time it was counted), and counted again only when that is a day old, when the number of files in the gallery
+    // has changed, or when Check again is pressed.
     (function () {
-      var KEY = 'galleryHealthDisk';
+      var KEY = 'galleryHealthDisk', FIG = 'galleryMediaSize', DAY = 86400, busy = false;
       function mode() { try { return localStorage.getItem(KEY) === 'free' ? 'free' : 'used'; } catch (e) { return 'used'; } }
       function paintDisk(btn, m) {
         var d; try { d = JSON.parse(btn.getAttribute('data-disk')); } catch (e) { return; }
         var x = d && d[m]; if (!x) return;
         btn.setAttribute('data-disk-mode', m); btn.querySelector('b').textContent = x[1]; btn.querySelector('small').textContent = x[0]; btn.title = x[2];
       }
-      window.__healthDisk = function (root) { [].forEach.call((root || document).querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); }); };
+      function ago(at) { var s = Math.max(0, Math.round(Date.now() / 1000 - at)); return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' minutes ago' : s < 129600 ? Math.round(s / 3600) + ' hours ago' : Math.round(s / 86400) + ' days ago'; }
+      function readFig() { try { var f = JSON.parse(localStorage.getItem(FIG) || 'null'); return f && f.used && f.at ? f : null; } catch (e) { return null; } }
+      function apply(root, f) {   // the figures put into the card (for what the gallery takes) and into the list of disks
+        [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) {
+          var d; try { d = JSON.parse(b.getAttribute('data-disk')); } catch (e) { return; }
+          d.used = [f.used[0], f.used[1], f.used[2].replace(/\. Press to see the free space instead$/, '') + '; counted ' + ago(f.at) + '. Press to see the free space instead'];
+          b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
+        });
+        [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
+      }
+      function count(root, panel) {
+        if (busy || !panel) return; busy = true;
+        var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_media_size');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { busy = false; if (!j || !j.ok || !j.used) return; try { localStorage.setItem(FIG, JSON.stringify({ at: j.at, files: j.files, used: j.used, vols: j.vols })); } catch (e) {} apply(document, { at: j.at, used: j.used, vols: j.vols }); })
+          .catch(function () { busy = false; });
+      }
+      // root: where the cards are; force: count again whatever is remembered (Check again)
+      window.__healthDisk = function (root, force) {
+        root = root || document;
+        [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); });
+        var card = root.querySelector('.hs-disk'); if (!card) return;
+        var panel = document.getElementById('health-panel'), f = readFig(), files = card.getAttribute('data-files');
+        if (f) apply(root, f);   // (what was counted last, with its age, while a new count is made if one is due)
+        if (force || !f || String(f.files) !== String(files) || Date.now() / 1000 - f.at >= DAY) count(root, panel);
+      };
       document.addEventListener('click', function (e) {
         var b = e.target.closest ? e.target.closest('.hs-disk') : null; if (!b) return;
         var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';

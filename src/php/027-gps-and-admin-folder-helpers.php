@@ -665,6 +665,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
 
+    // What the photos and videos in the gallery take on their disks, for the Health check's disk card: counted here, on request, not while the admin page is drawn (it can be slow).
+    if ($action === 'health_media_size') {
+        session_write_close();   // (a long count must not hold up the admin's other requests)
+        admin_json_exit(['ok' => true, 'text' => ''] + health_media_figures($dir, $files));
+    }
+
     // What the gallery knows and doesn't know about each folder's files (Prepare media's list).
     if ($action === 'media_report') {
         session_write_close();

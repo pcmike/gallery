@@ -298,7 +298,7 @@ function health_volumes($dir, $files) {
         if (!isset($by[$key])) {
             $free = @disk_free_space($p); $tot = @disk_total_space($p);
             if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
-            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false];
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key]];
         }
         if ($by[$key] === false) continue;
         if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
@@ -309,13 +309,45 @@ function health_volumes($dir, $files) {
         if (!$v) continue;
         $isHome = in_array('the gallery folder', $v['names'], true);
         $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
-        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
+        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs']];
     }
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
-    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; } else $uniq[$k] = $v; }
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); } else $uniq[$k] = $v; }
     $out = array_values($uniq);
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
+}
+
+/** How much room the gallery's own photos and videos take: every media file the gallery shows (a mapped folder's too), added up from the room each file takes on its disk (what
+ *  `du` reports, read without running a program), not from how full the disk is. [bytes, files counted, files in all, bytes by device, whether all were counted]. A very big gallery or a slow disk cuts the count short after about two
+ *  seconds (the figure is then "at least"). */
+function health_media_size($dir, $files, $budget = 8.0) {
+    static $cache = [];
+    $ck = rtrim((string) $dir, '/') . '|' . count((array) $files);
+    if (isset($cache[$ck])) return $cache[$ck];
+    $total = 0.0; $n = 0; $byDev = []; $t0 = microtime(true); $all = count((array) $files); $complete = true;
+    foreach ((array) $files as $f) {
+        if (($n % 200) === 0 && microtime(true) - $t0 > $budget) { $complete = false; break; }
+        $n++;
+        $st = @stat(resolve_real_path($dir, (string) $f)); if (!$st) continue;
+        // The room the file takes on the disk (the blocks it is given, which is what `du` adds up), not how long it is: a few KB more for a small file, less on a disk that compresses.
+        // A disk that does not say (no block count, or none for a file that is not empty) is measured by the file's length.
+        $size = isset($st['blocks']) && $st['blocks'] > 0 ? (float) $st['blocks'] * 512 : (float) $st['size'];
+        $total += $size; $dev = (string) $st['dev']; $byDev[$dev] = ($byDev[$dev] ?? 0.0) + $size;
+    }
+    return $cache[$ck] = ['bytes' => $total, 'counted' => $n, 'files' => $all, 'byDev' => $byDev, 'complete' => $complete];
+}
+
+/** What the disk card and the list of disks show for "what the gallery takes": the card's [label, figure, tooltip] and, for each disk of the list in its order, the figure for that
+ *  disk. Counting every file can be slow (a network disk, a big gallery), so the page never does it while it is drawn: it asks for this once it is up, and keeps the answer. */
+function health_media_figures($dir, $files) {
+    $ms = health_media_size($dir, $files);
+    $text = health_bytes($ms['bytes']) . ($ms['complete'] ? '' : '+');
+    $tip = $ms['complete'] ? 'The photos and videos in the gallery take ' . $text . ' (' . number_format($ms['counted']) . ' file' . ($ms['counted'] === 1 ? '' : 's') . ')'
+        : 'The photos and videos in the gallery take at least ' . health_bytes($ms['bytes']) . ' (counted ' . number_format($ms['counted']) . ' of ' . number_format($ms['files']) . ' files, then stopped: it is a big gallery or a slow disk)';
+    $vols = [];
+    foreach (health_volumes($dir, $files) as $v) { $mine = 0.0; foreach ($v['devs'] as $dv) $mine += $ms['byDev'][$dv] ?? 0.0; $vols[] = health_bytes($mine); }
+    return ['used' => ['Disk used', $text, $tip . '. Press to see the free space instead'], 'vols' => count($vols) > 1 ? $vols : [], 'files' => (int) $ms['files'], 'at' => time()];
 }
 
 /** A "How to fix" fold for a row that needs a change on the server (something the gallery can't do from its own folder). $steps: a list of lines, each a text (`like this` is
@@ -397,14 +429,21 @@ function health_strip($dir, $files) {
     $out[] = ['Folders', number_format($folders)];
     $vols = health_volumes($dir, $files);
     if ($vols) {
-        // One card for the disk, with the room taken and the room left: it shows the used space to start with and a press turns it over to the free space (the page remembers the choice).
-        // The figures are the lowest-on-room disk's. With more than one disk a second small card opens the list of them all.
-        $v0 = $vols[0]; $used0 = max(0.0, $v0['total'] - $v0['free']); $usedPct = $v0['total'] > 0 ? (int) round($used0 / $v0['total'] * 100) : 0;
-        $disk = ['used' => ['Disk used', health_bytes($used0), health_bytes($used0) . ' used of ' . health_bytes($v0['total']) . ' (' . $usedPct . '%). Press to see the free space instead'],
-                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%). Press to see the used space instead']];
+        // One card for the disk, with the room the gallery's photos and videos take and the room left: it shows what the gallery takes to start with and a press turns it over to the
+        // free space on the disk lowest on room (the page remembers the choice). "Used" is the gallery's own, added up from its files, not how full the disk is (that has the
+        // operating system and everything else on it). Adding up every file is not something to do each time the admin is drawn (on a network disk it is a round trip per file), so the
+        // page draws a placeholder here and the browser asks for the figure after it is up, keeping the answer (see health_media_figures). With more than one disk a second small card
+        // opens the list of them all.
+        $v0 = $vols[0];
+        $usedText = '…'; $usedTip = 'Counting what the photos and videos in the gallery take. Press to see the free space instead';
+        $disk = ['used' => ['Disk used', $usedText, $usedTip],
+                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%) on the disk lowest on room. Press to see what the gallery takes instead']];
         $lines = null;
-        if (count($vols) > 1) { $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), health_bytes(max(0.0, $v['total'] - $v['free']))]; }
-        $out[] = ['Disk used', health_bytes($used0), $lines, null, $disk['used'][2], '', $disk];
+        if (count($vols) > 1) {
+            $lines = [];
+            foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), '…'];
+        }
+        $out[] = ['Disk used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
     }
     $hasLog = visitlog_find() !== null && visitlog_driver_ok();
     if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
