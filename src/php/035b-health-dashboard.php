@@ -396,10 +396,15 @@ function health_strip($dir, $files) {
     if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
     $out[] = ['Folders', number_format($folders)];
     $vols = health_volumes($dir, $files);
-    if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
-    elseif ($vols) {
-        $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
-        $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
+    if ($vols) {
+        // One card for the disk, with the room taken and the room left: it shows the used space to start with and a press turns it over to the free space (the page remembers the choice).
+        // The figures are the lowest-on-room disk's. With more than one disk a second small card opens the list of them all.
+        $v0 = $vols[0]; $used0 = max(0.0, $v0['total'] - $v0['free']); $usedPct = $v0['total'] > 0 ? (int) round($used0 / $v0['total'] * 100) : 0;
+        $disk = ['used' => ['Disk used', health_bytes($used0), health_bytes($used0) . ' used of ' . health_bytes($v0['total']) . ' (' . $usedPct . '%). Press to see the free space instead'],
+                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%). Press to see the used space instead']];
+        $lines = null;
+        if (count($vols) > 1) { $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), health_bytes(max(0.0, $v['total'] - $v['free']))]; }
+        $out[] = ['Disk used', health_bytes($used0), $lines, null, $disk['used'][2], '', $disk];
     }
     $hasLog = visitlog_find() !== null && visitlog_driver_ok();
     if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];

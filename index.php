@@ -18409,10 +18409,15 @@ function health_strip($dir, $files) {
     if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
     $out[] = ['Folders', number_format($folders)];
     $vols = health_volumes($dir, $files);
-    if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
-    elseif ($vols) {
-        $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
-        $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
+    if ($vols) {
+        // One card for the disk, with the room taken and the room left: it shows the used space to start with and a press turns it over to the free space (the page remembers the choice).
+        // The figures are the lowest-on-room disk's. With more than one disk a second small card opens the list of them all.
+        $v0 = $vols[0]; $used0 = max(0.0, $v0['total'] - $v0['free']); $usedPct = $v0['total'] > 0 ? (int) round($used0 / $v0['total'] * 100) : 0;
+        $disk = ['used' => ['Disk used', health_bytes($used0), health_bytes($used0) . ' used of ' . health_bytes($v0['total']) . ' (' . $usedPct . '%). Press to see the free space instead'],
+                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%). Press to see the used space instead']];
+        $lines = null;
+        if (count($vols) > 1) { $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), health_bytes(max(0.0, $v['total'] - $v['free']))]; }
+        $out[] = ['Disk used', health_bytes($used0), $lines, null, $disk['used'][2], '', $disk];
     }
     $hasLog = visitlog_find() !== null && visitlog_driver_ok();
     if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
@@ -18488,8 +18493,8 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
-      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h">Free space on <?= count($si[2]) ?> disks, the lowest first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[3] . ' used, ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h"><?= count($si[2]) ?> disks, the lowest on room first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[3]) ?></b> used, <b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -21790,6 +21795,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
             const open = panel.classList.contains('show-all');
             panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
+            if (window.__healthDisk) window.__healthDisk(panel);   // (the disk card goes back to the side this browser chose)
             if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
           })
           .catch(function () { location.reload(); });
@@ -23826,6 +23832,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
       if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
     });
+    // The disk card shows the space used to start with; a press turns it over to the space free, and back. The choice is kept in this browser (nothing is sent anywhere).
+    (function () {
+      var KEY = 'galleryHealthDisk';
+      function mode() { try { return localStorage.getItem(KEY) === 'free' ? 'free' : 'used'; } catch (e) { return 'used'; } }
+      function paintDisk(btn, m) {
+        var d; try { d = JSON.parse(btn.getAttribute('data-disk')); } catch (e) { return; }
+        var x = d && d[m]; if (!x) return;
+        btn.setAttribute('data-disk-mode', m); btn.querySelector('b').textContent = x[1]; btn.querySelector('small').textContent = x[0]; btn.title = x[2];
+      }
+      window.__healthDisk = function (root) { [].forEach.call((root || document).querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); }); };
+      document.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('.hs-disk') : null; if (!b) return;
+        var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';
+        try { localStorage.setItem(KEY, m); } catch (x) {}
+        [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
+      });
+      window.__healthDisk();
+    })();
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
       var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;

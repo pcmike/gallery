@@ -461,6 +461,7 @@
             const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
             const open = panel.classList.contains('show-all');
             panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
+            if (window.__healthDisk) window.__healthDisk(panel);   // (the disk card goes back to the side this browser chose)
             if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
           })
           .catch(function () { location.reload(); });
@@ -2497,6 +2498,24 @@
       var bb = panel.querySelector('[data-backup-act="run"]'), row = bb && bb.closest('.health-row');
       if (row) setTimeout(function () { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('hs-flash'); setTimeout(function () { row.classList.remove('hs-flash'); }, 1800); }, 80);
     });
+    // The disk card shows the space used to start with; a press turns it over to the space free, and back. The choice is kept in this browser (nothing is sent anywhere).
+    (function () {
+      var KEY = 'galleryHealthDisk';
+      function mode() { try { return localStorage.getItem(KEY) === 'free' ? 'free' : 'used'; } catch (e) { return 'used'; } }
+      function paintDisk(btn, m) {
+        var d; try { d = JSON.parse(btn.getAttribute('data-disk')); } catch (e) { return; }
+        var x = d && d[m]; if (!x) return;
+        btn.setAttribute('data-disk-mode', m); btn.querySelector('b').textContent = x[1]; btn.querySelector('small').textContent = x[0]; btn.title = x[2];
+      }
+      window.__healthDisk = function (root) { [].forEach.call((root || document).querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); }); };
+      document.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('.hs-disk') : null; if (!b) return;
+        var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';
+        try { localStorage.setItem(KEY, m); } catch (x) {}
+        [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
+      });
+      window.__healthDisk();
+    })();
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
       var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
