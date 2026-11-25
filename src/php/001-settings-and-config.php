@@ -545,7 +545,7 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
-// What the viewer's info panel may say about a photo (Settings, Metadata). The panel itself is off for the whole gallery until INFO_PANEL is on; then a folder opts in to the panel (its own "Show photo
+// What the viewer's info panel may say about a photo (Settings, Media metadata). The panel itself is off for the whole gallery until INFO_PANEL is on; then a folder opts in to the panel (its own "Show photo
 // info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
 // start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
 // Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.

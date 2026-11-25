@@ -31,6 +31,15 @@ function folder_flag_resolve($dir, $folderRel, $key, $reset = false) {
     return $cache[$ck] = ['on' => false, 'own' => null, 'from' => null];
 }
 
+/** What a folder would get for a switch if it had no choice of its own: the nearest folder above it that has one (the gallery's own folder, the Root, counts), else off. The
+ *  Root has nothing above it. A switch that is set to this value stores nothing and follows instead: an explicit choice is kept only where it differs. */
+function folder_flag_inherited($dir, $folderRel, $key) {
+    $folderRel = (string) $folderRel;
+    if ($folderRel === '') return ['on' => false, 'own' => null, 'from' => null];
+    $parent = dirname($folderRel); $parent = $parent === '.' ? '' : $parent;
+    return folder_flag_resolve($dir, $parent, $key);
+}
+
 function folder_location_on($dir, $folderRel) { return folder_flag_resolve($dir, $folderRel, 'locationEnabled')['on']; }
 function folder_info_on($dir, $folderRel) { return folder_flag_resolve($dir, $folderRel, 'mediaInfo')['on']; }
 

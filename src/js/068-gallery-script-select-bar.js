@@ -266,6 +266,6 @@
     const $ = function (id) { return document.getElementById(id); };
     const f = { caption: $('lbe-caption'), web: $('lbe-web'), lat: $('lbe-lat'), lng: $('lbe-lng'), label: $('lbe-label') };
     const pills = { priv: $('lbe-private'), loc: $('lbe-loc'), cover: $('lbe-cover') };
-    const statusEl = $('lbe-status'), nameEl = $('lbe-name'), noteEl = $('lbe-note'), webErr = $('lbe-web-err'), locErr = $('lbe-loc-err');
+    const statusEl = $('lbe-status'), nameEl = $('lbe-name'), noteEl = $('lbe-note'), noteLocEl = $('lbe-note-loc'), webErr = $('lbe-web-err'), locErr = $('lbe-loc-err');
     const autoHint = $('lbe-autohint'), locRow = $('lbe-locrow'), locSum = $('lbe-locsum'), hideKb = $('lbe-hidekb'), toolBtn = $('lightbox-edit');
     const sheetMq = window.matchMedia ? window.matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse) and (orientation: portrait)') : { matches: false };

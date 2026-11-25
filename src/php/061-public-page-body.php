@@ -616,6 +616,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <button type="button" class="lbe-pill" id="lbe-cover" aria-pressed="false" title="Make this the folder's cover photo"><?= ui_icon('star') ?> Cover</button>
       </div>
       <p class="lbe-note" id="lbe-note" hidden></p>
+      <p class="lbe-note lbe-note-loc" id="lbe-note-loc" hidden></p>
       <div class="lbe-loc">
         <button type="button" class="lbe-locrow" id="lbe-locrow" aria-expanded="false"><?= ui_icon('pin') ?><span id="lbe-locsum">No location</span><span class="lbe-chev"><?= ui_icon('chev-down') ?></span></button>
         <div class="lbe-locfields">

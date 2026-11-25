@@ -480,6 +480,8 @@
   @media (hover: hover) { .lbe-pill:hover:not(:disabled) { border-color: #6b77f0; } .lbe-pill[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); } }
   .lbe-note { margin: -4px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
   .lbe-note[hidden] { display: none; }
+  .lbe-pill.is-following { border-style: dashed; border-width: 1.5px; border-color: #7a7a8a; }   /* (a location switch that follows its folder: dashed, as every inherited choice is) */
+  .lbe-note-loc .linklike { background: none; border: 0; padding: 0; font: inherit; color: #aab2ff; cursor: pointer; text-decoration: underline; }
   .lbe-locrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
   .lbe-locrow .ico { flex: none; color: #aab2ff; }
   .lbe-locrow #lbe-locsum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }

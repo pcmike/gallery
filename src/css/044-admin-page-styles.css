@@ -865,6 +865,9 @@
   .switch input:checked + .slider { background:var(--accent); }
   .switch input:checked + .slider::before { transform:translateX(18px); }
   .switch input:focus-visible + .slider { outline:2px solid #fff; outline-offset:2px; }
+  /* A switch that follows the folder above (nothing of its own): drawn with a dotted edge, as the Who-can-see buttons are dashed when they follow; a choice of its own is solid. */
+  .switch.following .slider { box-sizing:border-box; border:2px dashed rgba(255,255,255,.75); }
+  .switch.following .slider::before { left:1px; top:1px; }
   @media (max-width: 800px) {
     .admin-main .site-row { grid-template-columns:1fr; }
     .admin-main .site-row .ctl { justify-content:flex-start; }
@@ -1071,7 +1074,7 @@
   .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
   .flat-choice { min-width:0; }
   .flat-choice > label { display:block; margin:0 0 6px; }
-  .seg-site > label.site span { border-color:#5865f2; background:rgba(88,101,242,0.16); color:#d4d8ff; }
+  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
   .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
   .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
   .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
@@ -1239,7 +1242,10 @@
   .site-more > summary { cursor:pointer; padding:9px 0; color:var(--text); }
   .site-dim { opacity:.5; }   /* (the main Info panel switch is off: the field switches can be looked at but not changed) */
   .site-dim .switch { cursor:not-allowed; }
+  .seg-src { margin:4px 0 0; flex-basis:100%; }
+  .seg-src[data-own="0"] .src-own, .seg-src[data-own="1"] .src-follow { display:none; }
   .flag-source { margin:-2px 0 10px; }
+  .instant-row + .flag-source { margin-top:6px; }   /* (the line that says where a switch is taken from, right under its switch: a little room, as it has under a warning) */
   .info-under.no-info .instant-row, .info-under.no-info .flag-source, .info-under.no-info .hint { opacity:.55; }   /* (the info panel is off for the whole gallery: the folder's choice can still be made, but nothing shows yet) */
   .info-under { margin:2px 0 18px; }
 

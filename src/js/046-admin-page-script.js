@@ -865,6 +865,14 @@
   });
   // Settings that are a single switch or number save the moment they change, in place: the control, the little status
   // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
+  // After a switch that follows the folder above was pressed: it is drawn dotted while it follows (and solid once it has a choice of its own), and the line under it, which says where
+  // it comes from, is drawn again (a choice equal to what the folder above gives is not kept: the switch goes back to following by itself).
+  function applyFlag(form, el, flag) {
+    var sw = el.closest('.switch'); if (sw) sw.classList.toggle('following', !!flag.following);
+    if (el.type === 'checkbox') el.checked = !!flag.on;
+    var old = form.querySelector('.flag-source') || (form.nextElementSibling && form.nextElementSibling.classList.contains('flag-source') ? form.nextElementSibling : null);
+    if (old && flag.html) { var t = document.createElement('div'); t.innerHTML = flag.html; if (t.firstElementChild) old.replaceWith(t.firstElementChild); }
+  }
   [].forEach.call(document.querySelectorAll('.instant-form, .unlisted-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, action = form.querySelector('input[name=action]').value;
@@ -890,7 +898,7 @@
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
-            if (j.ok) { if (j.label && isBox) { var lab = el.closest('.instant-row').querySelector('.instant-label'); if (lab) lab.textContent = j.label; } say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
+            if (j.ok) { if (j.label && isBox) { var lab = el.closest('.instant-row').querySelector('.instant-label'); if (lab) lab.textContent = j.label; } say(node, j.text, 'ok'); if (j.flag) applyFlag(form, el, j.flag); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
             else { say(node, j.text, 'err'); revert(); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); revert(); });
@@ -943,7 +951,10 @@
       if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
     }
     [].forEach.call(form.querySelectorAll('.seg-site input[type=radio]'), function (r) {
-      r.addEventListener('change', function () { flatSync(); post([[r.name, r.value]], stateOf(r)); });
+      r.addEventListener('change', function () {
+        flatSync(); post([[r.name, r.value]], stateOf(r));
+        var src = r.closest('.flat-choice') && r.closest('.flat-choice').querySelector('.seg-src'); if (src) src.setAttribute('data-own', r.value === '' ? '0' : '1');   // (the line under it: Settings' choice, or this folder's own)
+      });
     });
     [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
       var saved = el.value, timer = 0;
@@ -2116,16 +2127,26 @@
   });
   // "Use the folder above's choice": the folder drops its own choice for a switch it can take from the folder above it. The screen is drawn again, because
   // the switch's state, and the words under it, now come from somewhere else.
-  [].forEach.call(document.querySelectorAll('[data-flag-inherit]'), function (btn) {
-    btn.addEventListener('click', function () {
-      var body = new URLSearchParams();
-      body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
-      btn.disabled = true;
-      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
-        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
-        .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
-        .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
-    });
+  document.addEventListener('click', function (e) {   // (delegated: the line with the button is drawn again after a switch is pressed)
+    var btn = e.target.closest ? e.target.closest('[data-flag-inherit]') : null; if (!btn || btn.disabled) return;
+    var body = new URLSearchParams();
+    body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
+    btn.disabled = true;
+    fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+      .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+      .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
+  });
+  document.addEventListener('click', function (e) {   // "Keep it off here": a switch that follows "off" is kept off for this folder, whatever the folder above chooses later
+    var btn = e.target.closest ? e.target.closest('[data-flag-pin]') : null; if (!btn || btn.disabled) return;
+    var p = btn.closest('.flag-source'), form = p && (p.closest('form') || p.previousElementSibling), el = form && form.querySelector('input[type=checkbox]');
+    var body = new URLSearchParams();
+    body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'pin');
+    btn.disabled = true;
+    fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+      .then(function (res) { if (res.ok) { window.__siteDirty = true; if (res.flag && el && form) applyFlag(form, el, res.flag); else location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+      .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
   });
   // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
   // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
@@ -2256,7 +2277,7 @@
       if (!tag) return;
       var custom = false;
       [].forEach.call(det.querySelectorAll('input[type=radio]:checked'), function (r) { if (r.value !== '') custom = true; });
-      tag.innerHTML = custom ? '&middot; custom' : '&middot; the site\'s order';
+      tag.innerHTML = custom ? '&middot; this folder\'s own order' : '&middot; taken from Settings';
     }
     [].forEach.call(det_radios(), function (r) { r.addEventListener('change', label); });
     function det_radios() { var det = box.closest('details'); return det ? det.querySelectorAll('.sort-row input[type=radio]') : []; }

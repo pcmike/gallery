@@ -74,19 +74,55 @@ function map_point_link($file, $groupKey, $folderGroupKeys) {
  *  of its own photos on its page (and has its own ?map&folder= page). Stored
  *  with the folder like its location switch. The root keeps the behaviour it
  *  always had, so it is on unless switched off; a folder starts off, since
- *  turning one on makes its page load a third-party map. */
+ *  turning one on makes its page load a third-party map. A folder with no choice of its own takes the nearest folder above it that has one (folder_map_resolve). */
 function folder_map_enabled($dir, $folderPath) {
-    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
-    $v = $data['mapEnabled'] ?? null;
-    return $folderPath === null ? $v !== false : $v === true;
+    if ($folderPath === null) return (items_read($dir)['mapEnabled'] ?? null) !== false;
+    return folder_map_resolve($dir, $folderPath)['on'];
+}
+
+/** What a folder's map switch comes to: ['on', 'own' => this folder's own choice (true, false) or null when it takes the one above, 'from' => the folder the choice
+ *  came from or null when no folder above has chosen]. The nearest folder at or above it that has made an explicit choice decides (a nested folder can switch it off
+ *  again, and folders under that follow the off). The gallery's front page is not among them: its map is on unless switched off, which is no choice for the folders
+ *  under it to follow (that would put a third-party map on every page of every gallery), so it stays its own. */
+function folder_map_resolve($dir, $folderPath) {
+    $folderPath = (string) $folderPath;
+    $segments = AUTO_GROUP_BY_FOLDER && $folderPath !== '' ? explode('/', $folderPath) : [$folderPath];
+    for ($n = count($segments); $n >= 1; $n--) {
+        $p = implode('/', array_slice($segments, 0, $n));
+        if ($p === '') break;
+        $v = items_read(resolve_real_path($dir, $p))['mapEnabled'] ?? null;
+        if (is_bool($v)) return ['on' => $v, 'own' => $n === count($segments) ? $v : null, 'from' => $p];
+    }
+    return ['on' => false, 'own' => null, 'from' => null];
 }
 
 /** How close (in miles) photos must be to share one pin on this page's map:
  *  the folder's own setting if it has one, else the site-wide default. */
 function folder_map_radius($dir, $folderPath) {
-    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
-    $r = $data['mapRadius'] ?? null;
-    return (is_int($r) || is_float($r)) && $r >= 0 && $r <= 10000 ? $r : MAP_CLUSTER_RADIUS_MILES;
+    return folder_map_radius_resolve($dir, $folderPath)['value'];
+}
+
+/** What a folder's map switch would be if it had no choice of its own (from the nearest folder above that has one, else off): a choice equal to it is not stored. */
+function folder_map_inherited($dir, $folderPath) {
+    $parent = dirname((string) $folderPath);
+    if ($parent === '.' || $parent === '') return ['on' => false, 'own' => null, 'from' => null];
+    return folder_map_resolve($dir, $parent);
+}
+
+/** The pin grouping a page's map uses, and where it comes from: ['value', 'own' => true when the folder has a value of its own, 'from' => the folder it is taken from, or null
+ *  for the gallery-wide default]. As the map switch: the folder's own value, else the nearest folder above with one; the front page's is its own and is not passed down. */
+function folder_map_radius_resolve($dir, $folderPath) {
+    $valid = function ($r) { return (is_int($r) || is_float($r)) && $r >= 0 && $r <= 10000; };
+    if ($folderPath === null) { $r = items_read($dir)['mapRadius'] ?? null; return ['value' => $valid($r) ? $r : MAP_CLUSTER_RADIUS_MILES, 'own' => $valid($r), 'from' => null]; }
+    $folderPath = (string) $folderPath;
+    $segments = AUTO_GROUP_BY_FOLDER && $folderPath !== '' ? explode('/', $folderPath) : [$folderPath];
+    for ($n = count($segments); $n >= 1; $n--) {
+        $p = implode('/', array_slice($segments, 0, $n));
+        if ($p === '') break;
+        $r = items_read(resolve_real_path($dir, $p))['mapRadius'] ?? null;
+        if ($valid($r)) return ['value' => $r, 'own' => $n === count($segments), 'from' => $p];
+    }
+    return ['value' => MAP_CLUSTER_RADIUS_MILES, 'own' => false, 'from' => null];
 }
 
 /** The points for one folder's map: just those inside it (and its subfolders),

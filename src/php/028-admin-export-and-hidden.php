@@ -301,7 +301,8 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_string($d['dates'] ?? null) && $d['dates'] !== '') $set[] = ['', 'Dates: ' . $d['dates']];
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Only me'];
-        if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
+        if (($d['ownGallery'] ?? null) === true) $set[] = ['', 'Gallery of its own'];
+        elseif (($d['ownGallery'] ?? null) === false && quiet_flag_of($d)) $set[] = ['', 'Not a gallery of its own (its own choice)'];   // (an Unlisted folder is one by default: switching that off is a choice kept)
         if (quiet_flag_of($d)) $set[] = ['', 'Unlisted: public, left out of every list'];   // (the folder's ['quiet'] mark, read the one way everywhere: quiet_flag_of)
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
@@ -311,11 +312,12 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_bool($d['flatNotes'] ?? null)) $set[] = ['', 'Folder notes ' . ($d['flatNotes'] ? 'shown' : 'hidden') . ' (Flat)'];
         if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
         if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
-        if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
+        if (($d['locationEnabled'] ?? null) === true) $set[] = ['loc', 'Locations on'];
+        elseif (($d['locationEnabled'] ?? null) === false && $path !== '' && folder_flag_inherited($dir, $path, 'locationEnabled')['on']) $set[] = ['loc', 'Locations off (its own choice)'];   // (an off that overrides a folder above that has them on; an off where nothing above is on is what every folder is, and older versions wrote it into every folder they saved)
         if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Media info ' . ($d['mediaInfo'] ? 'on' : 'off')];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
-        if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
+        if (is_array($d['photoSort'] ?? null) && $d['photoSort']) $set[] = ['', 'Photo order set'];   // (stored as a list of choices: order, direction, what goes first)
         if (!empty($d['groups'])) $set[] = ['', count((array) $d['groups']) . ' group' . (count((array) $d['groups']) === 1 ? '' : 's')];
         // The folder's cover photo, shown as a picture in its card (not as a setting): its path, or missing when the file is gone.
         $cover = null;
@@ -482,7 +484,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
 /** A setting that is one switch: flip it and it is saved on the spot (the page's
  *  script posts it; the small Save button only exists for a browser without
  *  JavaScript). The warning, if any, sits beside it in orange. */
-function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '', $formClass = '') {
+function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '', $formClass = '', $following = false) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
     <form method="post" class="<?= $formClass !== '' ? $esc($formClass) : 'instant-form' ?>">
@@ -490,7 +492,7 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
       <input type="hidden" name="action" value="<?= $esc($action) ?>">
       <input type="hidden" name="<?= $esc($field) ?>" value="0">
       <div class="instant-row">
-        <label class="switch"><input type="checkbox" name="<?= $esc($field) ?>" value="1" aria-label="<?= $esc($label) ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+        <label class="switch<?= $following ? ' following' : '' ?>"<?= $following ? ' title="Following the folder above (dotted): press it to choose for this folder"' : '' ?>><input type="checkbox" name="<?= $esc($field) ?>" value="1" aria-label="<?= $esc($label) ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
         <span class="instant-label"><?= $esc($label) ?><?= $labelHtml ?></span>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </div>
@@ -711,19 +713,34 @@ function own_gallery_note($level, $explicit) {
 
 /** Under a switch a folder takes from the folder above it: where its setting comes from (this folder's own choice, or the folder it is taken from), and
  *  a link back to taking the one above's when the folder has made its own. */
-function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir) {
+function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir, $inheritedOn = null) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if ($isRoot) return;
     if ($flag['own'] !== null) {
         $text = 'This folder\'s own choice.';
+        if ($inheritedOn === false && $flag['own'] === false) $text .= ' It stays off even if the folder above turns it on.';   // (a protective choice: said, so it is not a surprise later)
+        elseif ($inheritedOn === false && $flag['own'] === true) $text .= ' On here, though the folder above has it off.';
+        elseif ($inheritedOn === true && $flag['own'] === false) $text .= ' Off here, though the folder above has it on.';
     } elseif ($flag['from'] === null) {
         $text = 'No folder above has chosen, so this is off.';
     } else {
-        $text = 'Taken from ' . ($flag['from'] === '' ? 'the gallery\'s own folder' : $esc($flag['from'])) . ' (a folder with nothing chosen takes the choice of the folder above it).';
+        // Named exactly: the folder it comes from, or the gallery root (the front page's own settings), each a link to the settings it comes from
+        $text = $flag['from'] === ''
+            ? 'Taken from <a href="?admin#settings">the gallery root</a>.'
+            : 'Taken from <a href="?admin&amp;folder=' . rawurlencode((string) $flag['from']) . '#settings">' . $esc($flag['from']) . '</a>.';
     }
 ?>
-    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php endif; ?></p>
+    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php elseif (!$flag['on']): ?> <button type="button" class="linklike" data-flag-pin data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>" title="Keep it off for this folder even if the folder above turns it on later">Keep it off here</button><?php endif; ?></p>
 <?php
+}
+
+/** What the page needs after a folder's switch that follows the folder above was pressed: whether it now follows (drawn dotted), what it is, and the line under it as HTML. */
+function admin_flag_payload($dir, $adminFolderPath, $key, $action, $field) {
+    $isRoot = $adminFolderPath === null;
+    $flag = $key === 'mapEnabled' && !$isRoot ? folder_map_resolve($dir, $adminFolderPath) : folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, $key);
+    $inh = $isRoot ? null : ($key === 'mapEnabled' ? folder_map_inherited($dir, $adminFolderPath)['on'] : folder_flag_inherited($dir, $adminFolderPath, $key)['on']);
+    ob_start(); render_admin_flag_source(admin_csrf_token(), $action, $field, $flag, $isRoot, $dir, $inh); $html = trim((string) ob_get_clean());
+    return ['following' => !$isRoot && $flag['own'] === null, 'on' => (bool) $flag['on'], 'html' => $html];
 }
 
 /** The "Metadata" section, last on a folder's (or the gallery's) settings: whether photo locations show, under that because it
@@ -737,12 +754,12 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
     <h3 class="subhead">Metadata</h3>
     <?php $infoJump = !INFO_PANEL ? ' (the info panel is off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-INFO_PANEL\');">Settings</a>)' : ''; ?>
     <div class="info-under<?= INFO_PANEL ? '' : ' no-info' ?>" id="info-under">
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
-      <p class="hint">The viewer gets an info panel for each photo or video here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Metadata). A position or a time zone shows only where the photo's location does.</p>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump, '', !$isRoot && $infoFlag['own'] === null); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'mediaInfo')['on']); ?>
+      <p class="hint">The viewer gets an info panel for each photo or video here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Media metadata). A position or a time zone shows only where the photo's location does.</p>
     </div>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
-          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump);
-          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir); ?>
+          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump, '', !$isRoot && $locFlag['own'] === null);
+          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'locationEnabled')['on']); ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
     <div class="loc-keep"<?= $locFlag['on'] ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
@@ -757,7 +774,7 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
       <?php else: ?>
       <p class="warn-note map-loc-note">Locations are off for this folder, so its map has nothing to show. A photo you set to show its location on its own still appears.</p>
       <?php endif; ?>
-      <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
+      <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot, $dir, $adminFolderPath); ?>
     </div>
 <?php
 }

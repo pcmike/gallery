@@ -545,7 +545,7 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
-// What the viewer's info panel may say about a photo (Settings, Metadata). The panel itself is off for the whole gallery until INFO_PANEL is on; then a folder opts in to the panel (its own "Show photo
+// What the viewer's info panel may say about a photo (Settings, Media metadata). The panel itself is off for the whole gallery until INFO_PANEL is on; then a folder opts in to the panel (its own "Show photo
 // info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
 // start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
 // Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.
@@ -8504,19 +8504,55 @@ function map_point_link($file, $groupKey, $folderGroupKeys) {
  *  of its own photos on its page (and has its own ?map&folder= page). Stored
  *  with the folder like its location switch. The root keeps the behaviour it
  *  always had, so it is on unless switched off; a folder starts off, since
- *  turning one on makes its page load a third-party map. */
+ *  turning one on makes its page load a third-party map. A folder with no choice of its own takes the nearest folder above it that has one (folder_map_resolve). */
 function folder_map_enabled($dir, $folderPath) {
-    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
-    $v = $data['mapEnabled'] ?? null;
-    return $folderPath === null ? $v !== false : $v === true;
+    if ($folderPath === null) return (items_read($dir)['mapEnabled'] ?? null) !== false;
+    return folder_map_resolve($dir, $folderPath)['on'];
+}
+
+/** What a folder's map switch comes to: ['on', 'own' => this folder's own choice (true, false) or null when it takes the one above, 'from' => the folder the choice
+ *  came from or null when no folder above has chosen]. The nearest folder at or above it that has made an explicit choice decides (a nested folder can switch it off
+ *  again, and folders under that follow the off). The gallery's front page is not among them: its map is on unless switched off, which is no choice for the folders
+ *  under it to follow (that would put a third-party map on every page of every gallery), so it stays its own. */
+function folder_map_resolve($dir, $folderPath) {
+    $folderPath = (string) $folderPath;
+    $segments = AUTO_GROUP_BY_FOLDER && $folderPath !== '' ? explode('/', $folderPath) : [$folderPath];
+    for ($n = count($segments); $n >= 1; $n--) {
+        $p = implode('/', array_slice($segments, 0, $n));
+        if ($p === '') break;
+        $v = items_read(resolve_real_path($dir, $p))['mapEnabled'] ?? null;
+        if (is_bool($v)) return ['on' => $v, 'own' => $n === count($segments) ? $v : null, 'from' => $p];
+    }
+    return ['on' => false, 'own' => null, 'from' => null];
 }
 
 /** How close (in miles) photos must be to share one pin on this page's map:
  *  the folder's own setting if it has one, else the site-wide default. */
 function folder_map_radius($dir, $folderPath) {
-    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
-    $r = $data['mapRadius'] ?? null;
-    return (is_int($r) || is_float($r)) && $r >= 0 && $r <= 10000 ? $r : MAP_CLUSTER_RADIUS_MILES;
+    return folder_map_radius_resolve($dir, $folderPath)['value'];
+}
+
+/** What a folder's map switch would be if it had no choice of its own (from the nearest folder above that has one, else off): a choice equal to it is not stored. */
+function folder_map_inherited($dir, $folderPath) {
+    $parent = dirname((string) $folderPath);
+    if ($parent === '.' || $parent === '') return ['on' => false, 'own' => null, 'from' => null];
+    return folder_map_resolve($dir, $parent);
+}
+
+/** The pin grouping a page's map uses, and where it comes from: ['value', 'own' => true when the folder has a value of its own, 'from' => the folder it is taken from, or null
+ *  for the gallery-wide default]. As the map switch: the folder's own value, else the nearest folder above with one; the front page's is its own and is not passed down. */
+function folder_map_radius_resolve($dir, $folderPath) {
+    $valid = function ($r) { return (is_int($r) || is_float($r)) && $r >= 0 && $r <= 10000; };
+    if ($folderPath === null) { $r = items_read($dir)['mapRadius'] ?? null; return ['value' => $valid($r) ? $r : MAP_CLUSTER_RADIUS_MILES, 'own' => $valid($r), 'from' => null]; }
+    $folderPath = (string) $folderPath;
+    $segments = AUTO_GROUP_BY_FOLDER && $folderPath !== '' ? explode('/', $folderPath) : [$folderPath];
+    for ($n = count($segments); $n >= 1; $n--) {
+        $p = implode('/', array_slice($segments, 0, $n));
+        if ($p === '') break;
+        $r = items_read(resolve_real_path($dir, $p))['mapRadius'] ?? null;
+        if ($valid($r)) return ['value' => $r, 'own' => $n === count($segments), 'from' => $p];
+    }
+    return ['value' => MAP_CLUSTER_RADIUS_MILES, 'own' => false, 'from' => null];
 }
 
 /** The points for one folder's map: just those inside it (and its subfolders),
@@ -9289,6 +9325,15 @@ function folder_flag_resolve($dir, $folderRel, $key, $reset = false) {
         if (is_bool($own)) return $cache[$ck] = ['on' => $own, 'own' => $p === $folderRel ? $own : null, 'from' => $p];
     }
     return $cache[$ck] = ['on' => false, 'own' => null, 'from' => null];
+}
+
+/** What a folder would get for a switch if it had no choice of its own: the nearest folder above it that has one (the gallery's own folder, the Root, counts), else off. The
+ *  Root has nothing above it. A switch that is set to this value stores nothing and follows instead: an explicit choice is kept only where it differs. */
+function folder_flag_inherited($dir, $folderRel, $key) {
+    $folderRel = (string) $folderRel;
+    if ($folderRel === '') return ['on' => false, 'own' => null, 'from' => null];
+    $parent = dirname($folderRel); $parent = $parent === '.' ? '' : $parent;
+    return folder_flag_resolve($dir, $parent, $key);
 }
 
 function folder_location_on($dir, $folderRel) { return folder_flag_resolve($dir, $folderRel, 'locationEnabled')['on']; }
@@ -10817,6 +10862,7 @@ function admin_item_json($dir, $files) {
         'private' => $rest === 'private' || ($rest === 'inherit' && $folderPrivate),
         'own' => $rest === 'inherit' ? '' : $rest,   // the photo's own setting: "private", "public", or "" (it follows its folder)
         'folderPrivate' => $folderPrivate,
+        'locationOwn' => $vis === 'show' || $vis === 'hide' ? $vis : '',   // (the photo's own choice: "" when it follows its folder)
         'locationShown' => $vis === 'show' || ($vis === 'inherit' && folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file))),
         'folderLocationOn' => folder_location_on($dir, dirname($file) === '.' ? '' : dirname($file)),
         'locationsOff' => !ENABLE_PHOTO_LOCATION,
@@ -11106,6 +11152,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                     elseif (folder_above_is_private($dir, $fullPath)) { $entry['restriction'] = 'public'; }
                     else { unset($entry['restriction']); }
                 } else {
+                    // (stored only where it differs from what the folder gives: a photo that is set to what its folder does follows it again)
+                    // (hiding is the narrower choice and is always kept, so a photo switched off stays off if its folder starts showing locations; showing it where the folder already shows is the same as following)
                     if (!$on) { $entry['locationVisibility'] = 'hide'; }
                     elseif ($folderLocationOn) { unset($entry['locationVisibility']); }
                     else { $entry['locationVisibility'] = 'show'; }
@@ -11122,7 +11170,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $addrOff = $state === 'private' || ($state === null && $on);
             $text = $n === 1 ? 'The link of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The links of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
         } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
-        return ['type' => 'ok', 'text' => $text];
+        $locOut = [];
+        if ($flag === 'location' && count($names) === 1) { $visNow = (string) ((items_read($adminFolderReal)['items'][$names[0]]['locationVisibility'] ?? 'inherit')); $locOut = ['locationOwn' => $visNow === 'show' || $visNow === 'hide' ? $visNow : '']; }   // (the photo's own choice after this press: "" when it follows its folder)
+        return ['type' => 'ok', 'text' => $text] + $locOut;
     }
 
     if ($action === 'save_group_label') {
@@ -11309,7 +11359,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['owngallery']);
         items_update($adminFolderReal, function (&$data) use ($on) {
-            if ($on) $data['ownGallery'] = true;
+            if ($on) $data['ownGallery'] = true;   // (limiting the way up is the narrower choice: always kept)
             elseif (quiet_flag_of($data)) $data['ownGallery'] = false;   // (an Unlisted folder is one by default: switching it off is a choice to keep)
             else unset($data['ownGallery']);
         });
@@ -11451,7 +11501,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'save_map_settings') {
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
         $updates = [];
-        if (isset($_POST['map_enabled'])) $updates['mapEnabled'] = $_POST['map_enabled'] === '1';
+        $mapFolded = false; $mapPinned = false;
+        if (isset($_POST['map_enabled'])) {
+            if ($_POST['map_enabled'] === 'inherit' && $adminFolderPath !== null) $updates['mapEnabled'] = null;
+            elseif ($_POST['map_enabled'] === 'pin' && $adminFolderPath !== null) { $updates['mapEnabled'] = false; $mapPinned = true; }   // (kept off for this folder, whatever the folder above chooses later)
+            elseif ($_POST['map_enabled'] !== 'inherit' && $_POST['map_enabled'] !== 'pin') {
+                $updates['mapEnabled'] = $_POST['map_enabled'] === '1';
+                if ($adminFolderPath !== null && $updates['mapEnabled'] === true && folder_map_inherited($dir, $adminFolderPath)['on'] === true) { $updates['mapEnabled'] = null; $mapFolded = true; }   // (switched on where the folder above already has it on: not kept, the folder follows again; a narrowing, an off, is always kept)
+            }
+        }   // ("inherit": the folder drops its own choice and takes the one above it; the front page has none above)
         if (isset($_POST['map_radius'])) {
             $rawRadius = trim((string) $_POST['map_radius']);
             if ($rawRadius === '') {
@@ -11469,11 +11527,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $where = $adminFolderPath === null ? 'the gallery\'s front page' : 'this folder\'s page';
         $parts = [];
         if (array_key_exists('mapEnabled', $updates)) {
-            if ($updates['mapEnabled']) {
-                $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Metadata.';
+            if ($mapPinned) {
+                $part = 'The map is kept off for this folder, even if the folder above turns it on.';
+            } elseif ($mapFolded) {
+                $part = 'Back to following the folder above: the map is ' . (folder_map_resolve($dir, $adminFolderPath)['on'] ? 'on' : 'off') . ' here, as there.';
+            } elseif ($updates['mapEnabled'] === null) {
+                $part = 'This folder now takes the map choice of the folder above it.';
+            } elseif ($updates['mapEnabled']) {
+                $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.' . ($adminFolderPath !== null ? ' The folders under it that have not chosen show one too.' : '');
+                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Media metadata.';
             } else {
-                $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
+                $part = 'The map no longer shows on ' . $where . ($adminFolderPath !== null ? ' (nor on the folders under it that have not chosen)' : '') . '. Nothing is deleted.';
             }
             $parts[] = $part;
         }
@@ -11481,7 +11545,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $parts[] = $updates['mapRadius'] === null ? 'This map uses the default pin grouping.' : 'Photos within ' . $updates['mapRadius'] . ' mile' . ($updates['mapRadius'] == 1 ? '' : 's') . ' of each other share a pin.';
         }
         $text = 'Saved. ' . implode(' ', $parts);
-        return ['type' => 'ok', 'text' => $text];
+        return ['type' => 'ok', 'text' => $text] + (array_key_exists('mapEnabled', $updates) && $adminFolderPath !== null ? ['flag' => admin_flag_payload($dir, $adminFolderPath, 'mapEnabled', 'save_map_settings', 'map_enabled')] : []);
     }
 
     // "Keep the location in files visitors get": this folder's photos whose location the gallery shows are sent with it, though Scrub location data is
@@ -11496,29 +11560,38 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'toggle_media_info') {
         $choice = $_POST['info'] ?? '';
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        items_update($targetReal, function (&$data) use ($choice) {
-            $data['mediaInfo'] = $choice === 'inherit' ? null : !empty($choice);
-        });
-        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
-        return ['type' => 'ok', 'text' => empty($choice) ? 'Media info is off for this folder (and the folders under it that have not chosen).' : 'Media info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: the info panel is switched off, or every field is, in Settings, under Metadata.')];
+        $val = $choice === 'inherit' ? null : ($choice === 'pin' ? false : !empty($choice));   // ("pin": kept off for this folder, whatever the folder above chooses later)
+        $folded = $choice !== 'pin' && $val === true && $adminFolderPath !== null && folder_flag_inherited($dir, $adminFolderPath, 'mediaInfo')['on'] === true;   // (switched on where the folder above already has it on: not kept, the folder follows again; a narrowing, an off, is always kept)
+        if ($folded) $val = null;
+        items_update($targetReal, function (&$data) use ($val) { $data['mediaInfo'] = $val; });
+        $flagOut = ['flag' => admin_flag_payload($dir, $adminFolderPath, 'mediaInfo', 'toggle_media_info', 'info')];
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'] + $flagOut;
+        if ($choice === 'pin') return ['type' => 'ok', 'text' => 'Media info is kept off for this folder, even if the folder above turns it on.'] + $flagOut;
+        if ($folded) return ['type' => 'ok', 'text' => 'Back to following the folder above: media info is ' . ($flagOut['flag']['on'] ? 'on' : 'off') . ' here, as there.'] + $flagOut;
+        return $flagOut + ['type' => 'ok', 'text' => empty($choice) ? 'Media info is off for this folder (and the folders under it that have not chosen).' : 'Media info is on for this folder (and the folders under it that have not chosen).' . (photo_info_wanted() ? '' : ' Nothing shows yet: the info panel is switched off, or every field is, in Settings, under Media metadata.')];
     }
 
     if ($action === 'toggle_location_enabled') {
         $choice = $_POST['enabled'] ?? '';
-        $enabled = $choice !== 'inherit' && !empty($choice);
+        $enabled = $choice !== 'inherit' && $choice !== 'pin' && !empty($choice);   // ("pin": kept off for this folder, whatever the folder above chooses later)
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        items_update($targetReal, function (&$data) use ($enabled, $choice) {
-            $data['locationEnabled'] = $choice === 'inherit' ? null : $enabled;
+        $locFolded = $choice !== 'inherit' && $choice !== 'pin' && $adminFolderPath !== null && $enabled === true && folder_flag_inherited($dir, $adminFolderPath, 'locationEnabled')['on'] === true;   // (switched on where the folder above already has it on: not kept, the folder follows again; a narrowing, an off, is always kept)
+        $locVal = $choice === 'inherit' || $locFolded ? null : $enabled;   // (a pin is $enabled = false, stored)
+        items_update($targetReal, function (&$data) use ($locVal) {
+            $data['locationEnabled'] = $locVal;
         });
-        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'];
+        $flagOut = ['flag' => admin_flag_payload($dir, $adminFolderPath, 'locationEnabled', 'toggle_location_enabled', 'enabled')];
+        if ($choice === 'inherit') return ['type' => 'ok', 'text' => 'This folder now takes the choice of the folder above it.'] + $flagOut;
+        if ($choice === 'pin') return ['type' => 'ok', 'text' => 'Locations are kept off for this folder, even if the folder above turns them on.'] + $flagOut;
+        if ($locFolded) return ['type' => 'ok', 'text' => 'Back to following the folder above: locations are ' . ($flagOut['flag']['on'] ? 'on' : 'off') . ' here, as there.'] + $flagOut;
         if (!$enabled) {
-            return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'];
+            return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'] + $flagOut;
         }
         $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
         $loose = split_folder_level($files, $prefix)['loose'];
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
-            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Metadata).';
+            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Media metadata).';
         } else {
             // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
             $shown = 0;
@@ -11530,7 +11603,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($sum['legacy'] > 0) $text .= ' ' . $sum['legacy'] . ' ' . ($sum['legacy'] === 1 ? 'was' : 'were') . ' read under older rules and found nothing, and are left alone: "Read everything again" in Prepare media reads them again.';
             if ($sum['unreadable'] > 0) $text .= ' ' . $sum['unreadable'] . ' couldn\'t be read at all (' . implode(', ', array_slice($sum['bad'], 0, 3)) . ($sum['unreadable'] > 3 ? ', …' : '') . ').';
         }
-        return ['type' => 'ok', 'text' => $text];
+        return ['type' => 'ok', 'text' => $text] + $flagOut;
     }
 
     if ($action === 'add_gallery_marker') {
@@ -11932,7 +12005,8 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_string($d['dates'] ?? null) && $d['dates'] !== '') $set[] = ['', 'Dates: ' . $d['dates']];
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Only me'];
-        if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
+        if (($d['ownGallery'] ?? null) === true) $set[] = ['', 'Gallery of its own'];
+        elseif (($d['ownGallery'] ?? null) === false && quiet_flag_of($d)) $set[] = ['', 'Not a gallery of its own (its own choice)'];   // (an Unlisted folder is one by default: switching that off is a choice kept)
         if (quiet_flag_of($d)) $set[] = ['', 'Unlisted: public, left out of every list'];   // (the folder's ['quiet'] mark, read the one way everywhere: quiet_flag_of)
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
@@ -11942,11 +12016,12 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_bool($d['flatNotes'] ?? null)) $set[] = ['', 'Folder notes ' . ($d['flatNotes'] ? 'shown' : 'hidden') . ' (Flat)'];
         if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
         if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
-        if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
+        if (($d['locationEnabled'] ?? null) === true) $set[] = ['loc', 'Locations on'];
+        elseif (($d['locationEnabled'] ?? null) === false && $path !== '' && folder_flag_inherited($dir, $path, 'locationEnabled')['on']) $set[] = ['loc', 'Locations off (its own choice)'];   // (an off that overrides a folder above that has them on; an off where nothing above is on is what every folder is, and older versions wrote it into every folder they saved)
         if (is_bool($d['mediaInfo'] ?? null)) $set[] = ['', 'Media info ' . ($d['mediaInfo'] ? 'on' : 'off')];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
-        if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
+        if (is_array($d['photoSort'] ?? null) && $d['photoSort']) $set[] = ['', 'Photo order set'];   // (stored as a list of choices: order, direction, what goes first)
         if (!empty($d['groups'])) $set[] = ['', count((array) $d['groups']) . ' group' . (count((array) $d['groups']) === 1 ? '' : 's')];
         // The folder's cover photo, shown as a picture in its card (not as a setting): its path, or missing when the file is gone.
         $cover = null;
@@ -12113,7 +12188,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
 /** A setting that is one switch: flip it and it is saved on the spot (the page's
  *  script posts it; the small Save button only exists for a browser without
  *  JavaScript). The warning, if any, sits beside it in orange. */
-function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '', $formClass = '') {
+function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '', $formClass = '', $following = false) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
     <form method="post" class="<?= $formClass !== '' ? $esc($formClass) : 'instant-form' ?>">
@@ -12121,7 +12196,7 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
       <input type="hidden" name="action" value="<?= $esc($action) ?>">
       <input type="hidden" name="<?= $esc($field) ?>" value="0">
       <div class="instant-row">
-        <label class="switch"><input type="checkbox" name="<?= $esc($field) ?>" value="1" aria-label="<?= $esc($label) ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+        <label class="switch<?= $following ? ' following' : '' ?>"<?= $following ? ' title="Following the folder above (dotted): press it to choose for this folder"' : '' ?>><input type="checkbox" name="<?= $esc($field) ?>" value="1" aria-label="<?= $esc($label) ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
         <span class="instant-label"><?= $esc($label) ?><?= $labelHtml ?></span>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </div>
@@ -12342,19 +12417,34 @@ function own_gallery_note($level, $explicit) {
 
 /** Under a switch a folder takes from the folder above it: where its setting comes from (this folder's own choice, or the folder it is taken from), and
  *  a link back to taking the one above's when the folder has made its own. */
-function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir) {
+function render_admin_flag_source($csrfToken, $action, $field, $flag, $isRoot, $dir, $inheritedOn = null) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if ($isRoot) return;
     if ($flag['own'] !== null) {
         $text = 'This folder\'s own choice.';
+        if ($inheritedOn === false && $flag['own'] === false) $text .= ' It stays off even if the folder above turns it on.';   // (a protective choice: said, so it is not a surprise later)
+        elseif ($inheritedOn === false && $flag['own'] === true) $text .= ' On here, though the folder above has it off.';
+        elseif ($inheritedOn === true && $flag['own'] === false) $text .= ' Off here, though the folder above has it on.';
     } elseif ($flag['from'] === null) {
         $text = 'No folder above has chosen, so this is off.';
     } else {
-        $text = 'Taken from ' . ($flag['from'] === '' ? 'the gallery\'s own folder' : $esc($flag['from'])) . ' (a folder with nothing chosen takes the choice of the folder above it).';
+        // Named exactly: the folder it comes from, or the gallery root (the front page's own settings), each a link to the settings it comes from
+        $text = $flag['from'] === ''
+            ? 'Taken from <a href="?admin#settings">the gallery root</a>.'
+            : 'Taken from <a href="?admin&amp;folder=' . rawurlencode((string) $flag['from']) . '#settings">' . $esc($flag['from']) . '</a>.';
     }
 ?>
-    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php endif; ?></p>
+    <p class="hint flag-source"><?= $text ?><?php if ($flag['own'] !== null): ?> <button type="button" class="linklike" data-flag-inherit data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>">Use the folder above's choice</button><?php elseif (!$flag['on']): ?> <button type="button" class="linklike" data-flag-pin data-csrf="<?= $esc($csrfToken) ?>" data-action="<?= $esc($action) ?>" data-field="<?= $esc($field) ?>" title="Keep it off for this folder even if the folder above turns it on later">Keep it off here</button><?php endif; ?></p>
 <?php
+}
+
+/** What the page needs after a folder's switch that follows the folder above was pressed: whether it now follows (drawn dotted), what it is, and the line under it as HTML. */
+function admin_flag_payload($dir, $adminFolderPath, $key, $action, $field) {
+    $isRoot = $adminFolderPath === null;
+    $flag = $key === 'mapEnabled' && !$isRoot ? folder_map_resolve($dir, $adminFolderPath) : folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, $key);
+    $inh = $isRoot ? null : ($key === 'mapEnabled' ? folder_map_inherited($dir, $adminFolderPath)['on'] : folder_flag_inherited($dir, $adminFolderPath, $key)['on']);
+    ob_start(); render_admin_flag_source(admin_csrf_token(), $action, $field, $flag, $isRoot, $dir, $inh); $html = trim((string) ob_get_clean());
+    return ['following' => !$isRoot && $flag['own'] === null, 'on' => (bool) $flag['on'], 'html' => $html];
 }
 
 /** The "Metadata" section, last on a folder's (or the gallery's) settings: whether photo locations show, under that because it
@@ -12368,12 +12458,12 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
     <h3 class="subhead">Metadata</h3>
     <?php $infoJump = !INFO_PANEL ? ' (the info panel is off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-INFO_PANEL\');">Settings</a>)' : ''; ?>
     <div class="info-under<?= INFO_PANEL ? '' : ' no-info' ?>" id="info-under">
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir); ?>
-      <p class="hint">The viewer gets an info panel for each photo or video here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Metadata). A position or a time zone shows only where the photo's location does.</p>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump, '', !$isRoot && $infoFlag['own'] === null); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'mediaInfo')['on']); ?>
+      <p class="hint">The viewer gets an info panel for each photo or video here (what the file says about itself: camera, when it was taken, its size, and whatever else is switched on in Settings, under Media metadata). A position or a time zone shows only where the photo's location does.</p>
     </div>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
-          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump);
-          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir); ?>
+          render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump, '', !$isRoot && $locFlag['own'] === null);
+          render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'locationEnabled')['on']); ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
     <div class="loc-keep"<?= $locFlag['on'] ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
@@ -12388,7 +12478,7 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
       <?php else: ?>
       <p class="warn-note map-loc-note">Locations are off for this folder, so its map has nothing to show. A photo you set to show its location on its own still appears.</p>
       <?php endif; ?>
-      <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
+      <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot, $dir, $adminFolderPath); ?>
     </div>
 <?php
 }
@@ -12396,10 +12486,13 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
 /** The "Map" section of a folder's (or the gallery's) settings: whether its page
  *  shows a map of its own photos, and how close photos must be to share a pin.
  *  Both are per page; a blank radius means the site-wide setting. */
-function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
+function render_admin_map_form($itemsHere, $csrfToken, $isRoot, $dir = null, $adminFolderPath = null) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : (($itemsHere['mapEnabled'] ?? null) === true);
-    $radius = $itemsHere['mapRadius'] ?? null;
+    $mapFlag = $isRoot ? null : folder_map_resolve($dir, $adminFolderPath);   // (this folder's own choice, or the one it takes from the folder above)
+    $radFlag = $isRoot ? null : folder_map_radius_resolve($dir, $adminFolderPath);
+    $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : $mapFlag['on'];
+    $radius = $itemsHere['mapRadius'] ?? null;   // (the folder's own value; blank follows the folder above, else the default)
+    $radiusShown = $isRoot ? MAP_CLUSTER_RADIUS_MILES : $radFlag['value'];
 ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
       <form method="post" class="instant-form map-form">
@@ -12407,20 +12500,21 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         <input type="hidden" name="action" value="save_map_settings">
         <input type="hidden" name="map_enabled" value="0">
         <div class="instant-row">
-          <label class="switch"><input type="checkbox" name="map_enabled" value="1" aria-label="Show a map of <?= $isRoot ? 'the whole gallery' : 'this folder' ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+          <label class="switch<?= !$isRoot && $mapFlag['own'] === null ? ' following' : '' ?>"><input type="checkbox" name="map_enabled" value="1" aria-label="Show a map of <?= $isRoot ? 'the whole gallery' : 'this folder' ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
           <span class="instant-label">Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></span>
           <span class="rowstate" role="status" aria-live="polite"></span>
         </div>
+        <?php if (!$isRoot) render_admin_flag_source($csrfToken, 'save_map_settings', 'map_enabled', $mapFlag, $isRoot, $dir, folder_map_inherited($dir, $adminFolderPath)['on']); ?>
         <div class="warn-note">Visitors' browsers load code from cdnjs and tiles from OpenStreetMap, so those sites see the visit. Only photos with a visible location are plotted.</div>
-        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'Covers every photo in the gallery with a visible location.' : 'Covers this folder\'s photos and subfolders with a visible location (needs this folder\'s location switch).' ?></p>
+        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'Covers every photo in the gallery with a visible location.' : 'Covers this folder\'s photos and subfolders with a visible location (needs this folder\'s location switch). Folders under it that have not chosen show a map too; one of them can switch it off for itself.' ?></p>
         <?php // Pin grouping is part of the map: set in under it, and only there while the map is on. ?>
         <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
           <div class="field" style="max-width:300px;">
             <label>Pin grouping (miles)</label>
-            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
+            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= $esc($radiusShown) ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
-          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
+          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> <?php if ($isRoot): ?>Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).<?php elseif ($radFlag['from'] !== null && !$radFlag['own']): ?>Blank follows <?= $esc($radFlag['from']) ?> (<?= $esc($radFlag['value']) ?>), the folder above that has one.<?php else: ?>Blank follows the folder above that has a value, else the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).<?php endif; ?></p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
@@ -12499,7 +12593,10 @@ function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
         $checked = $isSite ? ($current === '' || (string) $current === (string) $value) : (string) $current === (string) $value;
         $out .= '<label' . ($isSite ? ' class="site" title="What Settings says"' : '') . '><input type="radio" name="' . $esc($name) . '" value="' . $esc($isSite ? '' : $value) . '"' . ($checked ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
     }
-    return $out . '</div>';
+    // The line that says where the choice comes from: Settings while the folder has none of its own (the dashed button), or its own choice. The page flips it as a button is pressed.
+    $own = (string) $current !== '';
+    $out .= '</div><p class="hint seg-src" data-own="' . ($own ? '1' : '0') . '"><span class="src-follow">Taken from <a href="#site" onclick="return adminGoTo(\'site\', \'setting-FOLDER_DISPLAY_MODE\');">Settings</a>.</span><span class="src-own">This folder\'s own choice. The dashed button is what Settings says: press it to follow Settings again.</span></p>';
+    return $out;
 }
 
 /** A choice of three or more (or with long labels): a button showing the current choice, which opens a small dark list with a tick on the
@@ -12593,7 +12690,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
 <?php if ($part === 'sort'): ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
         <details class="field wide sort-details"<?= $ps ? ' open' : '' ?>>
-          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
+          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; this folder\'s own order' : '&middot; taken from Settings' ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
           <?php $dirNow = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; $triState = ['' => "Site's", 'on' => 'On', 'off' => 'Off']; ?>
           <div class="sort-rows">
             <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
@@ -12714,7 +12811,7 @@ function gallery_setting_definitions() {
             ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
-        ['title' => 'Metadata', 'items' => [
+        ['title' => 'Media metadata', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location shows; each folder and photo still has its own switch. Locations are read when thumbnails are made, or with Prepare media. Maps use OpenStreetMap, which the visitor\'s browser contacts.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
@@ -12724,7 +12821,7 @@ function gallery_setting_definitions() {
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
              'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from an Only me photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
             ['name' => 'INFO_PANEL', 'type' => 'bool', 'label' => 'Info panel',
-             'help' => 'Lets the viewer show an info panel with what a photo\'s own file says about it (camera, when it was taken, its size, position and more). Off: no folder is offered one. Turn it on, then switch it on in the folders that should have it (a folder\'s settings, under Metadata); the switches under Media information choose what it says.',
+             'help' => 'Lets the viewer show an info panel with what a photo\'s own file says about it (camera, when it was taken, its size, position and more). Off: no folder is offered one. Turn it on, then switch it on in the folders that should have it (a folder\'s settings, under Media metadata); the switches under Media information choose what it says.',
              'risk' => 'A photo file can carry more than people expect. The switches below, and the location switches above, decide what visitors see.',
              'offwarn' => 'No info panel is offered anywhere. Each folder\'s own choice is kept.'],
             ['name' => 'INFO_CAMERA', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Camera',
@@ -20855,6 +20952,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .switch input:checked + .slider { background:var(--accent); }
   .switch input:checked + .slider::before { transform:translateX(18px); }
   .switch input:focus-visible + .slider { outline:2px solid #fff; outline-offset:2px; }
+  /* A switch that follows the folder above (nothing of its own): drawn with a dotted edge, as the Who-can-see buttons are dashed when they follow; a choice of its own is solid. */
+  .switch.following .slider { box-sizing:border-box; border:2px dashed rgba(255,255,255,.75); }
+  .switch.following .slider::before { left:1px; top:1px; }
   @media (max-width: 800px) {
     .admin-main .site-row { grid-template-columns:1fr; }
     .admin-main .site-row .ctl { justify-content:flex-start; }
@@ -21061,7 +21161,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
   .flat-choice { min-width:0; }
   .flat-choice > label { display:block; margin:0 0 6px; }
-  .seg-site > label.site span { border-color:#5865f2; background:rgba(88,101,242,0.16); color:#d4d8ff; }
+  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
   .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
   .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
   .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
@@ -21229,7 +21329,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .site-more > summary { cursor:pointer; padding:9px 0; color:var(--text); }
   .site-dim { opacity:.5; }   /* (the main Info panel switch is off: the field switches can be looked at but not changed) */
   .site-dim .switch { cursor:not-allowed; }
+  .seg-src { margin:4px 0 0; flex-basis:100%; }
+  .seg-src[data-own="0"] .src-own, .seg-src[data-own="1"] .src-follow { display:none; }
   .flag-source { margin:-2px 0 10px; }
+  .instant-row + .flag-source { margin-top:6px; }   /* (the line that says where a switch is taken from, right under its switch: a little room, as it has under a warning) */
   .info-under.no-info .instant-row, .info-under.no-info .flag-source, .info-under.no-info .hint { opacity:.55; }   /* (the info panel is off for the whole gallery: the folder's choice can still be made, but nothing shows yet) */
   .info-under { margin:2px 0 18px; }
 
@@ -22359,6 +22462,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   });
   // Settings that are a single switch or number save the moment they change, in place: the control, the little status
   // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
+  // After a switch that follows the folder above was pressed: it is drawn dotted while it follows (and solid once it has a choice of its own), and the line under it, which says where
+  // it comes from, is drawn again (a choice equal to what the folder above gives is not kept: the switch goes back to following by itself).
+  function applyFlag(form, el, flag) {
+    var sw = el.closest('.switch'); if (sw) sw.classList.toggle('following', !!flag.following);
+    if (el.type === 'checkbox') el.checked = !!flag.on;
+    var old = form.querySelector('.flag-source') || (form.nextElementSibling && form.nextElementSibling.classList.contains('flag-source') ? form.nextElementSibling : null);
+    if (old && flag.html) { var t = document.createElement('div'); t.innerHTML = flag.html; if (t.firstElementChild) old.replaceWith(t.firstElementChild); }
+  }
   [].forEach.call(document.querySelectorAll('.instant-form, .unlisted-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, action = form.querySelector('input[name=action]').value;
@@ -22384,7 +22495,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
-            if (j.ok) { if (j.label && isBox) { var lab = el.closest('.instant-row').querySelector('.instant-label'); if (lab) lab.textContent = j.label; } say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
+            if (j.ok) { if (j.label && isBox) { var lab = el.closest('.instant-row').querySelector('.instant-label'); if (lab) lab.textContent = j.label; } say(node, j.text, 'ok'); if (j.flag) applyFlag(form, el, j.flag); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
             else { say(node, j.text, 'err'); revert(); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); revert(); });
@@ -22437,7 +22548,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
     }
     [].forEach.call(form.querySelectorAll('.seg-site input[type=radio]'), function (r) {
-      r.addEventListener('change', function () { flatSync(); post([[r.name, r.value]], stateOf(r)); });
+      r.addEventListener('change', function () {
+        flatSync(); post([[r.name, r.value]], stateOf(r));
+        var src = r.closest('.flat-choice') && r.closest('.flat-choice').querySelector('.seg-src'); if (src) src.setAttribute('data-own', r.value === '' ? '0' : '1');   // (the line under it: Settings' choice, or this folder's own)
+      });
     });
     [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
       var saved = el.value, timer = 0;
@@ -23610,16 +23724,26 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   });
   // "Use the folder above's choice": the folder drops its own choice for a switch it can take from the folder above it. The screen is drawn again, because
   // the switch's state, and the words under it, now come from somewhere else.
-  [].forEach.call(document.querySelectorAll('[data-flag-inherit]'), function (btn) {
-    btn.addEventListener('click', function () {
-      var body = new URLSearchParams();
-      body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
-      btn.disabled = true;
-      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
-        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
-        .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
-        .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
-    });
+  document.addEventListener('click', function (e) {   // (delegated: the line with the button is drawn again after a switch is pressed)
+    var btn = e.target.closest ? e.target.closest('[data-flag-inherit]') : null; if (!btn || btn.disabled) return;
+    var body = new URLSearchParams();
+    body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'inherit');
+    btn.disabled = true;
+    fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+      .then(function (res) { if (res.ok) { window.__siteDirty = true; location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+      .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
+  });
+  document.addEventListener('click', function (e) {   // "Keep it off here": a switch that follows "off" is kept off for this folder, whatever the folder above chooses later
+    var btn = e.target.closest ? e.target.closest('[data-flag-pin]') : null; if (!btn || btn.disabled) return;
+    var p = btn.closest('.flag-source'), form = p && (p.closest('form') || p.previousElementSibling), el = form && form.querySelector('input[type=checkbox]');
+    var body = new URLSearchParams();
+    body.set('csrf_token', btn.getAttribute('data-csrf')); body.set('action', btn.getAttribute('data-action')); body.set(btn.getAttribute('data-field'), 'pin');
+    btn.disabled = true;
+    fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+      .then(function (res) { if (res.ok) { window.__siteDirty = true; if (res.flag && el && form) applyFlag(form, el, res.flag); else location.reload(); } else { btn.disabled = false; btn.textContent = res.text || 'It did not work.'; } })
+      .catch(function () { btn.disabled = false; btn.textContent = 'Could not reach the gallery.'; });
   });
   // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
   // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
@@ -23750,7 +23874,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (!tag) return;
       var custom = false;
       [].forEach.call(det.querySelectorAll('input[type=radio]:checked'), function (r) { if (r.value !== '') custom = true; });
-      tag.innerHTML = custom ? '&middot; custom' : '&middot; the site\'s order';
+      tag.innerHTML = custom ? '&middot; this folder\'s own order' : '&middot; taken from Settings';
     }
     [].forEach.call(det_radios(), function (r) { r.addEventListener('change', label); });
     function det_radios() { var det = box.closest('details'); return det ? det.querySelectorAll('.sort-row input[type=radio]') : []; }
@@ -25567,7 +25691,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'quiet' => 1, 'level' => 1, 'own' => 1, 'code' => 1, 'fresh' => 1, 'cover' => 1, 'photos' => 1, 'more' => 1, 'label' => 1, 'n' => 1, 'html' => 1, 'short' => 1]));
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'quiet' => 1, 'level' => 1, 'own' => 1, 'flag' => 1, 'locationOwn' => 1, 'code' => 1, 'fresh' => 1, 'cover' => 1, 'photos' => 1, 'more' => 1, 'label' => 1, 'n' => 1, 'html' => 1, 'short' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -29334,6 +29458,8 @@ send_viewer_aware_cache_headers();
   @media (hover: hover) { .lbe-pill:hover:not(:disabled) { border-color: #6b77f0; } .lbe-pill[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); } }
   .lbe-note { margin: -4px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
   .lbe-note[hidden] { display: none; }
+  .lbe-pill.is-following { border-style: dashed; border-width: 1.5px; border-color: #7a7a8a; }   /* (a location switch that follows its folder: dashed, as every inherited choice is) */
+  .lbe-note-loc .linklike { background: none; border: 0; padding: 0; font: inherit; color: #aab2ff; cursor: pointer; text-decoration: underline; }
   .lbe-locrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
   .lbe-locrow .ico { flex: none; color: #aab2ff; }
   .lbe-locrow #lbe-locsum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
@@ -30056,6 +30182,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <button type="button" class="lbe-pill" id="lbe-cover" aria-pressed="false" title="Make this the folder's cover photo"><?= ui_icon('star') ?> Cover</button>
       </div>
       <p class="lbe-note" id="lbe-note" hidden></p>
+      <p class="lbe-note lbe-note-loc" id="lbe-note-loc" hidden></p>
       <div class="lbe-loc">
         <button type="button" class="lbe-locrow" id="lbe-locrow" aria-expanded="false"><?= ui_icon('pin') ?><span id="lbe-locsum">No location</span><span class="lbe-chev"><?= ui_icon('chev-down') ?></span></button>
         <div class="lbe-locfields">
@@ -30769,7 +30896,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const $ = function (id) { return document.getElementById(id); };
     const f = { caption: $('lbe-caption'), web: $('lbe-web'), lat: $('lbe-lat'), lng: $('lbe-lng'), label: $('lbe-label') };
     const pills = { priv: $('lbe-private'), loc: $('lbe-loc'), cover: $('lbe-cover') };
-    const statusEl = $('lbe-status'), nameEl = $('lbe-name'), noteEl = $('lbe-note'), webErr = $('lbe-web-err'), locErr = $('lbe-loc-err');
+    const statusEl = $('lbe-status'), nameEl = $('lbe-name'), noteEl = $('lbe-note'), noteLocEl = $('lbe-note-loc'), webErr = $('lbe-web-err'), locErr = $('lbe-loc-err');
     const autoHint = $('lbe-autohint'), locRow = $('lbe-locrow'), locSum = $('lbe-locsum'), hideKb = $('lbe-hidekb'), toolBtn = $('lightbox-edit');
     const sheetMq = window.matchMedia ? window.matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse) and (orientation: portrait)') : { matches: false };
     const MAPON = <?= ENABLE_PHOTO_LOCATION ? 'true' : 'false' ?>, LOCON = <?= ENABLE_PHOTO_LOCATION ? 'true' : 'false' ?>;
@@ -30827,6 +30954,22 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
       pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s link on' : 'Switch this photo\u2019s link off') : 'Hidden from visitors unless they have the private-view password';
       noteEl.textContent = note; noteEl.hidden = note === '';
+      // The location switch follows its folder's until the photo has a choice of its own: dotted while it follows (as every inherited setting is), solid once it has one, and the line says which.
+      const own = st.cfg.locationOwn || '', following = own === '';
+      pills.loc.classList.toggle('is-following', following);
+      noteLocEl.textContent = '';
+      if (!st.cfg.locationsOff) {
+        const folderWord = st.cfg.folderLocationOn ? 'shows' : 'does not show';
+        if (following) {
+          noteLocEl.appendChild(document.createTextNode('Location: follows its folder, which ' + folderWord + ' locations. '));
+          if (!st.cfg.folderLocationOn) { const b = document.createElement('button'); b.type = 'button'; b.className = 'linklike'; b.setAttribute('data-loc-pin', ''); b.textContent = 'Keep it hidden'; b.title = 'Keep this photo\u2019s location hidden even if its folder starts showing locations'; noteLocEl.appendChild(b); }
+        } else if ((own === 'show') !== !!st.cfg.folderLocationOn) {
+          noteLocEl.textContent = own === 'show' ? 'Location shown on its own, though its folder does not show locations. Tap the pin to follow the folder again.' : 'Location hidden on its own, though its folder shows locations. Tap the pin to follow the folder again.';
+        } else {
+          noteLocEl.textContent = own === 'hide' ? 'Location kept hidden, whatever its folder does. Tap the pin to show it.' : 'Location shown on its own. Tap the pin to hide it.';
+        }
+      }
+      noteLocEl.hidden = noteLocEl.textContent === '' && !noteLocEl.firstChild;
     };
     const paintLoc = function () {
       if (!st) return;
@@ -30945,7 +31088,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         if (!j.ok) throw new Error(j.text || 'Could not load this photo');
         const auto = !!(j.auto && j.lat === '' && j.lng === ''), shown = auto ? j.auto : j;
         f.caption.value = j.caption; f.web.value = j.web; f.lat.value = shown.lat; f.lng.value = shown.lng; f.label.value = j.label;
-        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, own: j.own || '', locationShown: !!j.locationShown, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
+        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, own: j.own || '', locationShown: !!j.locationShown, locationOwn: j.locationOwn || '', folderLocationOn: !!j.folderLocationOn, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
                base: { caption: j.caption, web: j.web, lat: shown.lat, lng: shown.lng, label: j.label }, timer: 0, chain: Promise.resolve(true) };
         ownerState.own[file] = st.cfg.own; ownerState.inh[file] = st.cfg.folderPrivate; ownerState.priv[file] = st.cfg.private; if (j.cover) ownerState.cover[file] = true;
         ownerPaint(); setControls(true); paintPills(); paintLoc(); setStatus('', '');
@@ -31004,12 +31147,22 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         if (flagName === 'private') fields.state = next; else fields.on = on ? '1' : '0';
         post(s.file, fields).then(function (j) {
           if (!j.ok) throw new Error(j.text || 'Not saved');
-          if (flagName === 'private') { setOwn(s.file, next); s.cfg.private = ownerState.priv[s.file]; s.cfg.own = ownerState.own[s.file]; ownerPaint(); } else s.cfg.locationShown = on;
+          if (flagName === 'private') { setOwn(s.file, next); s.cfg.private = ownerState.priv[s.file]; s.cfg.own = ownerState.own[s.file]; ownerPaint(); } else { s.cfg.locationShown = on; s.cfg.locationOwn = j.locationOwn === undefined ? '' : j.locationOwn; }
           if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
         }).catch(function (err) { if (s === st) problem(err); });
       });
     };
     flag('priv', 'private'); flag('loc', 'location');
+    noteLocEl.addEventListener('click', function (e) {   // "Keep it hidden": the photo's location stays hidden whatever its folder does later
+      if (!e.target.closest || !e.target.closest('[data-loc-pin]') || !st) return;
+      const s = st;
+      setStatus('busy', 'Saving…');
+      post(s.file, { action: 'set_item_flag', file: bareOf(s.file), flag: 'location', on: '0' }).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'Not saved');
+        s.cfg.locationShown = false; s.cfg.locationOwn = j.locationOwn === undefined ? 'hide' : j.locationOwn;
+        if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
+      }).catch(function (err) { if (s === st) problem(err); });
+    });
     pills.cover.addEventListener('click', function () {
       if (!st) return;
       const s = st;

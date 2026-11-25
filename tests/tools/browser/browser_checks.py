@@ -1246,9 +1246,12 @@ try:
                 b.js("document.querySelector('#lock-banner .lock-go').click()"); b.drain(1.2)
                 ok(b.js("document.querySelector('.tab-panel[data-tab=site]').classList.contains('active')") and b.js("(() => { const r = document.getElementById('server-rules').getBoundingClientRect(); return r.top >= -2 && r.top < innerHeight * 0.6; })()") and b.js("document.getElementById('server-setup').open"), "[lock check] ...and the button opens Settings, opens Server setup and scrolls to the Web server rules")
                 # the block that looks like this server's own opens by itself, once, when a rule is missing (here the server says nothing, so mark one as likely and ask the checks again)
-                b.js("document.querySelector('.wr-fold[data-wr-fold=nginx]').setAttribute('data-likely', '1'); window.__healthProbe()"); b.drain(2.0)
+                b.js("document.querySelector('.wr-fold[data-wr-fold=nginx]').setAttribute('data-likely', '1'); window.__healthProbe()")
+                for _ in range(40):   # (the checks take a couple of seconds, a little more on a busy machine: wait for the block to open, up to eight)
+                    if b.js("document.querySelector('.wr-fold[data-wr-fold=nginx]').open"): break
+                    b.drain(0.2)
                 ok(b.js("document.querySelector('.wr-fold[data-wr-fold=nginx]').open") and not b.js("document.querySelector('.wr-fold[data-wr-fold=apache]').open"), "[web server rules] with a rule missing, the block that looks like this server's own opens by itself (and only that one)")
-                b.js("document.querySelector('.wr-fold[data-wr-fold=nginx] > summary').click()"); b.drain(0.2); b.js("window.__healthProbe()"); b.drain(2.0)
+                b.js("document.querySelector('.wr-fold[data-wr-fold=nginx] > summary').click()"); b.drain(0.2); b.js("window.__healthProbe()"); b.drain(5.0)   # (long enough for the checks to finish and answer: the block must still be closed after them)
                 ok(not b.js("document.querySelector('.wr-fold[data-wr-fold=nginx]').open"), "[web server rules] ...and once the block has been closed by hand, the checks running again do not open it again")
                 tabgo_h = lambda t: (b.js("document.querySelector('[data-tab=%s].side-link, [data-tab=%s].side-hidden').click()" % (t, t)), b.drain(0.4))
                 tabgo_h("site"); b.js("document.querySelector('#health-panel .health-fix').click()"); b.drain(1.0)
@@ -1811,7 +1814,7 @@ try:
     groups = b.js("[...document.querySelectorAll('.site-group')].map(d => d.open)")
     ok(len(groups) >= 8 and not any(groups), "[site settings] the groups fold: every one is closed until opened (the page opens as a short list of group names)", str(groups))
     gtitles = b.js("[...document.querySelectorAll('.site-group .site-group-title')].map(e => e.textContent)")
-    ok(gtitles == ["Folders and photos", "Videos and thumbnails", "Visitors and logs", "Metadata", "Sharing and access", "Signing in and passwords", "Server setup (advanced)", "Files this gallery has made"], "[site settings] the groups are, in order: Folders and photos, Videos and thumbnails, Visitors and logs, Metadata, Sharing and access, Signing in and passwords, Server setup, Files this gallery has made", str(gtitles))
+    ok(gtitles == ["Folders and photos", "Videos and thumbnails", "Visitors and logs", "Media metadata", "Sharing and access", "Signing in and passwords", "Server setup (advanced)", "Files this gallery has made"], "[site settings] the groups are, in order: Folders and photos, Videos and thumbnails, Visitors and logs, Metadata, Sharing and access, Signing in and passwords, Server setup, Files this gallery has made", str(gtitles))
     # the main Info panel switch greys the fields under it out and back, live (they can be looked at, not changed, while it is off)
     DIMQ = "(() => { const rows = [...document.querySelectorAll('#setting-INFO_FIELDS .site-row')]; return {n: rows.length, dim: rows.filter(r => r.classList.contains('site-dim')).length, disabled: rows.filter(r => r.querySelector('input[type=checkbox]').disabled).length, on: document.querySelector('input[name=set_INFO_PANEL][type=checkbox]').checked, foldHidden: document.getElementById('setting-INFO_FIELDS').hidden}; })()"
     d0 = b.js(DIMQ)
@@ -2659,9 +2662,9 @@ try:
         def open_folder16():
             go16("/?admin&folder=sub#settings"); b.js("document.querySelector('.sort-details').open = true"); b.drain(0.2)
         open_folder16()
-        ok(pill16() == "site" and rows16(FL) == "private*,video*,located" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("the site's order"), "[put first] a folder's page shows the site's list under a lit Site's pill", pill16() + " " + rows16(FL))
+        ok(pill16() == "site" and rows16(FL) == "private*,video*,located" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("taken from Settings"), "[put first] a folder's page shows the site's list under a lit Site's pill", pill16() + " " + rows16(FL))
         b.js("document.querySelector('%s li[data-kind=located] .switch').click()" % FL); b.drain(0.4)
-        ok(pill16() == "own" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("custom"), "[put first] changing a switch there moves the pill to This folder's own, and the heading says custom, before anything is saved", pill16())
+        ok(pill16() == "own" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("this folder's own order"), "[put first] changing a switch there moves the pill to This folder's own, and the heading says custom, before anything is saved", pill16())
         b.js("document.querySelector('%s li[data-kind=located] .switch').click()" % FL); b.drain(0.4)
         ok(pill16() == "site", "[put first] ...and changing it back to what the site has moves it back to Site's", pill16())
         b.js("document.querySelector('%s li[data-kind=private] .switch').click()" % FL); b.js("document.querySelector('%s li[data-kind=video] .switch').click()" % FL); b.drain(0.4)
@@ -2768,6 +2771,39 @@ try:
         b.js("(() => { document.querySelector('#vis-choice input[value=me]').click(); document.querySelector('#vis-choice input[value=public]').click(); })()")
         ok(wait18(vis_saved) and items18().get("unlisted") is True and items18().get("restriction") == "private" and b.js(vis("me") + ".checked") and "changed since" not in b.js("document.querySelector('#vis-choice .rowstate').textContent"), "[privacy] two choices made at once: the first (Only me) is saved and stands, the second is ignored, and the page says nothing about a stale page", str(items18()))
         b.js(vis("private") + ".click()"); b.drain(0.6); b.js("document.getElementById('pm-ok').click()"); wait18(vis_saved)
+        # the map switch follows the folder above: the folder's own choice (switched on here) says so and has a button back to following; pressing it drops the choice and the page is drawn again
+        mapbox = "document.querySelector('.map-form input[type=checkbox][name=map_enabled]')"
+        b.js(mapbox + ".click()")
+        for _ in range(25):
+            if items18().get("mapEnabled") is True: break
+            b.drain(0.2)
+        ok(items18().get("mapEnabled") is True, "[map follows] switching a folder's map on stores its own choice")
+        b.goto(B18 + "/?admin&folder=Churches", 1.5)
+        mt = b.js("(() => { const f = document.querySelector('.map-form'); const s = f && f.querySelector('.flag-source'); return {text: s ? s.textContent.replace(/\\s+/g, ' ').trim() : null, btn: !!(f && f.querySelector('[data-flag-inherit]')), on: !!(f && f.querySelector('input[type=checkbox][name=map_enabled]').checked)}; })()")
+        ok(mt["on"] and mt["btn"] and mt["text"] is not None and "own choice" in mt["text"], "[map follows] the folder's settings say it is the folder's own choice and offer the button back to following the folder above", str(mt))
+        b.js("document.querySelector('.map-form [data-flag-inherit]').click()"); b.drain(2.0)
+        for _ in range(25):
+            if "mapEnabled" not in items18() or items18().get("mapEnabled") is None: break
+            b.drain(0.2)
+        mt2 = b.js("(() => { const f = document.querySelector('.map-form'); const s = f && f.querySelector('.flag-source'); return {text: s ? s.textContent.replace(/\\s+/g, ' ').trim() : null, btn: !!(f && f.querySelector('[data-flag-inherit]')), on: !!(f && f.querySelector('input[type=checkbox][name=map_enabled]').checked)}; })()")
+        ok(items18().get("mapEnabled") is None and not mt2["btn"] and not mt2["on"] and mt2["text"] is not None and "No folder above has chosen" in mt2["text"], "[map follows] pressing it drops the folder's own choice (nothing stored for it), and the page, drawn again, says no folder above has chosen, so it is off", str(mt2))
+        # a switch that follows is dashed, a choice of its own is solid, the line under it updates on the spot, and the explicit choices are the ones the design keeps
+        FLAGSTATE = "(() => { const u = document.getElementById('info-under'); const sw = u.querySelector('.switch'), fs = u.querySelector('.flag-source'); return {following: sw.classList.contains('following'), on: u.querySelector('input[type=checkbox]').checked, text: fs ? fs.textContent.replace(/\\s+/g, ' ').trim() : null, pin: !!(fs && fs.querySelector('[data-flag-pin]')), inherit: !!(fs && fs.querySelector('[data-flag-inherit]'))}; })()"
+        fl0 = b.js(FLAGSTATE)
+        ok(fl0["following"] and not fl0["on"] and fl0["pin"] and not fl0["inherit"] and "No folder above has chosen" in (fl0["text"] or ""), "[switch follows] a switch that follows is drawn dashed, with the line under it and the Keep it off here link", str(fl0))
+        b.js("document.querySelector('#info-under input[type=checkbox]').click()"); b.drain(1.2)
+        fl1 = b.js(FLAGSTATE)
+        ok(not fl1["following"] and fl1["on"] and fl1["inherit"] and not fl1["pin"] and "On here, though the folder above has it off" in (fl1["text"] or "") and items18().get("mediaInfo") is True, "[switch follows] switching it on keeps an explicit on, labelled as a widening, drawn solid, and the line updated without a reload", str(fl1))
+        b.js("document.querySelector('#info-under input[type=checkbox]').click()"); b.drain(1.2)
+        fl2 = b.js(FLAGSTATE)
+        ok(not fl2["following"] and not fl2["on"] and fl2["inherit"] and "stays off even if the folder above turns it on" in (fl2["text"] or "") and items18().get("mediaInfo") is False, "[switch follows] switching it off again keeps an explicit off on purpose (narrowing is always kept), and the line says it stays off", str(fl2))
+        b.js("document.querySelector('#info-under [data-flag-inherit]').click()"); b.drain(2.0)
+        fl3 = b.js(FLAGSTATE)
+        ok(fl3["following"] and not fl3["on"] and fl3["pin"] and items18().get("mediaInfo") is None, "[switch follows] the way back drops the choice: it follows again (dashed), nothing stored", str(fl3))
+        b.js("document.querySelector('#info-under [data-flag-pin]').click()"); b.drain(1.2)
+        fl4 = b.js(FLAGSTATE)
+        ok(not fl4["following"] and not fl4["on"] and fl4["inherit"] and items18().get("mediaInfo") is False, "[switch follows] Keep it off here stores an explicit off in one press and the line updates in place", str(fl4))
+        b.js("document.querySelector('#info-under [data-flag-inherit]').click()"); b.drain(2.0)
         b.js(vis("public") + ".click()"); b.drain(1.0)
         modal = b.js("(() => { const m = document.getElementById('priv-modal'); return {shown: !m.hidden, stay: document.getElementById('pm-stay').textContent, open: document.getElementById('pm-open').textContent, on: " + vis("private") + ".checked}; })()")
         ok(modal["shown"] and modal["on"] and modal["stay"] == "0 photos" and modal["open"] == "4 photos" and items18().get("restriction") == "private", "[privacy] choosing Public first asks, with the counts (nothing stays private, four become public), and changes nothing yet", str(modal))
@@ -3147,9 +3183,9 @@ try:
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1100, 900)
         # the Scrub switch follows the download setting
         b.goto(BCO + "/?admin&classic=1&n=3#site", 1.5)
-        b.js("[...document.querySelectorAll('details.site-group')].forEach(g => { if (g.querySelector('summary').textContent.indexOf('Metadata') >= 0) g.open = true; })"); b.drain(0.6)
+        b.js("[...document.querySelectorAll('details.site-group')].forEach(g => { if (g.querySelector('summary').textContent.indexOf('Media metadata') >= 0) g.open = true; })"); b.drain(0.6)
         ok(not b.js("document.getElementById('setting-SCRUB_LOCATION_DATA').hidden"), "[scrub] Scrub location data is always shown (it also covers the viewer's full-size picture and an Only me photo's address)")
-        ok(b.js("(() => { const a = document.getElementById('setting-SCRUB_LOCATION_DATA'); return !a.classList.contains('sub-row') && a.closest('details').querySelector('summary').textContent.indexOf('Metadata') >= 0; })()"), "[scrub] ...as a row of its own in Metadata (it is in force wherever an original is sent, so it does not hang under any download setting)")
+        ok(b.js("(() => { const a = document.getElementById('setting-SCRUB_LOCATION_DATA'); return !a.classList.contains('sub-row') && a.closest('details').querySelector('summary').textContent.indexOf('Media metadata') >= 0; })()"), "[scrub] ...as a row of its own in Media metadata (it is in force wherever an original is sent, so it does not hang under any download setting)")
         # Prepare media: moved in
         b.goto(BCO + "/?admin&classic=1&n=4#site", 1.5)
         b.js("[...document.querySelectorAll('details.site-group')].forEach(g => { if (g.querySelector('summary').textContent.indexOf('Videos and thumbnails') >= 0 || g.querySelector('summary').textContent.indexOf('Visitors and logs') >= 0) g.open = true; }); const o = document.querySelector('#media-panel details.media-outer'); if (o) o.open = true;"); b.drain(0.5)

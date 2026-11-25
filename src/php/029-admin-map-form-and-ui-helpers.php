@@ -1,10 +1,13 @@
 /** The "Map" section of a folder's (or the gallery's) settings: whether its page
  *  shows a map of its own photos, and how close photos must be to share a pin.
  *  Both are per page; a blank radius means the site-wide setting. */
-function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
+function render_admin_map_form($itemsHere, $csrfToken, $isRoot, $dir = null, $adminFolderPath = null) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : (($itemsHere['mapEnabled'] ?? null) === true);
-    $radius = $itemsHere['mapRadius'] ?? null;
+    $mapFlag = $isRoot ? null : folder_map_resolve($dir, $adminFolderPath);   // (this folder's own choice, or the one it takes from the folder above)
+    $radFlag = $isRoot ? null : folder_map_radius_resolve($dir, $adminFolderPath);
+    $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : $mapFlag['on'];
+    $radius = $itemsHere['mapRadius'] ?? null;   // (the folder's own value; blank follows the folder above, else the default)
+    $radiusShown = $isRoot ? MAP_CLUSTER_RADIUS_MILES : $radFlag['value'];
 ?>
     <?php if (ENABLE_PHOTO_LOCATION): ?>
       <form method="post" class="instant-form map-form">
@@ -12,20 +15,21 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         <input type="hidden" name="action" value="save_map_settings">
         <input type="hidden" name="map_enabled" value="0">
         <div class="instant-row">
-          <label class="switch"><input type="checkbox" name="map_enabled" value="1" aria-label="Show a map of <?= $isRoot ? 'the whole gallery' : 'this folder' ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+          <label class="switch<?= !$isRoot && $mapFlag['own'] === null ? ' following' : '' ?>"><input type="checkbox" name="map_enabled" value="1" aria-label="Show a map of <?= $isRoot ? 'the whole gallery' : 'this folder' ?>" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
           <span class="instant-label">Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></span>
           <span class="rowstate" role="status" aria-live="polite"></span>
         </div>
+        <?php if (!$isRoot) render_admin_flag_source($csrfToken, 'save_map_settings', 'map_enabled', $mapFlag, $isRoot, $dir, folder_map_inherited($dir, $adminFolderPath)['on']); ?>
         <div class="warn-note">Visitors' browsers load code from cdnjs and tiles from OpenStreetMap, so those sites see the visit. Only photos with a visible location are plotted.</div>
-        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'Covers every photo in the gallery with a visible location.' : 'Covers this folder\'s photos and subfolders with a visible location (needs this folder\'s location switch).' ?></p>
+        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'Covers every photo in the gallery with a visible location.' : 'Covers this folder\'s photos and subfolders with a visible location (needs this folder\'s location switch). Folders under it that have not chosen show a map too; one of them can switch it off for itself.' ?></p>
         <?php // Pin grouping is part of the map: set in under it, and only there while the map is on. ?>
         <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
           <div class="field" style="max-width:300px;">
             <label>Pin grouping (miles)</label>
-            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
+            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= $esc($radiusShown) ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
-          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
+          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> <?php if ($isRoot): ?>Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).<?php elseif ($radFlag['from'] !== null && !$radFlag['own']): ?>Blank follows <?= $esc($radFlag['from']) ?> (<?= $esc($radFlag['value']) ?>), the folder above that has one.<?php else: ?>Blank follows the folder above that has a value, else the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).<?php endif; ?></p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
@@ -104,7 +108,10 @@ function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
         $checked = $isSite ? ($current === '' || (string) $current === (string) $value) : (string) $current === (string) $value;
         $out .= '<label' . ($isSite ? ' class="site" title="What Settings says"' : '') . '><input type="radio" name="' . $esc($name) . '" value="' . $esc($isSite ? '' : $value) . '"' . ($checked ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
     }
-    return $out . '</div>';
+    // The line that says where the choice comes from: Settings while the folder has none of its own (the dashed button), or its own choice. The page flips it as a button is pressed.
+    $own = (string) $current !== '';
+    $out .= '</div><p class="hint seg-src" data-own="' . ($own ? '1' : '0') . '"><span class="src-follow">Taken from <a href="#site" onclick="return adminGoTo(\'site\', \'setting-FOLDER_DISPLAY_MODE\');">Settings</a>.</span><span class="src-own">This folder\'s own choice. The dashed button is what Settings says: press it to follow Settings again.</span></p>';
+    return $out;
 }
 
 /** A choice of three or more (or with long labels): a button showing the current choice, which opens a small dark list with a tick on the
@@ -198,7 +205,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
 <?php if ($part === 'sort'): ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
         <details class="field wide sort-details"<?= $ps ? ' open' : '' ?>>
-          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
+          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; this folder\'s own order' : '&middot; taken from Settings' ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
           <?php $dirNow = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; $triState = ['' => "Site's", 'on' => 'On', 'off' => 'Off']; ?>
           <div class="sort-rows">
             <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
@@ -319,7 +326,7 @@ function gallery_setting_definitions() {
             ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
-        ['title' => 'Metadata', 'items' => [
+        ['title' => 'Media metadata', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location shows; each folder and photo still has its own switch. Locations are read when thumbnails are made, or with Prepare media. Maps use OpenStreetMap, which the visitor\'s browser contacts.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
@@ -329,7 +336,7 @@ function gallery_setting_definitions() {
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
              'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from an Only me photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
             ['name' => 'INFO_PANEL', 'type' => 'bool', 'label' => 'Info panel',
-             'help' => 'Lets the viewer show an info panel with what a photo\'s own file says about it (camera, when it was taken, its size, position and more). Off: no folder is offered one. Turn it on, then switch it on in the folders that should have it (a folder\'s settings, under Metadata); the switches under Media information choose what it says.',
+             'help' => 'Lets the viewer show an info panel with what a photo\'s own file says about it (camera, when it was taken, its size, position and more). Off: no folder is offered one. Turn it on, then switch it on in the folders that should have it (a folder\'s settings, under Media metadata); the switches under Media information choose what it says.',
              'risk' => 'A photo file can carry more than people expect. The switches below, and the location switches above, decide what visitors see.',
              'offwarn' => 'No info panel is offered anywhere. Each folder\'s own choice is kept.'],
             ['name' => 'INFO_CAMERA', 'type' => 'bool', 'more' => true, 'dim_when' => 'INFO_PANEL', 'label' => 'Camera',

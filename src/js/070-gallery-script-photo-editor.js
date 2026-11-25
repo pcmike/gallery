@@ -52,6 +52,22 @@
       else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
       pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s link on' : 'Switch this photo\u2019s link off') : 'Hidden from visitors unless they have the private-view password';
       noteEl.textContent = note; noteEl.hidden = note === '';
+      // The location switch follows its folder's until the photo has a choice of its own: dotted while it follows (as every inherited setting is), solid once it has one, and the line says which.
+      const own = st.cfg.locationOwn || '', following = own === '';
+      pills.loc.classList.toggle('is-following', following);
+      noteLocEl.textContent = '';
+      if (!st.cfg.locationsOff) {
+        const folderWord = st.cfg.folderLocationOn ? 'shows' : 'does not show';
+        if (following) {
+          noteLocEl.appendChild(document.createTextNode('Location: follows its folder, which ' + folderWord + ' locations. '));
+          if (!st.cfg.folderLocationOn) { const b = document.createElement('button'); b.type = 'button'; b.className = 'linklike'; b.setAttribute('data-loc-pin', ''); b.textContent = 'Keep it hidden'; b.title = 'Keep this photo\u2019s location hidden even if its folder starts showing locations'; noteLocEl.appendChild(b); }
+        } else if ((own === 'show') !== !!st.cfg.folderLocationOn) {
+          noteLocEl.textContent = own === 'show' ? 'Location shown on its own, though its folder does not show locations. Tap the pin to follow the folder again.' : 'Location hidden on its own, though its folder shows locations. Tap the pin to follow the folder again.';
+        } else {
+          noteLocEl.textContent = own === 'hide' ? 'Location kept hidden, whatever its folder does. Tap the pin to show it.' : 'Location shown on its own. Tap the pin to hide it.';
+        }
+      }
+      noteLocEl.hidden = noteLocEl.textContent === '' && !noteLocEl.firstChild;
     };
     const paintLoc = function () {
       if (!st) return;
@@ -170,7 +186,7 @@
         if (!j.ok) throw new Error(j.text || 'Could not load this photo');
         const auto = !!(j.auto && j.lat === '' && j.lng === ''), shown = auto ? j.auto : j;
         f.caption.value = j.caption; f.web.value = j.web; f.lat.value = shown.lat; f.lng.value = shown.lng; f.label.value = j.label;
-        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, own: j.own || '', locationShown: !!j.locationShown, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
+        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, own: j.own || '', locationShown: !!j.locationShown, locationOwn: j.locationOwn || '', folderLocationOn: !!j.folderLocationOn, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
                base: { caption: j.caption, web: j.web, lat: shown.lat, lng: shown.lng, label: j.label }, timer: 0, chain: Promise.resolve(true) };
         ownerState.own[file] = st.cfg.own; ownerState.inh[file] = st.cfg.folderPrivate; ownerState.priv[file] = st.cfg.private; if (j.cover) ownerState.cover[file] = true;
         ownerPaint(); setControls(true); paintPills(); paintLoc(); setStatus('', '');
@@ -229,12 +245,22 @@
         if (flagName === 'private') fields.state = next; else fields.on = on ? '1' : '0';
         post(s.file, fields).then(function (j) {
           if (!j.ok) throw new Error(j.text || 'Not saved');
-          if (flagName === 'private') { setOwn(s.file, next); s.cfg.private = ownerState.priv[s.file]; s.cfg.own = ownerState.own[s.file]; ownerPaint(); } else s.cfg.locationShown = on;
+          if (flagName === 'private') { setOwn(s.file, next); s.cfg.private = ownerState.priv[s.file]; s.cfg.own = ownerState.own[s.file]; ownerPaint(); } else { s.cfg.locationShown = on; s.cfg.locationOwn = j.locationOwn === undefined ? '' : j.locationOwn; }
           if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
         }).catch(function (err) { if (s === st) problem(err); });
       });
     };
     flag('priv', 'private'); flag('loc', 'location');
+    noteLocEl.addEventListener('click', function (e) {   // "Keep it hidden": the photo's location stays hidden whatever its folder does later
+      if (!e.target.closest || !e.target.closest('[data-loc-pin]') || !st) return;
+      const s = st;
+      setStatus('busy', 'Saving…');
+      post(s.file, { action: 'set_item_flag', file: bareOf(s.file), flag: 'location', on: '0' }).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'Not saved');
+        s.cfg.locationShown = false; s.cfg.locationOwn = j.locationOwn === undefined ? 'hide' : j.locationOwn;
+        if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
+      }).catch(function (err) { if (s === st) problem(err); });
+    });
     pills.cover.addEventListener('click', function () {
       if (!st) return;
       const s = st;
