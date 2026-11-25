@@ -18424,7 +18424,7 @@ function health_media_figures($dir, $files) {
         : 'The photos and videos in the gallery take at least ' . health_bytes($ms['bytes']) . ' (counted ' . number_format($ms['counted']) . ' of ' . number_format($ms['files']) . ' files, then stopped: it is a big gallery or a slow disk)';
     $vols = [];
     foreach (health_volumes($dir, $files) as $v) { $mine = 0.0; foreach ($v['devs'] as $dv) $mine += $ms['byDev'][$dv] ?? 0.0; $vols[] = health_bytes($mine); }
-    return ['used' => ['Disk used', $text, $tip . '. Press to see the free space instead'], 'vols' => count($vols) > 1 ? $vols : [], 'files' => (int) $ms['files'], 'at' => time()];
+    return ['used' => ['Space used', $text, $tip . '. Press to see the free space instead'], 'vols' => count($vols) > 1 ? $vols : [], 'files' => (int) $ms['files'], 'at' => time()];
 }
 
 /** A "How to fix" fold for a row that needs a change on the server (something the gallery can't do from its own folder). $steps: a list of lines, each a text (`like this` is
@@ -18507,20 +18507,21 @@ function health_strip($dir, $files) {
     $vols = health_volumes($dir, $files);
     if ($vols) {
         // One card for the disk, with the room the gallery's photos and videos take and the room left: it shows what the gallery takes to start with and a press turns it over to the
-        // free space on the disk lowest on room (the page remembers the choice). "Used" is the gallery's own, added up from its files, not how full the disk is (that has the
+        // free space across all the disks (the page remembers the choice). "Used" is the gallery's own, added up from its files, not how full the disk is (that has the
         // operating system and everything else on it). Adding up every file is not something to do each time the admin is drawn (on a network disk it is a round trip per file), so the
         // page draws a placeholder here and the browser asks for the figure after it is up, keeping the answer (see health_media_figures). With more than one disk a second small card
         // opens the list of them all.
-        $v0 = $vols[0];
+        $freeAll = 0.0; $totalAll = 0.0; foreach ($vols as $v) { $freeAll += $v['free']; $totalAll += $v['total']; }   // (turned over, the card shows the room free across all the disks, which is what is left for the gallery to grow into; the list has each disk's own)
+        $freePct = $totalAll > 0 ? (int) round($freeAll / $totalAll * 100) : 0;
         $usedText = '…'; $usedTip = 'Counting what the photos and videos in the gallery take. Press to see the free space instead';
-        $disk = ['used' => ['Disk used', $usedText, $usedTip],
-                 'free' => ['Disk free', health_bytes($v0['free']), health_bytes($v0['free']) . ' free of ' . health_bytes($v0['total']) . ' (' . $v0['pct'] . '%) on the disk lowest on room. Press to see what the gallery takes instead']];
+        $disk = ['used' => ['Space used', $usedText, $usedTip],
+                 'free' => ['Space free', health_bytes($freeAll), health_bytes($freeAll) . ' free of ' . health_bytes($totalAll) . ' (' . $freePct . '%)' . (count($vols) > 1 ? ' added up across ' . count($vols) . ' disks (the Disks card has each one)' : '') . '. Press to see what the gallery takes instead']];
         $lines = null;
         if (count($vols) > 1) {
             $lines = [];
             foreach ($vols as $v) $lines[] = ['name' => $v['label'], 'free' => health_bytes($v['free']), 'detail' => $v['detail']];
         }
-        $out[] = ['Disk used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
+        $out[] = ['Space used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
     }
     $hasLog = visitlog_find() !== null && visitlog_driver_ok();
     if ($hasLog) $out[] = ['Log', health_bytes(visitlog_size())];
@@ -18597,7 +18598,6 @@ function render_admin_health_panel() {
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
       <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-files="<?= (int) ($si[7] ?? 0) ?>" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l['name'] . ': ' . $l['free'] . ' free (' . $l['detail'] . ')'; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
-      <p class="hs-disk-note" id="hs-disk-note" hidden></p>
       <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><div class="hv-head" title="The disk with the least room first. Tap a line for more"><span>Disks</span><span>Gallery</span><span>Free</span></div><?php foreach ($si[2] as $l): ?><div class="hv-row" role="button" tabindex="0" aria-expanded="false" title="<?= $esc($l['detail']) ?>"><span class="hv-m"><?= $esc($l['name']) ?></span><span class="hs-gal">…</span><span><?= $esc($l['free']) ?></span><span class="hv-detail" hidden><?= $esc($l['detail']) ?></span></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
@@ -20558,8 +20558,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hs-vols .hv-m { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
   .hs-vols .hv-head span:nth-child(n+2), .hs-vols .hv-row > span:nth-child(n+2):not(.hv-detail) { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .hs-vols .hv-detail { grid-column:1 / -1; padding-top:2px; color:var(--muted); font-size:.82em; line-height:1.45; overflow-wrap:anywhere; }
-  .hs-disk-note { margin:-2px 0 10px; color:var(--muted); font-size:.82em; line-height:1.45; }
-  .hs-disk-note[hidden] { display:none; }
   @media (max-width:599px) {
     .health-strip { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
     .health-strip .hs-t { min-width:0; padding:7px 10px; }
@@ -23961,7 +23959,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
         });
         [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
-        var nt = document.getElementById('hs-disk-note'), bt = root.querySelector('.hs-disk'); if (nt && !nt.hidden && bt) nt.textContent = bt.title.replace(/\. Press to see .* instead$/, '') + '.';   // (a line already showing follows the new figure)
       }
       function count(root, panel) {
         if (busy || !panel) return; busy = true;
@@ -23985,8 +23982,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';
         try { localStorage.setItem(KEY, m); } catch (x) {}
         [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
-        var note = document.getElementById('hs-disk-note');   // (what a hover would say, for a screen with no hover: a small line under the numbers while you are looking at this side)
-        if (note) { note.textContent = b.title.replace(/\. Press to see .* instead$/, '') + '.'; note.hidden = false; }
       });
       window.__healthDisk();
     })();

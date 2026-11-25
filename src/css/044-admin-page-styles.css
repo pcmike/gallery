@@ -622,8 +622,6 @@
   .hs-vols .hv-m { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
   .hs-vols .hv-head span:nth-child(n+2), .hs-vols .hv-row > span:nth-child(n+2):not(.hv-detail) { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .hs-vols .hv-detail { grid-column:1 / -1; padding-top:2px; color:var(--muted); font-size:.82em; line-height:1.45; overflow-wrap:anywhere; }
-  .hs-disk-note { margin:-2px 0 10px; color:var(--muted); font-size:.82em; line-height:1.45; }
-  .hs-disk-note[hidden] { display:none; }
   @media (max-width:599px) {
     .health-strip { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
     .health-strip .hs-t { min-width:0; padding:7px 10px; }
