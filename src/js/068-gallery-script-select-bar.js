@@ -147,6 +147,9 @@
         + '<div class="coll-new"><button type="button" class="coll-opt coll-newbtn">New collection\u2026<small>Asks for a name, then adds these photos</small></button><form class="coll-newform" hidden><input type="text" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection"><button type="submit" class="primary">Make and add</button></form></div>'
         + '<button type="button" class="coll-cancel">Cancel</button>';
       document.body.appendChild(pop);
+      // Escape (and Backspace, which asks for it) closes the picker and nothing else: the photos picked stay picked, as the bar still says
+      const onEsc = function (e) { if (!pop.isConnected) { document.removeEventListener('keydown', onEsc, true); return; } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); pop.remove(); document.removeEventListener('keydown', onEsc, true); } };
+      document.addEventListener('keydown', onEsc, true);
       const done = function (text) { pop.remove(); say(text); };
       const add = function (id) { busy = true; paint(); return request(folder, { action: 'collection_member_add_files', id: id, folder: folder, files: JSON.stringify(sel.map(bare)) }).then(function (j) { done(j.text || 'Added.'); }).catch(function (err) { pop.remove(); fail(err); }).then(function () { busy = false; paint(); }); };
       pop.addEventListener('click', function (e) {

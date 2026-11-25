@@ -160,7 +160,7 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
         if ($coll !== null) { $cache[$folderRel] = !empty($coll['ownGallery']); }
         else {
             $own = folder_items_memo($dir, $folderRel);
-            $cache[$folderRel] = is_bool($own['ownGallery'] ?? null) ? $own['ownGallery'] : ($own['quiet'] ?? null) === true;   // (the folder's own choice; with none, an Unlisted folder is a gallery of its own)
+            $cache[$folderRel] = is_bool($own['ownGallery'] ?? null) ? $own['ownGallery'] : quiet_flag_of($own);   // (the folder's own choice; with none, an Unlisted folder is a gallery of its own)
         }
     }
     return $cache[$folderRel];
@@ -168,17 +168,20 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
 
 /** Is any folder (or collection) a "Gallery of its own", by its own mark or because it is Unlisted? Worked out from the folders themselves, once a request, from settings
  *  files the page has read already to decide what a visitor may see (they are shared: folder_items_memo), so a folder copied in from another gallery, restored from a
- *  backup or edited by hand counts at once, with no note to keep in step. A gallery that uses none sets no cookie and changes no header. (Versions up to 2.6.7 read a note
+ *  backup or edited by hand counts at once, with no note to keep in step. A gallery that uses none, or none that this visitor can be shown, sets no cookie and changes no header. (Versions up to 2.6.7 read a note
  *  in the gallery's own settings file instead, `ownGalleries`; it is still written, for them, and no longer read.) */
 function own_galleries_in_use($dir) {
     static $in = null;
     if ($in !== null) return $in;
+    // Only the folders and collections THIS visitor can be shown count: the list the page was filtered to for them (a private folder, an Only me one, an Unlisted one they are not
+    // standing in), so that the cookie and the headers this decides never tell a stranger that such a folder exists somewhere, even as one yes-or-no. Someone who types an Unlisted
+    // folder's address has that folder in their list for that request, so it counts for them.
     if (AUTO_GROUP_BY_FOLDER) {
-        foreach (all_folder_paths($GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])) as $p) {
+        foreach (all_folder_paths($GLOBALS['files'] ?? []) as $p) {
             if ($p !== '' && folder_own_gallery_cached($dir, $p)) return $in = true;
         }
     }
-    foreach (collections_list() as $r) { if (!empty($r['ownGallery'])) return $in = true; }
+    foreach (collections_list() as $r) { if (!empty($r['ownGallery']) && collection_viewer_sees($r)) return $in = true; }
     return $in = false;
 }
 

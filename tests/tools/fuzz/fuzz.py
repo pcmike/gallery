@@ -213,10 +213,15 @@ for lab, why in problems:
     if k in seen: continue
     seen.add(k); print("PROBLEM:", lab, "->", why)
 if errs:
-    uniq = {}
+    uniq = {}; first = {}
     for line in errs.splitlines():
         key = re.sub(r'^\[[^\]]*\]\s*', '', line); key = re.sub(r'\d+', 'N', key)[:170]; uniq[key] = uniq.get(key, 0) + 1
+        first.setdefault(key, line)   # (the first line as it was written, with its real line number: the normalised one above cannot be traced)
     print("--- distinct PHP log messages:")
-    for k, c in sorted(uniq.items(), key=lambda x: -x[1])[:25]: print(f"{c:5d}x {k}")
+    for k, c in sorted(uniq.items(), key=lambda x: -x[1])[:25]: print(f"{c:5d}x {k}\n        first: {first[k][:300]}")
+    # the line of index.php that a message names is worth reading at once: the fixture's own copy is kept beside the report while it is looked at
+    keep = os.environ.get("FUZZ_KEEP_INDEX")
+    if keep:
+        shutil.copyfile(SITE + "/index.php", keep); print("fixture index.php kept at", keep)
 shutil.rmtree(WORK, ignore_errors=True)
 sys.exit(1 if (problems or errs) else 0)

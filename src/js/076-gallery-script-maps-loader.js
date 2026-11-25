@@ -59,7 +59,7 @@
     window.addEventListener('hashchange', peek);
     const peekShare = document.getElementById('map-peek-share');
     if (peekShare) peekShare.addEventListener('click', function () {
-      copyToClipboard(location.origin + location.pathname + peekShare.getAttribute('data-href')).then(function () { flashCopied(peekShare); });
+      copyToClipboard(location.origin + location.pathname + peekShare.getAttribute('data-href')).then(function (ok) { if (ok) flashCopied(peekShare); });
     });
   })();
 
@@ -103,6 +103,6 @@
     });
     const share = document.getElementById('map-share');
     if (share) share.addEventListener('click', function () {
-      copyToClipboard(location.origin + location.pathname + share.getAttribute('data-href')).then(function () { flashCopied(share); });
+      copyToClipboard(location.origin + location.pathname + share.getAttribute('data-href')).then(function (ok) { if (ok) flashCopied(share); });
     });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) close(); });

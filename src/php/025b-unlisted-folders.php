@@ -15,13 +15,22 @@
  * is worked out from the folders in the same way: see own_galleries_in_use.)
  * ----------------------------------------------------------------------- */
 
+/** Whether a folder's own settings (its items file's data) make it Unlisted: the mark is set (true, or what a hand-edited file would write for it: 1, "1", "true") and the folder is not private. Private wins over
+ *  Unlisted, here as in folder_visibility_level: a folder that carries both (a file edited by hand, or made Private on an older version that does not clear the mark) is a private folder, and the
+ *  mark does nothing until it is made public again, so it never makes a private folder behave as an Unlisted one in the lists. */
+function quiet_flag_of($data) {
+    if (!is_array($data) || item_restriction($data) === 'private') return false;
+    $v = $data['quiet'] ?? null;
+    return $v === true || $v === 1 || $v === '1' || (is_string($v) && strtolower($v) === 'true');
+}
+
 /** One folder's own Unlisted setting, read once per request (and reset with the other folder settings when one is saved). */
 function folder_quiet_cached($dir, $folderRel, $reset = false) {
     static $cache = [];
     if ($reset) { $cache = []; return null; }
     $folderRel = (string) $folderRel;
     if (!isset($cache[$folderRel])) {
-        $cache[$folderRel] = ($folderRel === '' ? false : (folder_items_memo($dir, $folderRel)['quiet'] ?? null) === true);   // (the gallery's own folder cannot be Unlisted: it is the gallery)
+        $cache[$folderRel] = ($folderRel === '' ? false : quiet_flag_of(folder_items_memo($dir, $folderRel)));   // (the gallery's own folder cannot be Unlisted: it is the gallery)
     }
     return $cache[$folderRel];
 }
@@ -77,7 +86,7 @@ function quiet_request_inside($root) {
  *  Unlisted: a folder that is both (a hand-edited file) is private. */
 function folder_visibility_level($data) {
     if (item_restriction($data) === 'private') return ($data['unlisted'] ?? null) === true ? 'me' : 'private';
-    return ($data['quiet'] ?? null) === true ? 'unlisted' : 'public';
+    return quiet_flag_of($data) ? 'unlisted' : 'public';
 }
 
 /** Which folder a folder's visibility follows, when the folders above it are stricter than its own setting: ['level', 'path', 'label'] or null. A folder cannot be more open

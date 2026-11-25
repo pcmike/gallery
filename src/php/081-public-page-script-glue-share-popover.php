@@ -1,21 +1,46 @@
 <?php if (is_admin_browser()): ?>
   // The owner's menu of links to a photo (opened by the link button on a tile and by the viewer's link button): what to copy depends on what the photo is.
-  //  Public or Unlisted: the viewer link (the photo in the gallery), the picture link (the image itself, viewing size) and, only where a stranger could download it,
+  //  Public or Unlisted: the viewer link (the photo in the gallery), the picture link (the image itself, as the viewer shows it) and, only where a stranger could download it,
   //  the original's link. Private: Share just this photo (a share link), and the viewer link, which only people who already have access can open. An Only me photo has
   //  its own address and its own buttons, so it never gets this menu.
   let linkPop = null, linkPopFrom = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }
-  function linkPopKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const f = linkPopFrom; closeLinkPopup(); if (f && f.focus) { try { f.focus({ preventScroll: true }); } catch (x) {} } } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') closeLinkPopup(); }
-  function linkPopAway(e) { if (linkPop && !linkPop.contains(e.target) && !(linkPopFrom && linkPopFrom.contains && linkPopFrom.contains(e.target))) closeLinkPopup(); }   // (a press anywhere else: the photo, the page, another button, the empty space)
+  function linkPopKey(e) {
+    if (!linkPop) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const f = linkPopFrom; closeLinkPopup(); if (f && f.focus) { try { f.focus({ preventScroll: true }); } catch (x) {} } return; }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { closeLinkPopup(); return; }   // (on to another photo)
+    // The menu keeps the keys while it is open: Up and Down (and Home, End) move between its rows, Tab goes round inside it (the page and the viewer behind are not reached)
+    const rowsEl = [].slice.call(linkPop.querySelectorAll('.lm-row')); if (!rowsEl.length) return;
+    const at = rowsEl.indexOf(document.activeElement);
+    let to = null;
+    if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) to = rowsEl[(at + 1) % rowsEl.length];
+    else if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) to = rowsEl[(at <= 0 ? rowsEl.length : at) - 1];
+    else if (e.key === 'Home') to = rowsEl[0];
+    else if (e.key === 'End') to = rowsEl[rowsEl.length - 1];
+    if (to) { e.preventDefault(); e.stopPropagation(); try { to.focus({ preventScroll: true }); } catch (x) {} }
+  }
+  // A press anywhere else closes the menu, and that press does nothing more (the photo is not opened, the viewer is not closed, the zoom does not change): the click that follows it is
+  // eaten. Another tile's link button is the exception: it moves the menu to its own photo in one press.
+  function linkPopAway(e) {
+    if (!linkPop || linkPop.contains(e.target) || (linkPopFrom && linkPopFrom.contains && linkPopFrom.contains(e.target))) return;
+    const other = e.target.closest ? e.target.closest('.link-toggle') : null;
+    closeLinkPopup();
+    if (other) return;
+    const eat = (ev) => { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); done(); };
+    const done = () => { clearTimeout(timer); document.removeEventListener('click', eat, true); };
+    const timer = setTimeout(done, 700);   // (a press that was a drag or a scroll has no click after it)
+    document.addEventListener('click', eat, true);
+  }
   function ownerLinkRows(file) {
     const isVideo = /\.(mov|mp4)$/i.test(file), rows = [];
     const priv = !!(ownerState && ownerState.priv && ownerState.priv[file]);
-    <?php if (ENABLE_SHARE_LINKS): ?>if (priv && window.GalleryShare) rows.push({ kind: 'share', icon: 'share', name: 'Share just this photo\u2026', hint: 'a share link you can end, with a date and a log' });<?php endif; ?>
+    const closed = !!(ownerState && ownerState.closed);   // (a closed gallery: a plain link opens only for people who are signed in, so a share link is how anyone else gets in, for a public photo too)
+    <?php if (ENABLE_SHARE_LINKS): ?>if ((priv || closed) && window.GalleryShare) rows.push({ kind: 'share', icon: 'share', name: 'Share just this photo\u2026', hint: 'a share link you can end, with a date and a log' });<?php endif; ?>
 
     rows.push({ kind: 'page', icon: 'link', name: 'Viewer link', hint: priv ? 'opens it in the gallery, for people who already have access' : 'opens the photo in the gallery' });
     if (!priv) {
       rows.push({ kind: 'picture', icon: isVideo ? 'video' : 'gallery', name: isVideo ? 'Video link' : 'Picture link', hint: isVideo ? 'the video file itself' : 'the image itself, as the viewer shows it' });
-      if (ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the original file, as a download' });
+      if (!closed && ownerState && ownerState.dl && ownerState.dl[file]) rows.push({ kind: 'original', icon: 'download', name: 'Original link', hint: 'the original file, as a download' });
     }
     return rows;
   }
@@ -36,8 +61,9 @@
       b.querySelector('strong').textContent = r.name; b.querySelector('small').textContent = r.hint;
       b.addEventListener('click', () => {
         closeLinkPopup();
-        if (r.kind === 'share') { window.GalleryShare.quick({ kind: 'photos', files: [file], allPrivate: true, anyPrivate: true }); return; }
-        copyToClipboard(ownerLinkUrl(file, r.kind)).then(() => { if (anchor && anchor.isConnected !== false) flashCopied(anchor); });
+        if (r.kind === 'share') { const isPriv = !!(ownerState && ownerState.priv && ownerState.priv[file]); window.GalleryShare.quick({ kind: 'photos', files: [file], allPrivate: isPriv, anyPrivate: isPriv }); return; }
+        if (anchor && anchor.focus) { try { anchor.focus({ preventScroll: true }); } catch (x) {} }   // (the focus goes back to the button: for a keyboard it is where it was, and the tile's button stays in view for the tick)
+        copyToClipboard(ownerLinkUrl(file, r.kind)).then((ok) => { if (ok && anchor && anchor.isConnected !== false) flashCopied(anchor); });
       });
       linkPop.appendChild(b);
     });

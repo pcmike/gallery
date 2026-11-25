@@ -292,7 +292,11 @@ function health_mount_of($path) {
         if (strncmp($path, $mp, strlen($mp)) === 0 && ($best === null || strlen($mp) >= strlen(rtrim($best[0], '/') . '/'))) $best = $m;
     }
     if ($best === null) return null;
-    $src = preg_replace('~//[^/@\s]*@~', '//', (string) $best[2]);
+    $src = (string) $best[2];
+    // A login written into the address is taken out, in every form seen: //user:pass@host/share, ftp://bob:p@ss@host/, https://bob:my pass@host/x, curlftpfs#ftp://bob:secret@host/
+    // (everything from the first // through the LAST @ goes: a password can hold a / or an @, and a shown address that lost a little too much is harmless) and user@host:/path (sshfs).
+    if (strpos($src, '//') !== false && strpos($src, '@') !== false) $src = preg_replace('~//.*@~', '//', $src);
+    elseif (preg_match('~^[^/\s@]+@[^/\s:]+:~', $src)) $src = preg_replace('~^[^@]*@~', '', $src);
     return [$best[0], $best[1], function_exists('mb_substr') ? mb_substr($src, 0, 120) : substr($src, 0, 120)];
 }
 
@@ -313,12 +317,33 @@ function health_common_folder($paths) {
  *  size of the disk and, when it can be read, what it is). */
 function health_disk_label($dir, $paths, $isHome, $total) {
     $cover = health_common_folder($paths); $mt = health_mount_of($cover);
-    $detail = health_bytes($total) . ' total';
-    if ($mt) { $what = trim($mt[1] . ' ' . ($mt[2] === $mt[1] || $mt[2] === 'none' ? '' : $mt[2])); if ($what !== '') $detail .= ' · ' . $what; }
-    if ($isHome) return ['./', $dir . ' · ' . $detail];
+    // Folders of one disk entry that are under DIFFERENT mounts (two bind mounts of one disk, two sub-volumes): the folder above all of them is no mount of its own, so the
+    // type and source read from it would be another disk's. Each mount point is named and the type and source are shown only when they are the same for every one.
+    $mounts = []; foreach ($paths as $p) { $m = health_mount_of($p); if ($m) $mounts[$m[0]] = $m; }
+    $detail = health_bytes($total) . ' total'; $fs = '';
+    if (count($mounts) > 1) {
+        $kinds = array_values(array_unique(array_map(function ($m) { return trim($m[1] . ' ' . ($m[2] === $m[1] || $m[2] === 'none' ? '' : $m[2])); }, $mounts)));
+        if (count($kinds) === 1 && $kinds[0] !== '') $detail .= ' · ' . $kinds[0];
+        $fs = count(array_unique(array_map(function ($m) { return $m[1]; }, $mounts))) === 1 ? (string) reset($mounts)[1] : '';
+        if ($isHome) return ['./', $dir . ' · ' . $detail, $fs];
+        $names = array_map(function ($mp) use ($dir) { $mp = rtrim($mp, '/'); $mp = $mp === '' ? '/' : $mp; return strncmp($mp . '/', $dir . '/', strlen($dir) + 1) === 0 ? './' . ltrim(substr($mp, strlen($dir)), '/') : $mp; }, array_keys($mounts));
+        sort($names);
+        return [implode(', ', $names), $detail, $fs];
+    }
+    if ($mt) { $what = trim($mt[1] . ' ' . ($mt[2] === $mt[1] || $mt[2] === 'none' ? '' : $mt[2])); if ($what !== '') $detail .= ' · ' . $what; $fs = (string) $mt[1]; }
+    if ($isHome) return ['./', $dir . ' · ' . $detail, $fs];
     $at = $mt && $mt[0] !== '/' && strncmp($cover . '/', rtrim($mt[0], '/') . '/', strlen(rtrim($mt[0], '/')) + 1) === 0 ? rtrim($mt[0], '/') : $cover;
     if (strncmp($at . '/', $dir . '/', strlen($dir) + 1) === 0) $at = './' . ltrim(substr($at, strlen($dir)), '/');
-    return [$at, $detail];
+    return [$at, $detail, $fs];
+}
+
+/** The free space and the size of all the disks together: [free, total, how many disks were counted]. Datasets of one pool report the same free space, so entries with exactly the same free
+ *  space and the same type of filesystem are counted once (with the biggest total of them); disks of different types, or with different free space, are added. */
+function health_free_sum($vols) {
+    $groups = [];
+    foreach (array_values($vols) as $i => $v) { $k = ($v['fs'] ?? '') !== '' ? sprintf('%.0f', $v['free']) . '|' . $v['fs'] : 'own' . $i; $groups[$k] = ['free' => $v['free'], 'total' => max($groups[$k]['total'] ?? 0, $v['total'])]; }
+    $free = 0.0; $total = 0.0; foreach ($groups as $g) { $free += $g['free']; $total += $g['total']; }
+    return [$free, $total, count($groups)];
 }
 
 /** The disks the gallery's photos and files live on, least free space first: [{name, free, total, pct, writable}]. The gallery's own folder, every folder from elsewhere
@@ -371,13 +396,13 @@ function health_volumes($dir, $files) {
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
     $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); $uniq[$k]['paths'] = array_values(array_unique(array_merge($uniq[$k]['paths'], $v['paths']))); } else $uniq[$k] = $v; }
     $out = array_values($uniq);
-    foreach ($out as $i => $v) { [$out[$i]['label'], $out[$i]['detail']] = health_disk_label($dir, $v['paths'], $v['home'], $v['total']); }   // (the short name and the line of details for the list under the numbers; the rows below keep the longer name)
+    foreach ($out as $i => $v) { [$out[$i]['label'], $out[$i]['detail'], $out[$i]['fs']] = health_disk_label($dir, $v['paths'], $v['home'], $v['total']); }   // (the short name and the line of details for the list under the numbers; the rows below keep the longer name)
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
 }
 
 /** How much room the gallery's own photos and videos take: every media file the gallery shows (a mapped folder's too), added up from the room each file takes on its disk (what
- *  `du` reports, read without running a program), not from how full the disk is. [bytes, files counted, files in all, bytes by device, whether all were counted]. A very big gallery or a slow disk cuts the count short after about two
+ *  `du` reports, read without running a program), not from how full the disk is. [bytes, files counted, files in all, bytes by device, whether all were counted]. A very big gallery or a slow disk cuts the count short after eight
  *  seconds (the figure is then "at least"). */
 function health_media_size($dir, $files, $budget = 8.0) {
     static $cache = [];
@@ -398,13 +423,14 @@ function health_media_size($dir, $files, $budget = 8.0) {
 
 /** What the disk card and the list of disks show for "what the gallery takes": the card's [label, figure, tooltip] and, for each disk of the list in its order, the figure for that
  *  disk. Counting every file can be slow (a network disk, a big gallery), so the page never does it while it is drawn: it asks for this once it is up, and keeps the answer. */
-function health_media_figures($dir, $files) {
-    $ms = health_media_size($dir, $files);
-    $text = health_bytes($ms['bytes']) . ($ms['complete'] ? '' : '+');
+function health_media_figures($dir, $files, $budget = 8.0) {
+    $ms = health_media_size($dir, $files, $budget);
+    $fmt = function ($b) use ($ms) { return $b <= 0 ? ($ms['complete'] ? '0 KB' : '—') : health_bytes($b) . ($ms['complete'] ? '' : '+'); };   // (nothing is "0 KB", not "1 KB"; a count cut short says "at least" for each disk, and "—" for one it has not reached)
+    $text = $fmt($ms['bytes']);
     $tip = $ms['complete'] ? 'The photos and videos in the gallery take ' . $text . ' (' . number_format($ms['counted']) . ' file' . ($ms['counted'] === 1 ? '' : 's') . ')'
         : 'The photos and videos in the gallery take at least ' . health_bytes($ms['bytes']) . ' (counted ' . number_format($ms['counted']) . ' of ' . number_format($ms['files']) . ' files, then stopped: it is a big gallery or a slow disk)';
     $vols = [];
-    foreach (health_volumes($dir, $files) as $v) { $mine = 0.0; foreach ($v['devs'] as $dv) $mine += $ms['byDev'][$dv] ?? 0.0; $vols[] = health_bytes($mine); }
+    foreach (health_volumes($dir, $files) as $v) { $mine = 0.0; foreach ($v['devs'] as $dv) $mine += $ms['byDev'][$dv] ?? 0.0; $vols[] = [$v['label'], $fmt($mine)]; }   // (each figure comes with the name the list shows the disk by: the list may be in another order by the time the answer is used)
     return ['used' => ['Space used', $text, $tip . '. Press to see the free space instead'], 'vols' => count($vols) > 1 ? $vols : [], 'files' => (int) $ms['files'], 'at' => time()];
 }
 
@@ -492,11 +518,11 @@ function health_strip($dir, $files) {
         // operating system and everything else on it). Adding up every file is not something to do each time the admin is drawn (on a network disk it is a round trip per file), so the
         // page draws a placeholder here and the browser asks for the figure after it is up, keeping the answer (see health_media_figures). With more than one disk a second small card
         // opens the list of them all.
-        $freeAll = 0.0; $totalAll = 0.0; foreach ($vols as $v) { $freeAll += $v['free']; $totalAll += $v['total']; }   // (turned over, the card shows the room free across all the disks, which is what is left for the gallery to grow into; the list has each disk's own)
+        [$freeAll, $totalAll, $nDisks] = health_free_sum($vols);   // (turned over, the card shows the room free across all the disks, which is what is left for the gallery to grow into; the list has each disk's own)
         $freePct = $totalAll > 0 ? (int) round($freeAll / $totalAll * 100) : 0;
         $usedText = '…'; $usedTip = 'Counting what the photos and videos in the gallery take. Press to see the free space instead';
         $disk = ['used' => ['Space used', $usedText, $usedTip],
-                 'free' => ['Space free', health_bytes($freeAll), health_bytes($freeAll) . ' free of ' . health_bytes($totalAll) . ' (' . $freePct . '%)' . (count($vols) > 1 ? ' added up across ' . count($vols) . ' disks (the Disks card has each one)' : '') . '. Press to see what the gallery takes instead']];
+                 'free' => ['Space free', health_bytes($freeAll), health_bytes($freeAll) . ' free of ' . health_bytes($totalAll) . ' (' . $freePct . '%)' . ($nDisks > 1 ? ' added up across ' . $nDisks . ' disks (the Disks card has each one)' : '') . '. Press to see what the gallery takes instead']];
         $lines = null;
         if (count($vols) > 1) {
             $lines = [];

@@ -130,7 +130,7 @@ $collectionCardKeys = [];   // (the keys of the groups that are collection cards
 if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
     // (what this visitor may see is worked out here for the cards: a card's address depends on whether the folder its collection is kept in shows them anything)
     $cardVisible = is_admin_browser() ? $files : array_values(array_filter($files, function ($f) use ($dir, $itemsData, $photoPass) {
-        return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);
+        return $photoPass !== null ? $f === $photoPass : (viewer_may_see_item($dir, $f, $itemsData) && !quiet_hidden_for_visitor($dir, $f, $itemsData));   // (the same test as the page's own filter below: a folder this visitor is not shown, an Unlisted one, must not make a collection's card carry that folder's address)
     }));
     foreach (collection_cards($dir, '', $files, $cardVisible) as [$collectionKey, $collectionRec, $collectionFiles]) {
         if (!isset($folderGroups[$collectionKey])) { $folderGroups[$collectionKey] = $collectionFiles; $collectionCardKeys[$collectionKey] = true; }

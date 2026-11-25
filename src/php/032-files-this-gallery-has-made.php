@@ -695,7 +695,7 @@ KIT_CSS;
   function seg(name, list, cur) { return '<div class="gs-seg" data-seg="' + name + '" role="radiogroup">' + list.map(function (o) { return '<button type="button" role="radio" aria-checked="' + (String(o[0]) === String(cur)) + '" data-v="' + o[0] + '" class="' + (String(o[0]) === String(cur) ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
   function csrf() { return fetch((cfg.admin || '?admin') + '&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); }).then(function (j) { return j.token; }); }
   function closeModal() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); modal = null; document.removeEventListener('keydown', onKey, true); }
-  function onKey(e) { if (e.key === 'Escape' && modal) { e.preventDefault(); e.stopPropagation(); closeModal(); } }
+  function onKey(e) { if (e.key === 'Escape' && modal) { if (document.querySelector('.gs-large')) return; /* (the big code over the form takes this key; the form stays under it) */ e.preventDefault(); e.stopPropagation(); closeModal(); } }
   function when(sec) { return sec > 0 ? new Date((Math.floor(Date.now() / 1000) + sec) * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
   // What the person will see, said plainly: what the link covers, and the public rest of the gallery (listed too, or not).
   function fineText(photos, one, only) {
@@ -718,7 +718,7 @@ KIT_CSS;
     var subject = '';
     if (photos) {
       var shown = files.slice(0, 6).map(function (f) { return '<img src="?img=' + encodeURIComponent(f) + '&size=thumb" alt="" loading="lazy">'; }).join('');
-      subject = one ? '<div class="gs-photo"><div class="gs-thumbs">' + shown + '</div><div><strong>' + esc(files[0].split('/').pop()) + '</strong><div class="gs-muted">' + esc(files[0].indexOf('/') > 0 ? files[0].replace(/\/[^\/]*$/, '') + ' · private' : 'The front page · private') + '</div></div></div>'
+      subject = one ? '<div class="gs-photo"><div class="gs-thumbs">' + shown + '</div><div><strong>' + esc(files[0].split('/').pop()) + '</strong><div class="gs-muted">' + esc((files[0].indexOf('/') > 0 ? files[0].replace(/\/[^\/]*$/, '') : 'The front page') + (anyPriv ? ' · private' : '')) + '</div></div></div>'
         : '<div class="gs-photo"><div class="gs-thumbs">' + shown + '</div><div class="gs-muted">' + (files.length > 6 ? '+' + (files.length - 6) + ' more' : '') + '</div></div>';
     } else subject = '<div class="gs-f"><span class="gs-k">Folder</span><div class="gs-chips"><span class="gs-chip">' + esc(opts.label || opts.path) + '</span></div><div class="gs-muted">Everything inside it too.</div></div>';
     var o = document.createElement('div'); o.className = 'gs-modal'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); o.setAttribute('aria-label', title);

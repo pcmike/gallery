@@ -9,7 +9,7 @@
   }
   function copyAddress(code, btn) {
     const root = new URL(galleryRootHref, window.location.href); root.search = ''; root.hash = '';
-    return copyToClipboard(root.href + (shortAddressOk ? '' : '?') + code).then(() => { btn.classList.remove('busy'); flashCopied(btn); });
+    return copyToClipboard(root.href + (shortAddressOk ? '' : '?') + code).then((ok) => { btn.classList.remove('busy'); if (ok) flashCopied(btn); });
   }
   // The address of a photo in an Only me folder is already worked out for the owner's page, so Copy is just a copy. Only a folder with no id yet
   // (one marked Only me before the address existed, or a folder inside one) and "New address" ask the server.

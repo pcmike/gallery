@@ -189,7 +189,7 @@
   }, { passive: true });
   document.addEventListener('keydown', function (e) {
     if (!ss.on || !lightbox.classList.contains('open') || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, input, textarea, select, [contenteditable="true"]')) return;
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, .lb-sharepop, input, textarea, select, [contenteditable="true"]')) return;
     ssShowBar();
     if (e.key === 'Escape') {
       if (typeof miniExpanded !== 'undefined' && miniExpanded) return;   // (the big map closes first, as it always did)

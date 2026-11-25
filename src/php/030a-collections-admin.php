@@ -72,7 +72,11 @@ function own_galleries_recompute($dir, $files) {
     $any = false;
     foreach (all_folder_paths($files) as $p) { if ($p !== '' && folder_own_gallery_cached($dir, $p)) { $any = true; break; } }
     if (!$any) foreach (collections_list() as $r) if ($r['ownGallery']) { $any = true; break; }
+    // This note is only kept for an older version to read (this one works the answer out from the folders). A failure to write it must not turn the action that called this into
+    // "Nothing was saved" when what the owner asked for was saved: the flag is put back as it was.
+    $failedBefore = !empty($GLOBALS['__data_write_failed']);
     items_update($dir, function (&$data) use ($any) { if ($any) $data['ownGalleries'] = true; else unset($data['ownGalleries']); });
+    $GLOBALS['__data_write_failed'] = $failedBefore;
 }
 
 function collection_fail_warn($text) { admin_json_exit(['ok' => true, 'text' => '', 'warn' => $text]); }

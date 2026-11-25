@@ -302,7 +302,7 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Only me'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
-        if (($d['quiet'] ?? null) === true) $set[] = ['', 'Unlisted: public, left out of every list'];
+        if (quiet_flag_of($d)) $set[] = ['', 'Unlisted: public, left out of every list'];   // (the folder's ['quiet'] mark, read the one way everywhere: quiet_flag_of)
         if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
         if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo links send the bare file'];
@@ -527,7 +527,7 @@ function admin_cover_state($dir, $files, $folderPath) {
         $cf = pick_folder_cover($under, $cspec, $prefix . $name);
         $rec = items_read(resolve_real_path($dir, $prefix . $name));
         $tiles[] = ['name' => $name, 'label' => $label($prefix . $name, $name), 'file' => $cf, 'url' => $cf !== null ? img_url($cf, 'cover') : '', 'chosen' => $cspec !== null,
-            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'only me' : 'private') : (($rec['quiet'] ?? null) === true ? 'unlisted' : '')];
+            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'only me' : 'private') : (quiet_flag_of($rec) ? 'unlisted' : '')];
     }
     return ['mode' => $mode, 'title' => $title, 'small' => $small, 'file' => $file, 'url' => $file !== null ? img_url($file, 'cover') : '', 'from' => $mode === 'follow' ? substr($spec, 7) : ($mode === 'auto' ? $src : ''), 'tiles' => $tiles];
 }
@@ -634,7 +634,7 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $private = !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private';
     $me = $private && ($itemsHere['unlisted'] ?? null) === true;
-    $quiet = !$private && ($itemsHere['quiet'] ?? null) === true;
+    $quiet = !$private && quiet_flag_of($itemsHere);
     $level = $me ? 'me' : ($private ? 'private' : ($quiet ? 'unlisted' : 'public'));
     $names = ['public' => 'Public', 'unlisted' => 'Unlisted', 'private' => 'Private', 'me' => 'Only me'];
     $descs = visibility_descriptions();

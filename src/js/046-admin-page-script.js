@@ -1,13 +1,21 @@
-  // Backspace closes an open dialog the way Escape does, for a keyboard that has no Escape key. Never while typing in a field (there it deletes a letter). It asks the
+  // Backspace closes an open dialog the way Escape does, for a keyboard that has no Escape key. Never while typing in a field (there it deletes a letter), and never in a dialog the
+  // person has already done something in (typed, ticked or chosen: it may hold what they have been working on; Escape and the dialog's own buttons still close it). It asks the
   // dialog's own Escape to run, so each one closes as it always does (a question is cancelled, nothing is changed).
+  var DIALOGS = '.fp-modal, .admin-modal, .gs-modal, .gs-large, .fm-ov, .map-modal, .lb-sharepop, .coll-pop, .sort-pop';
+  function markWorked(e) { if (!e.isTrusted || !e.target || !e.target.closest) return; var d = e.target.closest(DIALOGS); if (d) d.__worked = true; }   // (only real typing, ticking and choosing counts: a page filling a field in does not)
+  document.addEventListener('input', markWorked, true); document.addEventListener('change', markWorked, true);
+  if (window.MutationObserver) new MutationObserver(function (list) { list.forEach(function (m) { if (m.target.hidden) m.target.__worked = false; }); }).observe(document.body, { attributes: true, attributeFilter: ['hidden'], subtree: true });   // (a dialog shown again starts untouched)
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
     var t = e.target;
     if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
-    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
+    var open = [].slice.call(document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])'));
     if (!open.length) return;
+    var top = null, topZ = -Infinity;   // (the dialog on top: the highest in the stacking order, the later one in the page where they are level)
+    open.forEach(function (el) { var z = parseInt(getComputedStyle(el).zIndex, 10); if (isNaN(z)) z = 0; if (z >= topZ) { top = el; topZ = z; } });
+    if (top.__worked) return;
     e.preventDefault(); e.stopPropagation();
-    open[open.length - 1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    top.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
   }, true);
   // ---- When the window comes back, what is shown may be out of date (a visitor came, a lockout happened, another browser changed something). Parts of the page
   // register here. Each is refreshed when the window becomes visible or gets focus again, and when its tab is opened, at most once every 15 seconds (api.min), and never
@@ -460,7 +468,9 @@
             const holder = document.createElement('div'); holder.innerHTML = (j && j.ok && j.html) || '';
             const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
             const open = panel.classList.contains('show-all');
+            const vl = document.getElementById('hs-vols'), listOpen = !!vl && !vl.hidden, rowsOpen = vl ? [].filter.call(vl.querySelectorAll('.hv-row'), function (r) { return r.getAttribute('aria-expanded') === 'true'; }).map(function (r) { return r.querySelector('.hv-m').textContent; }) : [];   // (the list of disks, and the lines opened in it, as the person left them)
             panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
+            if (listOpen) { const nv = document.getElementById('hs-vols'), nm = panel.querySelector('.hs-more'); if (nv && nm) { nv.hidden = false; nm.setAttribute('aria-expanded', 'true'); [].forEach.call(nv.querySelectorAll('.hv-row'), function (r) { if (rowsOpen.indexOf(r.querySelector('.hv-m').textContent) >= 0) { r.setAttribute('aria-expanded', 'true'); r.querySelector('.hv-detail').hidden = false; } }); } }
             if (window.__healthDisk) window.__healthDisk(panel, true);   // (the disk card goes back to the side this browser chose, and what the gallery takes is counted again: Check again was asked for)
             if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
           })
@@ -1978,6 +1988,7 @@
       row.classList.toggle('is-moot', level === 'me');
       if (note && own) note.textContent = own.note || '';
     }
+    document.addEventListener('instant-saved', function (ev) { var j = ev.detail; if (j && j.own) paintOwn(j.own); });   // (its own switch was pressed: the line under it follows)
     function paint(l, own) {
       level = l; wrap.setAttribute('data-level', l);
       var e = effective(l), following = e !== l;
@@ -2017,7 +2028,9 @@
       var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = l !== 'me';
       paintOwn(own);
     }
+    var saving = null;   // (the level being saved: a second choice made before the answer is ignored, as the server would refuse it, going by the level this page still shows)
     function send(to, done) {
+      saving = to;
       var body = new URLSearchParams();
       body.set('csrf_token', csrf); body.set('action', 'set_folder_visibility'); body.set('level', to); body.set('was', level); body.set('above', aboveLevel);   // (the level this page showed: the server refuses a choice made on a stale page)
       say('Saving…', 'busy');
@@ -2025,11 +2038,12 @@
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
+          saving = null;
           if (!j.ok) { if (j.level) paint(j.level, null); say(j.text, 'err'); done(false); return; }   // (a stale page: it shows where the folder stands now, and nothing was changed)
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
           paint(to, j.own); say('Saved', 'ok'); window.__siteDirty = true; done(true);
         })
-        .catch(function (e) { say(e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); done(false); });
+        .catch(function (e) { saving = null; say(e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); done(false); });
     }
     function closeModal() { pending = null; if (modal) modal.hidden = true; var c = wrap.querySelector('input[name=vis]:checked'); if (c) c.focus(); }
     function rowsShown(on) { [].forEach.call(modal.querySelectorAll('.pm-row'), function (r) { r.style.display = on ? '' : 'none'; }); }   // (the counts belong to opening a private folder only)
@@ -2075,6 +2089,7 @@
       r.addEventListener('click', function () {   // (a click, not a change: a folder that follows a stricter one has that button drawn as chosen, and pressing it is a choice of its own)
         var to = r.value;
         if (r.disabled) return;
+        if (saving) { paint(saving, null); return; }   // (one choice at a time: the first one is still being saved)
         if (to === level) { if (!canUnset(level)) return; to = 'public'; }   // (pressing a folder's own setting again takes it away, when there is a folder above to follow instead)
         var kind = questionFor(level, to);
         if (kind && modal) { paint(level, null); if (kind === 'open') ask(to); else askPlain(to, kind); return; }   // (stays where it was until it is confirmed)
@@ -2083,6 +2098,7 @@
     });
     wrap.addEventListener('click', function (e) {   // "Remove it": a folder's own setting that is looser than what it follows
       if (!e.target.closest || !e.target.closest('.vf-remove')) return;
+      if (saving) return;
       var to = 'public', kind = questionFor(level, to);
       if (kind && modal) { if (kind === 'open') ask(to); else askPlain(to, kind); return; }
       send(to, function (ok) { if (!ok) paint(level, null); });
@@ -2401,7 +2417,7 @@
         function effects(state) { [].forEach.call(row ? row.querySelectorAll('.effect') : [], function (e) { e.hidden = (e.getAttribute('data-effect') === 'on') !== state; }); }
         effects(on);
         // What switching it off does appears beside the switch once it is off (and goes when it is back on), instead of in a dialog.
-        post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); effects(!on); }, function () { if (note) note.hidden = on || !off; if (cb.name === 'set_ENABLE_THUMBNAIL_CACHE') mediaPanelFollow(on); });
+        post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); effects(!on); if (window.__syncDim) window.__syncDim(); }, function () { if (note) note.hidden = on || !off; if (cb.name === 'set_ENABLE_THUMBNAIL_CACHE') mediaPanelFollow(on); });
       });
     });
     // On the Settings page: the switches are saved by the checkbox code above; the order is saved here.
@@ -2503,7 +2519,7 @@
     // drawn with "…", filled in from what this browser remembers (with the time it was counted), and counted again only when that is a day old, when the number of files in the gallery
     // has changed, or when Check again is pressed.
     (function () {
-      var KEY = 'galleryHealthDisk', FIG = 'galleryMediaSize', DAY = 86400, busy = false;
+      var SCOPE = location.pathname.replace(/[^\/]*$/, ''), KEY = 'galleryHealthDisk|' + SCOPE, FIG = 'galleryMediaSize|' + SCOPE, DAY = 86400, busy = false;   // (kept per gallery: two galleries at one site address do not share what the other counted)
       function mode() { try { return localStorage.getItem(KEY) === 'free' ? 'free' : 'used'; } catch (e) { return 'used'; } }
       function paintDisk(btn, m) {
         var d; try { d = JSON.parse(btn.getAttribute('data-disk')); } catch (e) { return; }
@@ -2511,21 +2527,30 @@
         btn.setAttribute('data-disk-mode', m); btn.querySelector('b').textContent = x[1]; btn.querySelector('small').textContent = x[0]; btn.title = x[2];
       }
       function ago(at) { var s = Math.max(0, Math.round(Date.now() / 1000 - at)); return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' minutes ago' : s < 129600 ? Math.round(s / 3600) + ' hours ago' : Math.round(s / 86400) + ' days ago'; }
-      function readFig() { try { var f = JSON.parse(localStorage.getItem(FIG) || 'null'); return f && f.used && f.at ? f : null; } catch (e) { return null; } }
+      function str(a) { return typeof a === 'string'; }
+      function readFig() {   // what this browser remembers, only if it has exactly the shape this script wrote (anything else, from another version or by hand, counts as nothing remembered)
+        try {
+          var f = JSON.parse(localStorage.getItem(FIG) || 'null');
+          if (!f || typeof f.at !== 'number' || !isFinite(f.at) || !(f.used instanceof Array) || f.used.length !== 3 || !f.used.every(str)) return null;
+          if (f.vols !== undefined && !(f.vols instanceof Array && f.vols.every(function (v) { return v instanceof Array && v.length === 2 && str(v[0]) && str(v[1]); }))) return null;
+          return f;
+        } catch (e) { return null; }
+      }
       function apply(root, f) {   // the figures put into the card (for what the gallery takes) and into the list of disks
         [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) {
           var d; try { d = JSON.parse(b.getAttribute('data-disk')); } catch (e) { return; }
           d.used = [f.used[0], f.used[1], f.used[2].replace(/\. Press to see the free space instead$/, '') + '; counted ' + ago(f.at) + '. Press to see the free space instead'];
           b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
         });
-        [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
+        var byName = {}; (f.vols || []).forEach(function (v) { byName[v[0]] = v[1]; });   // (each figure by the name the list shows the disk by: the list's order may have changed since it was counted)
+        [].forEach.call(root.querySelectorAll('#hs-vols .hv-row'), function (r) { var g = r.querySelector('.hs-gal'), n = r.querySelector('.hv-m'); if (g && n) g.textContent = Object.prototype.hasOwnProperty.call(byName, n.textContent) ? byName[n.textContent] : '…'; });
       }
       function count(root, panel) {
         if (busy || !panel) return; busy = true;
         var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_media_size');
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
-          .then(function (j) { busy = false; if (!j || !j.ok || !j.used) return; try { localStorage.setItem(FIG, JSON.stringify({ at: j.at, files: j.files, used: j.used, vols: j.vols })); } catch (e) {} apply(document, { at: j.at, used: j.used, vols: j.vols }); })
+          .then(function (j) { busy = false; if (!j || !j.ok || !j.used) return; var at = Date.now() / 1000; try { localStorage.setItem(FIG, JSON.stringify({ at: at, files: j.files, used: j.used, vols: j.vols })); } catch (e) {} apply(document, { at: at, used: j.used, vols: j.vols }); })   // (the time is this browser's own clock, the one the age is measured against)
           .catch(function () { busy = false; });
       }
       // root: where the cards are; force: count again whatever is remembered (Check again)
@@ -2534,7 +2559,7 @@
         [].forEach.call(root.querySelectorAll('.hs-disk'), function (b) { paintDisk(b, mode()); });
         var card = root.querySelector('.hs-disk'); if (!card) return;
         var panel = document.getElementById('health-panel'), f = readFig(), files = card.getAttribute('data-files');
-        if (f) apply(root, f);   // (what was counted last, with its age, while a new count is made if one is due)
+        if (f) { try { apply(root, f); } catch (e) { f = null; } }   // (what was counted last, with its age, while a new count is made if one is due)
         if (force || !f || String(f.files) !== String(files) || Date.now() / 1000 - f.at >= DAY) count(root, panel);
       };
       document.addEventListener('click', function (e) {
@@ -2543,7 +2568,7 @@
         try { localStorage.setItem(KEY, m); } catch (x) {}
         [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
       });
-      window.__healthDisk();
+      try { window.__healthDisk(); } catch (e) {}   // (this card must never be able to stop the rest of the page's script)
     })();
     (function () {   // a line of the list of disks opens its details (what a hover says, for a screen with none): a tap or Enter/Space
       function flip(row) { var d = row.querySelector('.hv-detail'); if (!d) return; d.hidden = !d.hidden; row.setAttribute('aria-expanded', d.hidden ? 'false' : 'true'); }
@@ -2713,6 +2738,7 @@
         [].forEach.call(r.querySelectorAll('input'), function (x) { x.disabled = off; });   // (the hidden "off" too: a row that cannot be changed sends nothing when the form is saved)
       });
     }
+    window.__syncDim = syncDim;   // (a save that failed puts the switch back; the rows under it follow it back, too)
     form.addEventListener('change', function (e) { if (e.target && e.target.name === 'set_INFO_PANEL') syncDim(); });
     // Rows that only matter for one choice of another setting (the Flat switches under Folder style) follow that choice.
     function syncShown() {

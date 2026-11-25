@@ -549,7 +549,7 @@ define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false))
 // info" switch, taken from the folder above it when it has none); these are the gallery-wide choices of WHAT is shown there. The first five are on to
 // start with; the rest, which can say more than people expect (a camera's serial number, the owner's name, comments typed into the file), are off.
 // Anything that says where (the position, the time zone the camera wrote) still follows the location switches above.
-define('INFO_PANEL', gallery_setting('INFO_PANEL', false));   // (the main switch: off, no info panel is offered anywhere, whatever a folder has chosen; the field switches below only matter once it is on)
+define('INFO_PANEL', gallery_setting('INFO_PANEL', true));   // (the main switch: off, no info panel is offered anywhere, whatever a folder has chosen. On to start with, which shows nothing by itself: each folder has to switch its own panel on (off to start with), and the position needs the photo's location to be on as well. The field switches below only matter while it is on)
 define('INFO_CAMERA', gallery_setting('INFO_CAMERA', true));
 define('INFO_TAKEN', gallery_setting('INFO_TAKEN', true));
 define('INFO_RESOLUTION', gallery_setting('INFO_RESOLUTION', true));

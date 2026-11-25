@@ -214,6 +214,13 @@ function update_undo_offer($recent) {
         foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
         if ($n > 0) $warn = 'You have ' . $n . ' Only me folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Only me: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Only me mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
     }
+    // Every version before this one lists an Unlisted folder like any public one (it does not know the mark), so going back puts every Unlisted folder on the front page, the map and the "Everything" links for everyone.
+    // The mark stays, so going forward again keeps them out of the lists; the button says so first when there are any.
+    if (version_compare($back, '2.6.8', '<')) {
+        $dirU = $GLOBALS['dir'] ?? __DIR__; $nu = 0;
+        foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_quiet_cached($dirU, $fp)) $nu++;
+        if ($nu > 0) $warn = ($warn !== '' ? $warn . "\n\n" : '') . 'You have ' . $nu . ' Unlisted folder' . ($nu === 1 ? '' : 's') . '. Version ' . $back . ' does not know Unlisted: it lists ' . ($nu === 1 ? 'that folder' : 'them') . ' like any public folder, on the front page and everywhere else, for everyone. The mark stays, so going forward again takes ' . ($nu === 1 ? 'it' : 'them') . ' out of the lists again.';
+    }
     if (!$recent) $warn = ($warn !== '' ? $warn . "\n\n" : '') . 'Put version ' . $back . ' back? It is the file this gallery was running before it was updated. Your photos, captions and settings stay as they are, but anything this version has saved since may not be understood by the older one (new kinds of settings, the visitor log, share links made since). Going back is for when something does not work after an update.';
     return ['Go back to ' . $back, $warn];
 }

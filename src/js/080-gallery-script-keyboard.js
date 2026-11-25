@@ -7,15 +7,25 @@
     b.click();
   });
   // Backspace does what Escape does, for a keyboard that has no Escape key: it closes the box or menu that is open, or, with none, the viewer. Never while typing in a field
-  // (there it deletes a letter). It asks the dialog's own Escape to run, so each one closes as it always does (a question is cancelled; the viewer's info panel or editor, if
+  // (there it deletes a letter), and never in a box the person has already done something in (typed, ticked or chosen: it may hold what they have been working on; Escape and the
+  // box's own buttons still close it). It asks the dialog's own Escape to run, so each one closes as it always does (a question is cancelled; the viewer's info panel or editor, if
   // open, goes first, as with Escape).
+  const DIALOGS = '.fp-modal, .admin-modal, .gs-modal, .gs-large, .fm-ov, .map-modal, .lb-sharepop, .coll-pop, .sort-pop';
+  const markWorked = (e) => { if (!e.isTrusted || !e.target || !e.target.closest) return; const d = e.target.closest(DIALOGS); if (d) d.__worked = true; };   // (only real typing, ticking and choosing counts: a page filling a field in does not)
+  document.addEventListener('input', markWorked, true); document.addEventListener('change', markWorked, true);
+  if (window.MutationObserver) new MutationObserver((list) => { list.forEach((m) => { if (m.target.hidden) m.target.__worked = false; }); }).observe(document.body, { attributes: true, attributeFilter: ['hidden'], subtree: true });   // (a box shown again starts untouched)
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Backspace' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
     var t = e.target;
     if (t && t.closest && t.closest('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]), textarea, select, [contenteditable]')) return;
-    var open = document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])');
-    var target = open.length ? open[open.length - 1] : (lightbox.classList.contains('open') ? lightbox : null);
+    if (document.fullscreenElement && document.fullscreenElement.tagName === 'VIDEO') return;   // (a video in its own full screen: the browser's Escape leaves it; the viewer under it is not to be closed)
+    var open = [].slice.call(document.querySelectorAll('.fp-modal:not([hidden]), .admin-modal:not([hidden]), .gs-modal, .gs-large, .fm-ov, .map-modal:not([hidden]), .lb-sharepop, .coll-pop, .sort-pop:not([hidden])'));
+    // the box on top: the highest in the stacking order, the later one in the page where they are level (the map's box lies under the viewer, a question over it)
+    var top = null, topZ = -Infinity;
+    open.forEach(function (el) { var z = parseInt(getComputedStyle(el).zIndex, 10); if (isNaN(z)) z = 0; if (z >= topZ) { top = el; topZ = z; } });
+    var target = top || (lightbox.classList.contains('open') ? lightbox : null);
     if (!target) return;
+    if (top && top.__worked) return;   // (something has been done in it: Backspace leaves it alone)
     e.preventDefault(); e.stopPropagation();
     target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
   }, true);
@@ -23,7 +33,7 @@
     if (!lightbox.classList.contains('open')) return;
     // Another box opened over the viewer (the owner's "Share just this photo", the QR code, a question) has the keys, and so does any field:
     // typing a name must not zoom or change the photo behind it, nor Escape close the viewer under a box that has just taken it.
-    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal')) return;
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, .lb-sharepop')) return;   // (the owner's link menu has its own keys: Tab, the arrows, Escape)
     if (e.ctrlKey || e.metaKey || e.altKey) return;   // (a browser's own shortcut: Ctrl+Z, Alt+Left for back)
     // Tab stays inside the viewer: from the last button to the first and back (a screen reader is told the rest of the page is gone: aria-modal).
     if (e.key === 'Tab') {
@@ -87,22 +97,30 @@
   // clipboard (in addition to the browser's normal anchor navigation —
   // it still jumps to and highlights the item as before).
   function legacyCopy(text) {
-    const ta = document.createElement('textarea');
+    const ta = document.createElement('textarea'); let ok = false;
     ta.value = text;
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
-    try { document.execCommand('copy'); } catch (e) {}
+    try { ok = document.execCommand('copy'); } catch (e) {}
     document.body.removeChild(ta);
+    return ok;
   }
+  // Both ways refused (some browsers refuse a copy that is not inside the press that asked for it): the address, in a box that is already selected, to copy by hand.
+  function showAddressBox(text) {
+    const old = document.getElementById('copy-addrbox'); if (old) old.remove();
+    const d = document.createElement('div'); d.id = 'copy-addrbox'; d.className = 'copy-addrbox'; d.setAttribute('role', 'dialog'); d.setAttribute('aria-label', 'Copy this address');
+    const i = document.createElement('input'); i.type = 'text'; i.readOnly = true; i.value = text; i.setAttribute('aria-label', 'The address');
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Close'; b.addEventListener('click', () => d.remove());
+    d.appendChild(i); d.appendChild(b); document.body.appendChild(d); try { i.focus(); i.select(); } catch (x) {}
+  }
+  // Resolves true when the address was copied; false when it was not (the box above is shown instead), so a tick or "copied" is never shown for a copy that did not happen.
   function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
-    }
-    legacyCopy(text);
-    return Promise.resolve();
+    const second = () => legacyCopy(text) || (showAddressBox(text), false);
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).then(() => true, second);
+    return Promise.resolve(second());
   }
   // The tick is only a picture: say it too, for a screen reader (a polite status line nobody sees).
   function sayCopied() {
@@ -138,7 +156,7 @@
     const cleanUrl = link.hash
       ? window.location.origin + window.location.pathname + folderQuery() + link.hash
       : (() => { const u = hrefUrl(); if (!u) return window.location.origin + window.location.pathname + link.getAttribute('href'); const q = u.search.slice(1).split('&').filter(p => p && p !== 'inframe=1'); return u.origin + u.pathname + (q.length ? '?' + q.join('&') : ''); })();
-    copyToClipboard(cleanUrl).then(() => flashCopied(link));
+    copyToClipboard(cleanUrl).then((ok) => { if (ok) flashCopied(link); });
   });
 
   // A Flat folder label or divider: pressing the name copies a link to that place and the name says so for a moment.
@@ -148,9 +166,9 @@
     const f = new URLSearchParams(window.location.search).get('folder');
     const id = b.getAttribute('data-anchor');
     const url = window.location.origin + window.location.pathname + (f ? '?folder=' + encodeURIComponent(f) : '') + '#' + id;
-    copyToClipboard(url).then(() => {
+    copyToClipboard(url).then((ok) => {
       const t = b.querySelector('.lc-t');
-      if (!t || b.classList.contains('copied')) return;
+      if (!ok || !t || b.classList.contains('copied')) return;
       const keep = t.innerHTML; t.textContent = 'Link copied'; b.classList.add('copied');
       setTimeout(() => { t.innerHTML = keep; b.classList.remove('copied'); }, 1400);
     });
@@ -165,7 +183,7 @@
     const file = files[current], slash = file.lastIndexOf('/');
     const root = new URL(galleryRootHref, window.location.href);
     const url = root.origin + root.pathname + (slash > 0 ? '?folder=' + encodeURIComponent(file.slice(0, slash)) + '&photo=' : '?photo=') + encodeURIComponent(file);
-    copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
+    copyToClipboard(url).then((ok) => { if (ok) flashCopied(lightboxCopyBtn); });
   };
   lightboxCopyBtn.addEventListener('click', () => {
     if (ownerIsUnlisted(files[current])) { ownerAddress(files[current], false, lightboxCopyBtn); return; }   // (an Only me photo is opened by its own address, not a plain link)

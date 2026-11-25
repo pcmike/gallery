@@ -756,7 +756,7 @@ function run_links_view_route($dir, $files) {
         header('Content-Type: application/json; charset=UTF-8');
         [, $public] = link_public_media($dir);
         $coverDraft = link_draft_scope_from_request();
-        $public = array_values(array_filter($public, function ($f) use ($dir, $coverDraft) { return link_cover_in_scope(null, $dir, $f, $coverDraft); }));
+        $public = array_values(array_filter($public, function ($f) use ($dir, $coverDraft) { return link_cover_in_scope(null, $dir, $f, $coverDraft) && link_cover_allows_quiet(null, $dir, $f, $coverDraft); }));   // (an Unlisted folder's photos only when the link names them: the opening page would not use them)
         $count = [];
         foreach ($public as $f) if (!is_video_file($f)) { $d = link_item_folder($f); $count[$d] = ($count[$d] ?? 0) + 1; }
         $out = [];
@@ -790,7 +790,7 @@ function render_link_photo_picker($folder, $files, $dir = '', $cover = false, $d
     $list = [];
     foreach ($files as $f) {
         $slash = strrpos($f, '/');
-        if (($slash === false ? '' : substr($f, 0, $slash)) === $folder && (!$cover || (link_picture_ok($f, $dir) && link_cover_in_scope(null, $dir, $f, $draft)))) $list[] = $f;   // (a cover: public photos only, and only ones the link covers)
+        if (($slash === false ? '' : substr($f, 0, $slash)) === $folder && (!$cover || (link_picture_ok($f, $dir) && link_cover_in_scope(null, $dir, $f, $draft) && link_cover_allows_quiet(null, $dir, $f, $draft)))) $list[] = $f;   // (a cover: public photos only, and only ones the link covers)
     }
     natcasesort($list);
     if (!$list) return '<p class="muted">' . ($cover ? 'There are no public photos the link covers directly in this folder.' : 'There are no photos directly in this folder.') . '</p>';

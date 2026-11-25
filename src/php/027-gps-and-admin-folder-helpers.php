@@ -1045,11 +1045,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $on = !empty($_POST['owngallery']);
         items_update($adminFolderReal, function (&$data) use ($on) {
             if ($on) $data['ownGallery'] = true;
-            elseif (($data['quiet'] ?? null) === true) $data['ownGallery'] = false;   // (an Unlisted folder is one by default: switching it off is a choice to keep)
+            elseif (quiet_flag_of($data)) $data['ownGallery'] = false;   // (an Unlisted folder is one by default: switching it off is a choice to keep)
             else unset($data['ownGallery']);
         });
         own_galleries_recompute($dir, $files);
-        return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.'];
+        $ownData = items_read($adminFolderReal); $ownLevel = folder_visibility_level($ownData); $ownExplicit = is_bool($ownData['ownGallery'] ?? null) ? $ownData['ownGallery'] : null;
+        return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.',
+            'own' => ['on' => $ownExplicit !== null ? $ownExplicit : $ownLevel === 'unlisted', 'explicit' => $ownExplicit === null ? -1 : ($ownExplicit ? 1 : 0), 'note' => own_gallery_note($ownLevel, $ownExplicit)]];   // (the line under the switch follows it: an Unlisted folder's "on because it is Unlisted" goes when its owner switches it off)
     }
 
     // Whether visitors without a link may download the originals of the photos directly in this folder (or, with no folder, on the main page).
@@ -1204,7 +1206,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Locations and media information.';
+                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Metadata.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
             }
@@ -1251,7 +1253,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $loose = split_folder_level($files, $prefix)['loose'];
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
-            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Locations and media information).';
+            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Metadata).';
         } else {
             // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
             $shown = 0;

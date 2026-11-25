@@ -66,7 +66,7 @@
   // Esc closes the panel before it closes the viewer; the letter i opens and closes it.
   document.addEventListener('keydown', function (e) {
     if (!lightbox.classList.contains('open') || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, input, textarea, select, [contenteditable="true"]')) return;
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal, .lb-sharepop, input, textarea, select, [contenteditable="true"]')) return;
     if (e.key === 'Escape' && infoState.open) { e.preventDefault(); e.stopImmediatePropagation(); infoSet(false, true); return; }
     if ((e.key === 'i' || e.key === 'I') && (infoState.open || infoAvailable())) { e.preventDefault(); infoSet(!infoState.open, true); }
   }, true);

@@ -211,6 +211,7 @@ function serve_video_strip($dir, $filename, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (an Unlisted folder's video: for whoever has its address, not for a search engine)
     $strip = video_strip_path(resolve_real_path($dir, $filename), containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
     if (isset($_GET['warm'])) {
         http_response_code($strip === null ? 404 : 204);
@@ -241,6 +242,7 @@ function serve_video_preview($dir, $filename, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (see serve_video_strip)
     $srcPath = resolve_real_path($dir, $filename);
     $clip = video_preview_path($srcPath, containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
     if (isset($_GET['warm'])) {

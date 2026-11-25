@@ -177,8 +177,9 @@ function link_input_from_post($now, $existing, $dir, $files) {
         }
         return ['mode' => $mode, 'folders' => $ids];
     };
-    if ($pictureFile !== '' && in_array($scopeType, ['folders', 'photos', 'mixed'], true)
-        && !link_cover_in_scope(null, $dir, $pictureFile, ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'except' => $scopeExceptPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')])) $pictureFile = '';   // (a chosen preview photo the link does not cover: the automatic pick takes over)
+    $coverDraft = ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'except' => $scopeExceptPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')];
+    if ($pictureFile !== '' && ((in_array($scopeType, ['folders', 'photos', 'mixed'], true) && !link_cover_in_scope(null, $dir, $pictureFile, $coverDraft))
+        || !link_cover_allows_quiet(null, $dir, $pictureFile, $coverDraft))) $pictureFile = '';   // (a chosen preview photo the link does not cover, or one in an Unlisted folder the link does not name: the automatic pick takes over)
     $downloads = $cap('downloads', 'downloads_folders', 'downloads');
     $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
     $only = ($scopeType === 'folders' || $scopeType === 'photos' || $scopeType === 'mixed') && ($_POST['only'] ?? '') === '1';   // "show only these": the person's pages list nothing but what the link covers, the rest of the public gallery too

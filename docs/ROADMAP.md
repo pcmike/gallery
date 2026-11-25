@@ -29,12 +29,12 @@ Make the backup's "this part lost a lot" check look inside records, so a bulk ed
 
 ## Tidy folder links without the closing slash, and copy-link buttons that give them
 
-Make `https://example.com/p/family/disney/2019` open the folder (today the optional server rule needs the closing slash, `/p/family/disney/2019/`), and let the folder copy-link buttons hand out the tidy address when the server's rule is in place.
+Make `https://example.com/p/trips/coast/2019` open the folder (today the optional server rule needs the closing slash, `/p/trips/coast/2019/`), and let the folder copy-link buttons hand out the tidy address when the server's rule is in place.
 
 - **Today:** a nested folder's tidy address works only with the closing slash, through the optional rule in Settings → Server setup; share addresses are one word at the top (`/p/grandma`); the gallery's own copy-link buttons give the `?folder=` form.
-- **Sketch:** (1) an extra optional rule for nested paths with no dot and no closing slash (a path with a slash in it cannot be a share address, so there is no clash), tested on real nginx and Apache; (2) in the gallery, a top-level `/p/family` that no share link has the name of opens the folder (a link cannot take the name of an existing top-level folder anyway), answering a private folder exactly as a missing one; (3) the admin's existing check of the tidy folder address stores its result, the copy buttons use the tidy form only while it holds, and a failed check clears it.
+- **Sketch:** (1) an extra optional rule for nested paths with no dot and no closing slash (a path with a slash in it cannot be a share address, so there is no clash), tested on real nginx and Apache; (2) in the gallery, a top-level `/p/trips` that no share link has the name of opens the folder (a link cannot take the name of an existing top-level folder anyway), answering a private folder exactly as a missing one; (3) the admin's existing check of the tidy folder address stores its result, the copy buttons use the tidy form only while it holds, and a failed check clears it.
 - **Risks worked out:** another application under the same directory could be caught by the new rule (make it skip anything that exists on disk, and document it); a folder name with `&` or `%26` must not be able to add parameters (test it on both servers); a private, Only me or Unlisted folder must still answer exactly like a missing one; a stale "the rule works" result would hand out links that 404 until the next admin visit.
-- **Note:** held back by the owner (2026-11-24, "not 100% sure of that one yet"). Nothing is built. If it is built, review it on its own: it changes how addresses reach private folders.
+- **Note:** held back by the owner (2026-11-24, not decided yet). Nothing is built. If it is built, review it on its own: it changes how addresses reach private folders.
 
 ## A nested folder more open than the folder above it
 

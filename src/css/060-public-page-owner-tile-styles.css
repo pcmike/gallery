@@ -70,7 +70,7 @@
   .link-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
   .link-toggle::after { content: ''; position: absolute; inset: -3px; }
   .owner-card.has-link .video-duration { left: 72px; }
-  @media (hover: hover) { .link-toggle { opacity: 0; } .card:hover .link-toggle, .link-toggle:focus-visible { opacity: 0.9; } }
+  @media (hover: hover) { .link-toggle { opacity: 0; } .card:hover .link-toggle, .link-toggle:focus-visible, .link-toggle.copied { opacity: 0.9; } }   /* (the "copied" tick shows whether the pointer is over the tile or not: the menu it came from is below the tile) */
   .selecting .card .link-toggle { display: none; }
   /* The tile's round buttons (the lock when it has no word in it, the star, the pencil and the two address buttons) are exact circles of one size with one icon size.
      The lock with a word ("Folder", "Private") stays a pill. */
@@ -117,6 +117,10 @@
   .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
   .lb-sharepop .lsp-fine { margin: 10px 0 0; font-size: 0.82rem; color: #8e8e96; }
   .select-bar .sb-share { display: inline-flex; align-items: center; gap: 5px; }
+  /* A copy both ways refused: the address in a box that is already selected, to copy by hand (shown over everything, the viewer included) */
+  .copy-addrbox { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: min(520px, 92vw); display: flex; gap: 8px; align-items: center; background: #1b1b20; border: 1px solid #3a3a42; border-radius: 12px; padding: 10px; z-index: 100002; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .copy-addrbox input { flex: 1; min-width: 0; font: inherit; font-size: 16px; color: #eee; background: #111114; border: 1px solid #3a3a42; border-radius: 8px; padding: 8px 10px; }
+  .copy-addrbox button { font: inherit; color: #eee; background: #2a2a31; border: 1px solid #3a3a42; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
   .coll-pop { position: fixed; left: 50%; transform: translateX(-50%); bottom: 150px; width: min(360px, 92vw); max-height: 60vh; overflow: auto; background: #1b1b20; border: 1px solid #3a3a42; border-radius: 14px; padding: 14px; z-index: 99; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
   .coll-pop h4 { margin: 0 0 8px; font-size: .95rem; color: #eaeaea; }
   .coll-pop .coll-opt { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 8px; margin: 3px 0; background: #26262c; border: 0; color: #eaeaea; font-size: .9rem; cursor: pointer; }
