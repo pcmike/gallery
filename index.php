@@ -18284,6 +18284,62 @@ function health_sharing_rows($add) {
     if (LOG_PUBLIC_VISITS) $add($G, 'info', 'The public address is logged', 'Who opens the gallery without a link (their address and browser) is kept in the visitor log.', ['visits', 'vt-root', '→ Visitors']);
 }
 
+/** The mounts of this machine as the kernel lists them: [[mount point, filesystem type, source]], read from /proc/self/mountinfo (Linux only; empty where it can not be read: another system,
+ *  or a host that keeps PHP to its own folders). Only these three are ever taken from it: the mount options, which can hold a login, are not. Cached for the request. */
+function health_mounts() {
+    static $mounts = null;
+    if ($mounts !== null) return $mounts;
+    $mounts = [];
+    $raw = PHP_OS_FAMILY === 'Linux' ? @file_get_contents('/proc/self/mountinfo') : false;
+    if (!is_string($raw)) return $mounts;
+    $unesc = function ($t) { return preg_replace_callback('~\\\\([0-7]{3})~', function ($m) { return chr(octdec($m[1])); }, $t); };   // (a space in a name is written \040)
+    foreach (explode("\n", $raw) as $line) {
+        $cut = strpos($line, ' - '); if ($cut === false) continue;
+        $a = explode(' ', substr($line, 0, $cut)); $b = explode(' ', substr($line, $cut + 3));
+        if (count($a) < 5 || count($b) < 2) continue;
+        $mounts[] = [$unesc($a[4]), $b[0], $unesc($b[1])];
+    }
+    return $mounts;
+}
+
+/** The mount a path is on: the longest mount point that is the path or above it. [mount point, filesystem type, source], or null when the mounts can not be read. The source
+ *  is shown to the owner only (the admin): a login written into a network address is taken out. */
+function health_mount_of($path) {
+    $best = null; $path = rtrim((string) $path, '/') . '/';
+    foreach (health_mounts() as $m) {
+        $mp = rtrim($m[0], '/') . '/';
+        if (strncmp($path, $mp, strlen($mp)) === 0 && ($best === null || strlen($mp) >= strlen(rtrim($best[0], '/') . '/'))) $best = $m;
+    }
+    if ($best === null) return null;
+    $src = preg_replace('~//[^/@\s]*@~', '//', (string) $best[2]);
+    return [$best[0], $best[1], function_exists('mb_substr') ? mb_substr($src, 0, 120) : substr($src, 0, 120)];
+}
+
+/** The folder above all of these paths (the longest path they all start with). */
+function health_common_folder($paths) {
+    $common = null;
+    foreach ($paths as $p) {
+        $parts = explode('/', trim((string) $p, '/'));
+        if ($common === null) { $common = $parts; continue; }
+        $n = 0; while ($n < count($common) && $n < count($parts) && $common[$n] === $parts[$n]) $n++;
+        $common = array_slice($common, 0, $n);
+    }
+    return '/' . implode('/', (array) $common);
+}
+
+/** How a disk is named in the list under the numbers: "./" (this folder) for the gallery's own disk, with the folder's real path first in the details, otherwise where the disk is mounted (the mount point of the folder above everything of ours
+ *  on it) or, where the mounts can not be read, that folder itself; a folder inside the gallery is written under ./ ("./Asia"). [name, detail]: the detail is what a tap or a hover adds (the
+ *  size of the disk and, when it can be read, what it is). */
+function health_disk_label($dir, $paths, $isHome, $total) {
+    $cover = health_common_folder($paths); $mt = health_mount_of($cover);
+    $detail = health_bytes($total) . ' total';
+    if ($mt) { $what = trim($mt[1] . ' ' . ($mt[2] === $mt[1] || $mt[2] === 'none' ? '' : $mt[2])); if ($what !== '') $detail .= ' · ' . $what; }
+    if ($isHome) return ['./', $dir . ' · ' . $detail];
+    $at = $mt && $mt[0] !== '/' && strncmp($cover . '/', rtrim($mt[0], '/') . '/', strlen(rtrim($mt[0], '/')) + 1) === 0 ? rtrim($mt[0], '/') : $cover;
+    if (strncmp($at . '/', $dir . '/', strlen($dir) + 1) === 0) $at = './' . ltrim(substr($at, strlen($dir)), '/');
+    return [$at, $detail];
+}
+
 /** The disks the gallery's photos and files live on, least free space first: [{name, free, total, pct, writable}]. The gallery's own folder, every folder from elsewhere
  *  (mapped by name or as a root) and the folders its media sit in are grouped by the disk they are on (the device a folder is on); a disk that will not say how much is
  *  free (some network shares) is left out. Read-only ones are in too: the room left matters for the photos kept there whether or not the gallery writes to it. */
@@ -18317,10 +18373,11 @@ function health_volumes($dir, $files) {
         if (!isset($by[$key])) {
             $free = @disk_free_space($p); $tot = @disk_total_space($p);
             if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
-            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key]];
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key], 'paths' => []];
         }
         if ($by[$key] === false) continue;
         if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
+        $by[$key]['paths'][] = $p;
         if (is_writable($p)) $by[$key]['writable'] = true;
     }
     $out = [];
@@ -18328,11 +18385,12 @@ function health_volumes($dir, $files) {
         if (!$v) continue;
         $isHome = in_array('the gallery folder', $v['names'], true);
         $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
-        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs']];
+        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs'], 'paths' => $v['paths']];
     }
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
-    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); } else $uniq[$k] = $v; }
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); $uniq[$k]['paths'] = array_values(array_unique(array_merge($uniq[$k]['paths'], $v['paths']))); } else $uniq[$k] = $v; }
     $out = array_values($uniq);
+    foreach ($out as $i => $v) { [$out[$i]['label'], $out[$i]['detail']] = health_disk_label($dir, $v['paths'], $v['home'], $v['total']); }   // (the short name and the line of details for the list under the numbers; the rows below keep the longer name)
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
 }
@@ -18460,7 +18518,7 @@ function health_strip($dir, $files) {
         $lines = null;
         if (count($vols) > 1) {
             $lines = [];
-            foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), '…'];
+            foreach ($vols as $v) $lines[] = ['name' => $v['label'], 'free' => health_bytes($v['free']), 'detail' => $v['detail']];
         }
         $out[] = ['Disk used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
     }
@@ -18538,8 +18596,9 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-files="<?= (int) ($si[7] ?? 0) ?>" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[3] . ' in the gallery, ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
-      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h"><?= count($si[2]) ?> disks, the lowest on room first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b class="hs-gal"><?= $esc($l[3]) ?></b> in the gallery, <b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; $sg = $si[5] ?? ''; $sd = $si[6] ?? null; ?><?php if ($sd): ?><button type="button" class="hs-t hs-disk" data-disk-mode="used" data-files="<?= (int) ($si[7] ?? 0) ?>" data-disk="<?= $esc(json_encode($sd)) ?>" title="<?= $esc($st) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l['name'] . ': ' . $l['free'] . ' free (' . $l['detail'] . ')'; }, $sx))) ?>"><b><?= count($sx) ?></b><small>Disks<i class="tri" aria-hidden="true"></i></small></button><?php endif; ?><?php elseif ($sg !== ''): ?><button type="button" class="hs-t hs-go" data-go="<?= $esc($sg) ?>" title="<?= $esc(($st !== '' ? $st . '. ' : '') . ['links' => 'Open Shares', 'visits' => 'Open Visitors', 'backup' => 'Show the backup, with Back up now'][$sg]) ?>"><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <p class="hs-disk-note" id="hs-disk-note" hidden></p>
+      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><div class="hv-head" title="The disk with the least room first. Tap a line for more"><span>Disks</span><span>Gallery</span><span>Free</span></div><?php foreach ($si[2] as $l): ?><div class="hv-row" role="button" tabindex="0" aria-expanded="false" title="<?= $esc($l['detail']) ?>"><span class="hv-m"><?= $esc($l['name']) ?></span><span class="hs-gal">…</span><span><?= $esc($l['free']) ?></span><span class="hv-detail" hidden><?= $esc($l['detail']) ?></span></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -20489,14 +20548,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-row.hs-flash { box-shadow:0 0 0 2px var(--accent, #aab2ff); border-radius:8px; transition:box-shadow .4s; }
   .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
   .health-strip button.hs-t[aria-expanded="true"] .tri { transform:rotate(180deg); }
-  .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; }
+  /* The list of disks: one grid for the header and every line (the two figure columns are as wide as their widest figure, the disk's name has all the rest and is cut with an ellipsis only when it must be) */
+  .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; display:grid; grid-template-columns:minmax(0, 1fr) max-content max-content; column-gap:20px; align-items:baseline; }
   .hs-vols[hidden] { display:none; }
-  .hs-vols .hs-vols-h { margin:0 0 6px; color:var(--muted); font-size:.82em; text-transform:uppercase; letter-spacing:.04em; }
-  .hs-vols div { display:flex; flex-direction:column; gap:1px; padding:7px 0; border-top:1px solid var(--line, rgba(255,255,255,.08)); }
-  .hs-vols span { min-width:0; overflow-wrap:anywhere; }
-  .hs-vols em { font-style:normal; color:var(--muted); font-size:.92em; }
-  .hs-vols em b { color:inherit; font-weight:600; }
-  @media (min-width:600px) { .hs-vols div { flex-direction:row; justify-content:space-between; align-items:baseline; gap:12px; } }
+  .hs-vols .hv-head, .hs-vols .hv-row { grid-column:1 / -1; display:grid; grid-template-columns:subgrid; column-gap:20px; align-items:baseline; }
+  .hs-vols .hv-head { padding:0 0 6px; color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.05em; }
+  .hs-vols .hv-row { padding:8px 0; border-top:1px solid var(--line, rgba(255,255,255,.08)); cursor:pointer; }
+  .hs-vols .hv-row:focus-visible { outline:2px solid var(--accent, #aab2ff); outline-offset:2px; border-radius:4px; }
+  .hs-vols .hv-m { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .hs-vols .hv-head span:nth-child(n+2), .hs-vols .hv-row > span:nth-child(n+2):not(.hv-detail) { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .hs-vols .hv-detail { grid-column:1 / -1; padding-top:2px; color:var(--muted); font-size:.82em; line-height:1.45; overflow-wrap:anywhere; }
+  .hs-disk-note { margin:-2px 0 10px; color:var(--muted); font-size:.82em; line-height:1.45; }
+  .hs-disk-note[hidden] { display:none; }
   @media (max-width:599px) {
     .health-strip { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
     .health-strip .hs-t { min-width:0; padding:7px 10px; }
@@ -23898,6 +23961,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
         });
         [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
+        var nt = document.getElementById('hs-disk-note'), bt = root.querySelector('.hs-disk'); if (nt && !nt.hidden && bt) nt.textContent = bt.title.replace(/\. Press to see .* instead$/, '') + '.';   // (a line already showing follows the new figure)
       }
       function count(root, panel) {
         if (busy || !panel) return; busy = true;
@@ -23921,8 +23985,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';
         try { localStorage.setItem(KEY, m); } catch (x) {}
         [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
+        var note = document.getElementById('hs-disk-note');   // (what a hover would say, for a screen with no hover: a small line under the numbers while you are looking at this side)
+        if (note) { note.textContent = b.title.replace(/\. Press to see .* instead$/, '') + '.'; note.hidden = false; }
       });
       window.__healthDisk();
+    })();
+    (function () {   // a line of the list of disks opens its details (what a hover says, for a screen with none): a tap or Enter/Space
+      function flip(row) { var d = row.querySelector('.hv-detail'); if (!d) return; d.hidden = !d.hidden; row.setAttribute('aria-expanded', d.hidden ? 'false' : 'true'); }
+      document.addEventListener('click', function (e) { var r = e.target.closest ? e.target.closest('#hs-vols .hv-row') : null; if (r) flip(r); });
+      document.addEventListener('keydown', function (e) { if (e.key !== 'Enter' && e.key !== ' ') return; var r = e.target.closest ? e.target.closest('#hs-vols .hv-row') : null; if (r) { e.preventDefault(); flip(r); } });
     })();
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;

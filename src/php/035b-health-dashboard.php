@@ -265,6 +265,62 @@ function health_sharing_rows($add) {
     if (LOG_PUBLIC_VISITS) $add($G, 'info', 'The public address is logged', 'Who opens the gallery without a link (their address and browser) is kept in the visitor log.', ['visits', 'vt-root', '→ Visitors']);
 }
 
+/** The mounts of this machine as the kernel lists them: [[mount point, filesystem type, source]], read from /proc/self/mountinfo (Linux only; empty where it can not be read: another system,
+ *  or a host that keeps PHP to its own folders). Only these three are ever taken from it: the mount options, which can hold a login, are not. Cached for the request. */
+function health_mounts() {
+    static $mounts = null;
+    if ($mounts !== null) return $mounts;
+    $mounts = [];
+    $raw = PHP_OS_FAMILY === 'Linux' ? @file_get_contents('/proc/self/mountinfo') : false;
+    if (!is_string($raw)) return $mounts;
+    $unesc = function ($t) { return preg_replace_callback('~\\\\([0-7]{3})~', function ($m) { return chr(octdec($m[1])); }, $t); };   // (a space in a name is written \040)
+    foreach (explode("\n", $raw) as $line) {
+        $cut = strpos($line, ' - '); if ($cut === false) continue;
+        $a = explode(' ', substr($line, 0, $cut)); $b = explode(' ', substr($line, $cut + 3));
+        if (count($a) < 5 || count($b) < 2) continue;
+        $mounts[] = [$unesc($a[4]), $b[0], $unesc($b[1])];
+    }
+    return $mounts;
+}
+
+/** The mount a path is on: the longest mount point that is the path or above it. [mount point, filesystem type, source], or null when the mounts can not be read. The source
+ *  is shown to the owner only (the admin): a login written into a network address is taken out. */
+function health_mount_of($path) {
+    $best = null; $path = rtrim((string) $path, '/') . '/';
+    foreach (health_mounts() as $m) {
+        $mp = rtrim($m[0], '/') . '/';
+        if (strncmp($path, $mp, strlen($mp)) === 0 && ($best === null || strlen($mp) >= strlen(rtrim($best[0], '/') . '/'))) $best = $m;
+    }
+    if ($best === null) return null;
+    $src = preg_replace('~//[^/@\s]*@~', '//', (string) $best[2]);
+    return [$best[0], $best[1], function_exists('mb_substr') ? mb_substr($src, 0, 120) : substr($src, 0, 120)];
+}
+
+/** The folder above all of these paths (the longest path they all start with). */
+function health_common_folder($paths) {
+    $common = null;
+    foreach ($paths as $p) {
+        $parts = explode('/', trim((string) $p, '/'));
+        if ($common === null) { $common = $parts; continue; }
+        $n = 0; while ($n < count($common) && $n < count($parts) && $common[$n] === $parts[$n]) $n++;
+        $common = array_slice($common, 0, $n);
+    }
+    return '/' . implode('/', (array) $common);
+}
+
+/** How a disk is named in the list under the numbers: "./" (this folder) for the gallery's own disk, with the folder's real path first in the details, otherwise where the disk is mounted (the mount point of the folder above everything of ours
+ *  on it) or, where the mounts can not be read, that folder itself; a folder inside the gallery is written under ./ ("./Asia"). [name, detail]: the detail is what a tap or a hover adds (the
+ *  size of the disk and, when it can be read, what it is). */
+function health_disk_label($dir, $paths, $isHome, $total) {
+    $cover = health_common_folder($paths); $mt = health_mount_of($cover);
+    $detail = health_bytes($total) . ' total';
+    if ($mt) { $what = trim($mt[1] . ' ' . ($mt[2] === $mt[1] || $mt[2] === 'none' ? '' : $mt[2])); if ($what !== '') $detail .= ' · ' . $what; }
+    if ($isHome) return ['./', $dir . ' · ' . $detail];
+    $at = $mt && $mt[0] !== '/' && strncmp($cover . '/', rtrim($mt[0], '/') . '/', strlen(rtrim($mt[0], '/')) + 1) === 0 ? rtrim($mt[0], '/') : $cover;
+    if (strncmp($at . '/', $dir . '/', strlen($dir) + 1) === 0) $at = './' . ltrim(substr($at, strlen($dir)), '/');
+    return [$at, $detail];
+}
+
 /** The disks the gallery's photos and files live on, least free space first: [{name, free, total, pct, writable}]. The gallery's own folder, every folder from elsewhere
  *  (mapped by name or as a root) and the folders its media sit in are grouped by the disk they are on (the device a folder is on); a disk that will not say how much is
  *  free (some network shares) is left out. Read-only ones are in too: the room left matters for the photos kept there whether or not the gallery writes to it. */
@@ -298,10 +354,11 @@ function health_volumes($dir, $files) {
         if (!isset($by[$key])) {
             $free = @disk_free_space($p); $tot = @disk_total_space($p);
             if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
-            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key]];
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false, 'devs' => [$key], 'paths' => []];
         }
         if ($by[$key] === false) continue;
         if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
+        $by[$key]['paths'][] = $p;
         if (is_writable($p)) $by[$key]['writable'] = true;
     }
     $out = [];
@@ -309,11 +366,12 @@ function health_volumes($dir, $files) {
         if (!$v) continue;
         $isHome = in_array('the gallery folder', $v['names'], true);
         $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
-        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs']];
+        $out[] = ['home' => $isHome, 'name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable'], 'devs' => $v['devs'], 'paths' => $v['paths']];
     }
     // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
-    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); } else $uniq[$k] = $v; }
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; $uniq[$k]['home'] = $uniq[$k]['home'] || $v['home']; $uniq[$k]['devs'] = array_values(array_unique(array_merge($uniq[$k]['devs'], $v['devs']))); $uniq[$k]['paths'] = array_values(array_unique(array_merge($uniq[$k]['paths'], $v['paths']))); } else $uniq[$k] = $v; }
     $out = array_values($uniq);
+    foreach ($out as $i => $v) { [$out[$i]['label'], $out[$i]['detail']] = health_disk_label($dir, $v['paths'], $v['home'], $v['total']); }   // (the short name and the line of details for the list under the numbers; the rows below keep the longer name)
     usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
     return $cache[$ck] = $out;
 }
@@ -441,7 +499,7 @@ function health_strip($dir, $files) {
         $lines = null;
         if (count($vols) > 1) {
             $lines = [];
-            foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total']), '…'];
+            foreach ($vols as $v) $lines[] = ['name' => $v['label'], 'free' => health_bytes($v['free']), 'detail' => $v['detail']];
         }
         $out[] = ['Disk used', $usedText, $lines, null, $usedTip, '', $disk, count((array) $files)];
     }

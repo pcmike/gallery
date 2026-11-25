@@ -2519,6 +2519,7 @@
           b.setAttribute('data-disk', JSON.stringify(d)); paintDisk(b, mode());
         });
         [].forEach.call(root.querySelectorAll('#hs-vols .hs-gal'), function (b, i) { if (f.vols && f.vols[i] !== undefined) b.textContent = f.vols[i]; });
+        var nt = document.getElementById('hs-disk-note'), bt = root.querySelector('.hs-disk'); if (nt && !nt.hidden && bt) nt.textContent = bt.title.replace(/\. Press to see .* instead$/, '') + '.';   // (a line already showing follows the new figure)
       }
       function count(root, panel) {
         if (busy || !panel) return; busy = true;
@@ -2542,8 +2543,15 @@
         var m = b.getAttribute('data-disk-mode') === 'free' ? 'used' : 'free';
         try { localStorage.setItem(KEY, m); } catch (x) {}
         [].forEach.call(document.querySelectorAll('.hs-disk'), function (x) { paintDisk(x, m); });
+        var note = document.getElementById('hs-disk-note');   // (what a hover would say, for a screen with no hover: a small line under the numbers while you are looking at this side)
+        if (note) { note.textContent = b.title.replace(/\. Press to see .* instead$/, '') + '.'; note.hidden = false; }
       });
       window.__healthDisk();
+    })();
+    (function () {   // a line of the list of disks opens its details (what a hover says, for a screen with none): a tap or Enter/Space
+      function flip(row) { var d = row.querySelector('.hv-detail'); if (!d) return; d.hidden = !d.hidden; row.setAttribute('aria-expanded', d.hidden ? 'false' : 'true'); }
+      document.addEventListener('click', function (e) { var r = e.target.closest ? e.target.closest('#hs-vols .hv-row') : null; if (r) flip(r); });
+      document.addEventListener('keydown', function (e) { if (e.key !== 'Enter' && e.key !== ' ') return; var r = e.target.closest ? e.target.closest('#hs-vols .hv-row') : null; if (r) { e.preventDefault(); flip(r); } });
     })();
     document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
       var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
