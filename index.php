@@ -7063,13 +7063,12 @@ function visitor_logged_link($byGrant = false) {
     if ($ready) $memo[$k] = $r;
     return $r;
 }
-/** Is this delivery one the share link itself gives (a private photo it allows; for a download, one only its rule allows, not the gallery's own)? Then it is the link's
- *  log whichever navigation the person is in; otherwise the log follows the navigation. An Only me photo opened by its code, or something a private-view sign-in gives,
- *  is not the link's. */
+/** Is this delivery of something the share link COVERS (it allows the item)? Then it is the link's log whichever navigation the person is in: what the link covers is the
+ *  link's activity wherever they are standing, and the rest of the gallery is the public address's. Something it does not cover (an Only me photo opened by its code,
+ *  what a private-view sign-in gives) is not the link's. */
 function link_grants_delivery($dir, $file, $itemsData, $download = false) {
     $lv = link_viewer();
-    if ($lv === null || !link_allows_item($lv, $dir, $file, $itemsData)) return false;
-    return $download ? !public_download_allows($dir, $file, $itemsData) : file_is_hidden($dir, $file, $itemsData);
+    return $lv !== null && link_allows_item($lv, $dir, $file, $itemsData);
 }
 /** Everyone the log records: the above, and an ordinary visitor when the public address's log is on. */
 function visitor_log_link() {
@@ -7185,31 +7184,28 @@ function link_nav_request_is_click() {
     return $base === '' || $path === $base || strncmp($path, $base . '/', strlen($base) + 1) === 0;
 }
 /** The folders this link opens, worked out once per request over the gallery's own list (so the work does not depend on the name a request asks for, and nothing about a
- *  hidden folder's size shows in how long an answer takes): 'open' = folders in or at one it shares that hold something it allows; 'hid' = every folder above something
- *  PRIVATE that it allows. */
+ *  hidden folder's size shows in how long an answer takes): 'open' = folders in or at one it shares that hold something it allows. */
 function link_open_sets($l, $files = null, $items = null) {
     static $memo = [];
     $id = (string) ($l['id'] ?? '');
     if (isset($memo[$id])) return $memo[$id];
     $files = $files ?? ($GLOBALS['files'] ?? null); $dir = $GLOBALS['dir'] ?? null; $items = $items ?? ($GLOBALS['itemsData'] ?? null);
-    $open = []; $hid = []; $reach = [];
+    $open = []; $reach = [];
     // (the first question about a link holder's navigation can come while the gallery's item data is still being built, so it may not exist yet: it is read here then,
     // which asks the mode again from inside: that answer is the link's view, the narrower one, and only for the entries of this one throwaway list)
     if (is_array($files) && is_string($dir) && !is_array($items)) $items = items_get_all_for_files($dir, $files);
     if (is_array($files) && is_string($dir) && is_array($items)) {
         foreach ($files as $f) {
             if (!link_allows_item($l, $dir, $f, $items)) continue;
-            $hidden = file_is_hidden($dir, $f, $items);
             for ($d = dirname($f); $d !== '.' && $d !== '' && $d !== '/'; $d = dirname($d)) {
-                if ($hidden) $hid[$d] = true;
                 if (isset($open[$d])) continue;
                 if (!isset($reach[$d])) $reach[$d] = link_folder_reachable($l, $dir, $d);
                 if ($reach[$d]) $open[$d] = true;
             }
         }
-        return $memo[$id] = ['open' => $open, 'hid' => $hid];
+        return $memo[$id] = ['open' => $open];
     }
-    return ['open' => $open, 'hid' => $hid];   // (the lists are not ready: not remembered)
+    return ['open' => $open];   // (the lists are not ready: not remembered)
 }
 /** Does link $l cover the place this page request is for (a folder in or at one it shares, a photo it allows; everything for an Everything or a Just-the-public link)?
  *  The front page, and a folder that is only on the way to a covered one, are NOT covered: what is typed there is the open gallery. null: the gallery's own lists are
@@ -16120,16 +16116,16 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
     return AUTO_GROUP_BY_FOLDER && collections_any() && collection_page($dir, $path, $v['all'], $v['visible']) !== null;
 }
 
-/** Is this folder (or collection) one only the share link shows the visitor, so that its page lines belong in the link's log and never in the public address's? A private
- *  folder above something private the link allows, or a private collection the link names. */
+/** Is this folder (or collection) one the share link COVERS (its holder could open it through the link: it holds something the link allows, or it is a collection the
+ *  link names)? Then its page lines belong in the link's log, whichever navigation the person is in; a folder the link does not cover is the public address's. */
 function linklog_grant_folder($l, $dir, $mediaExtensions, $self, $rel) {
     if ($rel === '' || !is_array($l)) return false;
     $scan = linklog_scan($dir, $mediaExtensions, $self);
-    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a private collection is the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
+    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a collection counts as the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
         $type = $l['scope']['type'] ?? '';
-        return !empty($rec['private']) && ($type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true)));
+        return $type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true));
     }
-    return folder_is_private($dir, $rel) && isset(link_open_sets($l, $scan['all'], $scan['items'])['hid'][$rel]);
+    return isset(link_open_sets($l, $scan['all'], $scan['items'])['open'][$rel]);
 }
 
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
@@ -16169,7 +16165,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             if (!isset($mine[$item])) { $mine[$item] = viewer_may_see_item($dir, $item, items_get_all_for_files($dir, [$item])); }
             if (!$mine[$item]) continue;
             $theirs = items_get_all_for_files($dir, [$item]);
-            if ($splitGrant && file_is_hidden($dir, $item, $theirs) && link_allows_item($grant, $dir, $item, $theirs)) $grantBatch[] = [$k, $item];   // (a private photo only the link shows: the link's log)
+            if ($splitGrant && link_allows_item($grant, $dir, $item, $theirs)) $grantBatch[] = [$k, $item];   // (something the link covers: the link's log, in the open gallery too)
             elseif ($link !== null) $batch[] = [$k, $item];
         }
     }

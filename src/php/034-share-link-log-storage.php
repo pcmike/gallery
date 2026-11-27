@@ -507,16 +507,16 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
     return AUTO_GROUP_BY_FOLDER && collections_any() && collection_page($dir, $path, $v['all'], $v['visible']) !== null;
 }
 
-/** Is this folder (or collection) one only the share link shows the visitor, so that its page lines belong in the link's log and never in the public address's? A private
- *  folder above something private the link allows, or a private collection the link names. */
+/** Is this folder (or collection) one the share link COVERS (its holder could open it through the link: it holds something the link allows, or it is a collection the
+ *  link names)? Then its page lines belong in the link's log, whichever navigation the person is in; a folder the link does not cover is the public address's. */
 function linklog_grant_folder($l, $dir, $mediaExtensions, $self, $rel) {
     if ($rel === '' || !is_array($l)) return false;
     $scan = linklog_scan($dir, $mediaExtensions, $self);
-    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a private collection is the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
+    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a collection counts as the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
         $type = $l['scope']['type'] ?? '';
-        return !empty($rec['private']) && ($type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true)));
+        return $type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true));
     }
-    return folder_is_private($dir, $rel) && isset(link_open_sets($l, $scan['all'], $scan['items'])['hid'][$rel]);
+    return isset(link_open_sets($l, $scan['all'], $scan['items'])['open'][$rel]);
 }
 
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
@@ -556,7 +556,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             if (!isset($mine[$item])) { $mine[$item] = viewer_may_see_item($dir, $item, items_get_all_for_files($dir, [$item])); }
             if (!$mine[$item]) continue;
             $theirs = items_get_all_for_files($dir, [$item]);
-            if ($splitGrant && file_is_hidden($dir, $item, $theirs) && link_allows_item($grant, $dir, $item, $theirs)) $grantBatch[] = [$k, $item];   // (a private photo only the link shows: the link's log)
+            if ($splitGrant && link_allows_item($grant, $dir, $item, $theirs)) $grantBatch[] = [$k, $item];   // (something the link covers: the link's log, in the open gallery too)
             elseif ($link !== null) $batch[] = [$k, $item];
         }
     }

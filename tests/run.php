@@ -7109,8 +7109,8 @@ $lvKeys = fn (string $src) => array_keys(vl_items($fxLv, $src)['t']);
 $lvHasItem = fn (array $keys, string $item) => (bool) array_filter($keys, fn ($k) => str_ends_with($k, '|' . $item));
 $lvBeacon([['s', 'Sunrises/s1.jpg'], ['s', 'Eurotrip/e3.jpg'], ['s', 'Eurotrip/e1.jpg']], $lvLinkCookie . '; ' . $lvNav('O'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 open');
 $lvPub = $lvKeys(PUBLIC_LOG_ID_FOR_TESTS); $lvLnk = $lvKeys($lvId);
-check('[link view] in the open gallery the public photos a link\'s holder looks at are the public address\'s log (the public log is on)', $lvHasItem($lvPub, 'Sunrises/s1.jpg') && $lvHasItem($lvPub, 'Eurotrip/e1.jpg'), json_encode([$lvPub, $lvLnk]));
-check('[link view] ...and a private photo only the link shows is the link\'s log, never the public one', $lvHasItem($lvLnk, 'Eurotrip/e3.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e3.jpg') && !$lvHasItem($lvLnk, 'Sunrises/s1.jpg'), json_encode([$lvPub, $lvLnk]));
+check('[link view] in the open gallery, the public photos a link\'s holder looks at OUTSIDE what the link covers (Sunrises) are the public address\'s log (the public log is on), and nothing the link covers is', $lvHasItem($lvPub, 'Sunrises/s1.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e1.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e3.jpg'), json_encode([$lvPub, $lvLnk]));
+check('[link view] ...and everything inside what the link covers (Eurotrip: its public photo and its private one) is the link\'s log, wherever they came from, and none of Sunrises is', $lvHasItem($lvLnk, 'Eurotrip/e3.jpg') && $lvHasItem($lvLnk, 'Eurotrip/e1.jpg') && !$lvHasItem($lvLnk, 'Sunrises/s1.jpg'), json_encode([$lvPub, $lvLnk]));
 $lvBeacon([['s', 'Eurotrip/e2.jpg'], ['s', 'Eurotrip/e4.jpg']], $lvLinkCookie . '; ' . $lvNav('L'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 link');
 $lvPub = $lvKeys(PUBLIC_LOG_ID_FOR_TESTS); $lvLnk = $lvKeys($lvId);
 check('[link view] in the link\'s own view everything they look at is the link\'s log, nothing of it the public one', $lvHasItem($lvLnk, 'Eurotrip/e2.jpg') && $lvHasItem($lvLnk, 'Eurotrip/e4.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e2.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e4.jpg'), json_encode([$lvPub, $lvLnk]));
@@ -7226,6 +7226,11 @@ check('[link view, audit 2] the owner\'s copy of a located original says Vary: C
 
 // 15. The final pass: a link set to show every location still opens in its own view when a covered folder is typed (the first question about the navigation comes while the
 // item data is still being built); and a private collection the link does not name is not the link's log for someone who also has the private-view sign-in.
+$lvCfg(['LOG_PUBLIC_VISITS' => true, 'TRACK_VIEWS' => true]);
+$lvBeaconA(['e' => [['f', 'Eurotrip/Paris'], ['f', 'Sunrises'], ['s', 'Eurotrip/Paris/p1.jpg'], ['s', 'Sunrises/s2.jpg']]], $lvLinkCookie . '; ' . $lvNav('O'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 timeline');
+$lvTlPubF = array_keys(vl_items($fxLv, PUBLIC_LOG_ID_FOR_TESTS)['f']); $lvTlLnkF = array_keys(vl_items($fxLv, $lvId)['f']); $lvTlPub = $lvKeys(PUBLIC_LOG_ID_FOR_TESTS); $lvTlLnk = $lvKeys($lvId);
+check('[link view, final] the owner\'s timeline: in the open gallery a covered PUBLIC folder and its photos (Eurotrip/Paris) are the link\'s log, and an uncovered one (Sunrises) is the public address\'s: a scroll is not split between the two logs', (bool) array_filter($lvTlLnkF, fn ($k) => str_ends_with($k, '|Eurotrip/Paris')) && !array_filter($lvTlPubF, fn ($k) => str_ends_with($k, '|Eurotrip/Paris')) && (bool) array_filter($lvTlPubF, fn ($k) => str_ends_with($k, '|Sunrises')) && !array_filter($lvTlLnkF, fn ($k) => str_ends_with($k, '|Sunrises')) && $lvHasItem($lvTlLnk, 'Eurotrip/Paris/p1.jpg') && !$lvHasItem($lvTlPub, 'Eurotrip/Paris/p1.jpg') && $lvHasItem($lvTlPub, 'Sunrises/s2.jpg') && !$lvHasItem($lvTlLnk, 'Sunrises/s2.jpg'), json_encode([$lvTlPubF, $lvTlLnkF, $lvTlPub, $lvTlLnk]));
+$lvCfg();
 [$stF1, $bodyF1] = $lvGet('?folder=Eurotrip', $lvLocCookie, $lvTyped);
 check('[link view, final] a link set to show every location, typed at a folder it covers (a bookmark), opens in the link\'s view with its banner and its private photo', $stF1 === 200 && str_contains($bodyF1, 'id="link-headsup"') && $lvHas($bodyF1, 'e3.jpg'));
 $lvCfg(['LOG_PUBLIC_VISITS' => true, 'TRACK_VIEWS' => true, 'PRIVATE_VIEW_PASSWORD' => 'lv-view-pw-1']);
