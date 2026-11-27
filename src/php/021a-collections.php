@@ -138,7 +138,10 @@ function collection_viewer_sees($rec) {
     $l = link_viewer();
     if ($l !== null) {
         $type = $l['scope']['type'] ?? 'all';
-        if (in_array($type, ['folders', 'photos', 'mixed'], true)) return in_array($rec['id'], (array) ($l['scope']['folders'] ?? []), true);   // (a link that limits what is seen shows only the collections it names)
+        if (in_array($type, ['folders', 'photos', 'mixed'], true)) {
+            if (in_array($rec['id'], (array) ($l['scope']['folders'] ?? []), true)) return true;   // (one the link names: a grant, in any navigation)
+            if (link_nav_is_link()) return false;   // (a link that limits what is seen shows only the collections it names, while in the link's view)
+        }
         if ($type === 'all') return true;   // (everything, public and private)
     }
     return empty($rec['private']);

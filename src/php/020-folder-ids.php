@@ -342,7 +342,7 @@ function viewer_may_see_item($dir, $file, $itemsData) {
     if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return true;   // (an Only me photo, by its own address)
     if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except an Only me folder, which is the owner's alone)
     $l = link_viewer();
-    if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
+    if ($l !== null && link_nav_is_link() && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either, while in the link's view (the open gallery is not narrowed: the grants below still apply)
     if (!file_is_hidden($dir, $file, $itemsData)) return true;
     return $l !== null && link_allows_item($l, $dir, $file, $itemsData);
 }
@@ -350,6 +350,13 @@ function viewer_may_see_item($dir, $file, $itemsData) {
 /** Is this link set to show only what it covers (its photos or folders), the public rest of the gallery left out of the pages it shows? */
 function link_shows_only_its_own($l) {
     return !empty($l['only']) && in_array($l['scope']['type'] ?? 'all', ['folders', 'photos', 'mixed'], true);
+}
+
+/** May the link's own download / ZIP rule apply to this item? In the link's own view, to any item the link shows (as it always was). In the open gallery only to
+ *  what the link covers: a narrow link's "everything" is about its own things, not a right to the public gallery's originals (that is the gallery's own rule). */
+function link_rule_applies($l, $dir, $file, $itemsData = null) {
+    if (link_nav_is_link()) return !file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData);
+    return link_allows_item($l, $dir, $file, $itemsData);
 }
 
 /** Does the link allow $cap ('downloads' or 'zip') for this item? The answer is one of: off; all (every item the link shows, public or
@@ -369,10 +376,11 @@ function viewer_may_download($dir, $file, $itemsData) {
     if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Only me folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
-    // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
-    if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
-    if (!ENABLE_PUBLIC_DOWNLOAD || file_is_hidden($dir, $file, $itemsData)) return false;
-    return public_download_folder_covers($file);
+    $publicOk = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $file, $itemsData) && public_download_folder_covers($file);
+    // Someone using a share link is never worse off than a stranger: a PUBLIC item can be downloaded if the gallery's own rule or the link's allows it; a private
+    // item only the link shows, by the link's rule alone (the public rule never covers it).
+    if ($l !== null) return $publicOk || (link_rule_applies($l, $dir, $file, $itemsData) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData));
+    return $publicOk;
 }
 
 /** Does the folder the file lies directly in allow strangers to download? Each folder stands on its own: a photo in a folder inside a folder that
@@ -384,10 +392,13 @@ function public_download_folder_covers($file) {
 }
 
 /** Does this visitor see every saved location (the owner, the private-view password, or a link that says so)? */
-function viewer_sees_all_locations() {
+function viewer_sees_all_locations($file = null) {
     if (is_revealed()) return true;
     $l = link_viewer();
-    return $l !== null && ($l['locations'] ?? 'public') === 'all';
+    if ($l === null || ($l['locations'] ?? 'public') !== 'all') return false;
+    if (link_nav_is_link()) return true;   // (the link's view: as it always was)
+    // The open gallery: the link's "every location" covers what the link covers, not the public rest of the gallery.
+    return $file !== null && link_allows_item($l, $GLOBALS['dir'], $file, null);
 }
 
 /** The gallery's own title, found without the page scan the pages themselves wait for. */
@@ -697,7 +708,7 @@ function run_link_route($dir) {
     $hasCookie = is_string($cookie) && hash_equals(link_cookie_value($link), $cookie) && link_is_live($link);
     $posted = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['go']);
     if (!$posted) {
-        if ($hasCookie) { header('Cache-Control: no-store'); header('Location: ' . link_open_in_href($link), true, 303); return; }
+        if ($hasCookie) { link_nav_set_cookie('D', $link['id']); header('Cache-Control: no-store'); header('Location: ' . link_open_in_href($link), true, 303); return; }   // (the link's own address: the page it leads to is the link's view)
         if (link_state($link) === 'active') { render_link_open_page($link, $dir); return; }
         link_note_blocked($link, link_state($link));
         link_guess_failed($dir, $token);   // (a paused, revoked, expired or used-up link's address counts as a wrong address, like one that never existed)
@@ -729,6 +740,7 @@ function run_link_route($dir) {
         return;
     }
     link_set_cookie($link);
+    link_nav_set_cookie('D', $link['id']);
     if ($counted) link_log_opened($link);
     header('Cache-Control: no-store');
     header('Location: ' . link_open_in_href($link), true, 303);

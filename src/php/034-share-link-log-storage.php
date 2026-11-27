@@ -506,15 +506,19 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
  *  names its photo by the code (k= on this address, and in the lines): the photo is the code's, and the page's own word of where it lives is not asked for. */
 function run_linklog_route($dir, $mediaExtensions, $self) {
     header('Cache-Control: no-store');
-    $link = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' ? visitor_log_link() : null;   // (someone on a link, someone with the private-view password, or an ordinary visitor when the public address's log is on)
-    if ($link === null || !linklog_post_is_ours()) { http_response_code(204); return; }
+    $isPost = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
+    $link = $isPost ? visitor_log_link() : null;   // (someone on a link, someone with the private-view password, or an ordinary visitor when the public address's log is on)
+    // Someone holding a share link's cookie but in the open gallery is logged as an ordinary visitor; what only the link shows them (a private photo) is still the link's.
+    $grant = $isPost ? visitor_logged_link(true) : null;
+    $splitGrant = $grant !== null && !link_is_private_log($grant) && ($link === null || $link['id'] !== $grant['id']);
+    if (($link === null && !$splitGrant) || !linklog_post_is_ours()) { http_response_code(204); return; }
     $raw = (string) file_get_contents('php://input', false, null, 0, 20000);
     $in = json_decode($raw, true);
     $code = is_string($_GET['k'] ?? null) ? $_GET['k'] : '';
     $coded = $GLOBALS['__photo_coded'] ?? null;   // (the photo this request's code opens, worked out at the top of the request: see photo_code_params_translate)
     if (is_string($coded) && !(valid_media_path($dir, $coded, $mediaExtensions, $self) && file_is_unlisted($dir, $coded) && viewer_may_see_item($dir, $coded, items_get_all_for_files($dir, [$coded])))) $coded = null;   // (this also notes the code as right: it is not a wrong guess)
     if (!is_string($coded)) $coded = null;
-    $batch = [];
+    $batch = []; $grantBatch = [];
     if (is_array($in) && is_array($in['e'] ?? null)) {
         $mine = []; $seen = [];
         foreach (array_slice($in['e'], 0, 120) as $e) {
@@ -525,16 +529,20 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             $seen[$k . "\0" . $item] = true;
             if ($k === 'f') {
                 if ($item !== '' && !linklog_folder_openable($dir, $mediaExtensions, $self, $item, $coded)) continue;
-                $batch[] = [$k, $item]; continue;
+                if ($link !== null) $batch[] = [$k, $item];
+                continue;
             }
             if (!valid_media_path($dir, $item, $mediaExtensions, $self)) continue;
             if (!isset($mine[$item])) { $mine[$item] = viewer_may_see_item($dir, $item, items_get_all_for_files($dir, [$item])); }
-            if ($mine[$item]) $batch[] = [$k, $item];
+            if (!$mine[$item]) continue;
+            $theirs = items_get_all_for_files($dir, [$item]);
+            if ($splitGrant && file_is_hidden($dir, $item, $theirs) && link_allows_item($grant, $dir, $item, $theirs)) $grantBatch[] = [$k, $item];   // (a private photo only the link shows: the link's log)
+            elseif ($link !== null) $batch[] = [$k, $item];
         }
     }
     // How the visit began (the public address's log only): where someone came in, when it was an arrival and not a click inside the gallery.
     $arrive = null;
-    if (is_array($in) && is_array($in['a'] ?? null) && link_is_public_log($link)) {
+    if ($link !== null && is_array($in) && is_array($in['a'] ?? null) && link_is_public_log($link)) {
         $a = $in['a']; $af = $a['f'] ?? null; $ah = $a['h'] ?? '';
         if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
             if (!empty($a['u'])) {   // an Only me photo opened by its own address: the photo is the code's, whatever the page says
@@ -542,7 +550,11 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             } elseif ($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) $arrive = ['f' => $af, 'h' => $ah];
         }
     }
-    if ($batch || $arrive) {
+    if ($grantBatch) {
+        [$vid, $ip, $label, $country] = link_visitor_identity();
+        link_log_apply($grant, $vid, $ip, $label, $country, $grantBatch);
+    }
+    if ($link !== null && ($batch || $arrive)) {
         [$vid, $ip, $label, $country] = link_visitor_identity();
         link_log_apply($link, $vid, $ip, $label, $country, $batch, null, $arrive);
     }

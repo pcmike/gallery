@@ -4,7 +4,7 @@
  *  taken out of the file, whether the gallery shows it on the page or not), or null when that can't be done safely, in which case
  *  the file must not be given out. */
 function visitor_scrub_plan($srcPath, $filename, $itemsData) {
-    if (viewer_sees_all_locations()) return [];   // (the owner, the private-view password, a share link set to show every location: the file as it is)
+    if (viewer_sees_all_locations($filename)) return [];   // (the owner, the private-view password, a share link set to show every location, for what it covers in the open gallery: the file as it is)
     $entry = $itemsData[$filename] ?? [];
     // With the switch off, or in a folder that keeps the location in what visitors get, only a location the gallery hides is taken out.
     if ((!SCRUB_LOCATION_DATA || !empty($entry['_folderKeepLocation'])) && photo_location_visible($entry)) return [];
@@ -163,7 +163,7 @@ function archive_files_for_viewer($dir, $files) {
     if ($l === null || ($l['zip']['mode'] ?? 'off') === 'off') return [];
     global $itemsData;
     return array_values(array_filter($files, function ($f) use ($dir, $l, $itemsData) {
-        return (!file_is_hidden($dir, $f, $itemsData) || link_allows_item($l, $dir, $f, $itemsData)) && link_capability_allows($l, 'zip', $dir, $f, $itemsData);
+        return link_rule_applies($l, $dir, $f, $itemsData) && link_capability_allows($l, 'zip', $dir, $f, $itemsData);
     }));
 }
 
@@ -223,7 +223,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    if (($linkNote = visitor_logged_link()) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved
+    if (($linkNote = visitor_logged_link(true)) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved (a ZIP is something the link grants)
         $pairs = [['z', ($folder ?? '') . "\0" . count($entries)]];
         foreach ($entries as $e) $pairs[] = ['d', $e['rel']];
         link_queue_deliveries($linkNote, $pairs);
@@ -258,7 +258,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
-    if (($linkNote = visitor_logged_link()) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log
+    if (($linkNote = visitor_logged_link(file_is_hidden($dir, $filename, $itemsData))) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log (a private photo only the link shows is the link's whichever navigation; a public one follows the navigation)
     if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
 }
 

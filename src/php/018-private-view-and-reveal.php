@@ -216,7 +216,7 @@ function collection_leads_to($dir, $collectionPath, $folderPath) {
  *  which a short cookie remembers. A browser that doesn't say keeps what the cookie says. This is tidiness, not a lock: the address of any
  *  public page can still be typed. $folderPath null is a page of the gallery's own front. */
 function nav_top($dir, $folderPath) {
-    if (!own_galleries_in_use($dir) || is_admin_browser() || link_viewer() !== null || link_preview() !== null || is_bot_request()) return '';
+    if (!own_galleries_in_use($dir) || is_admin_browser() || link_nav_is_link() || link_preview() !== null || is_bot_request()) return '';
     $boundary = $folderPath === null ? null : own_gallery_boundary($dir, $folderPath);
     $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
     $fresh = $site !== '' && $site !== 'same-origin';

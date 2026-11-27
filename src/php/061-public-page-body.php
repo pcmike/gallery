@@ -18,7 +18,7 @@
 </div>
 <?= $shellInframe ? shell_frame_script('gallery') : '' ?>
 <?php if (($previewLink = link_preview()) !== null) echo render_link_preview_banner($previewLink, $dir, $allFiles); ?>
-<?php if (($headsUpLink = link_viewer()) !== null && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
+<?php if (($headsUpLink = link_viewer()) !== null && link_nav_is_link() && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
 
 <?php
 // The lock in the icon strip, right beside the archive icon: the one way in. Shown when there is an admin password, or a private-view password and
@@ -581,7 +581,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
-<?php $linkViewer = link_viewer(); if ($photoPass !== null ? viewer_may_download($dir, $photoPass, $itemsData) : (is_revealed() || ($linkViewer !== null ? ($linkViewer['downloads']['mode'] ?? 'off') !== 'off' : ENABLE_PUBLIC_DOWNLOAD))): ?>
+<?php $linkViewer = link_viewer(); if ($photoPass !== null ? viewer_may_download($dir, $photoPass, $itemsData) : (is_revealed() || ($linkViewer !== null ? (($linkViewer['downloads']['mode'] ?? 'off') !== 'off' || ENABLE_PUBLIC_DOWNLOAD) : ENABLE_PUBLIC_DOWNLOAD))): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
 <?php endif; ?>
 <?php if (is_admin_browser()): ?>

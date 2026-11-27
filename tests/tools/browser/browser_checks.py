@@ -3515,7 +3515,7 @@ try:
         # --- a link holder's page (this browser has no owner cookie yet) ---
         b.goto(BL + "/?link=" + tok["Mark & Jen"], 0.8)
         b.js("document.querySelector('form button.big').click()"); b.drain(2.0)
-        b.viewport(1280, 900); b.goto(BL + "/", 1.5); shot(b, "21-link-holder-page")
+        b.viewport(1280, 900); b.drain(1.5); shot(b, "21-link-holder-page")   # (the page the link's button led to: the link's view; a typed front page is the open gallery, below)
         hp = b.js("({text: document.body.innerText, toggles: document.querySelectorAll('.priv-toggle, .cover-toggle').length, adminLink: !!document.querySelector('a[href*=\"?admin\"]'), headsUp: (document.getElementById('link-headsup') || {}).textContent || '', lock: !!document.querySelector('.lock-link')})")
         ok("Rome" in hp["text"] and "Pisa" not in hp["text"] and "pub.jpg" not in hp["text"], "[share links] a holder of the Rome link sees the Rome folder and not Pisa", hp["text"][:200])
         ok(hp["toggles"] == 0 and not hp["adminLink"] and not hp["lock"], "[share links] a link holder gets no owner tools: no lock or star on tiles, no admin link, no sign-in lock", str(hp))
@@ -4925,6 +4925,68 @@ try:
     finally:
         srvL.terminate(); srvL.wait()
         b.viewport(1280, 900)
+    # ---------------- link view: a link's cookie grants content; the way a person arrives decides the navigation ----------------
+    print("== link view: content by the cookie, navigation by the arrival (real Chromium)")
+    import http.cookiejar as _cj
+    SITE_V = WORK + "/sitelinkview"; os.makedirs(SITE_V + "/Eurotrip"); os.makedirs(SITE_V + "/Sunrises")
+    shutil.copy(HERE + "/../../../index.php", SITE_V + "/index.php"); os.utime(SITE_V + "/index.php", (time.time() - 3600,) * 2)
+    for i, rel in enumerate(("pub.jpg", "Sunrises/s1.jpg", "Eurotrip/e1.jpg", "Eurotrip/e3.jpg")):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(120,90); imagefill($i,0,0,imagecolorallocate($i,40+$argv[2]*40,90,200-$argv[2]*30)); imagejpeg($i,$argv[1]);", SITE_V + "/" + rel, str(i)], check=True)
+    VGUARD = "<?php http_response_code(404); exit; ?>\n"
+    open(SITE_V + "/Eurotrip/.gallery-items.php", "w").write(VGUARD + json.dumps({"items": {"e3.jpg": {"restriction": "private"}}, "groups": []}) + "\n")
+    VPW = "linkview-admin-pw"
+    vhash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", VPW], capture_output=True, text=True).stdout
+    open(SITE_V + "/.gallery-config.php", "w").write(VGUARD + json.dumps({"ADMIN_PASSWORD": vhash, "AUTO_GROUP_BY_FOLDER": True, "ENABLE_SHARE_LINKS": True}) + "\n")
+    sv_ = socket.socket(); sv_.bind(("127.0.0.1", 0)); PV = sv_.getsockname()[1]; sv_.close(); BV = f"http://127.0.0.1:{PV}"
+    srvV = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PV}", "-t", SITE_V], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    def vhttp(url, data=None, headers=None, jar=None):
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar if jar is not None else _cj.CookieJar()))
+        req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data, headers=headers or {})
+        try: r = op.open(req, timeout=20); return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e: return e.code, e.read().decode("utf-8", "replace")
+    try:
+        vauth = {"Authorization": "Basic " + base64.b64encode(("u:" + VPW).encode()).decode()}; vjar = _cj.CookieJar()
+        vcsrf = re.search(r'csrf_token" value="([a-f0-9]+)"', vhttp(BV + "/?admin", headers=vauth, jar=vjar)[1]).group(1)
+        vhttp(BV + "/?admin", {"action": "link_create", "max_opens": "5", "ends_at": str(int(time.time()) + 4 * 86400), "locations": "public", "heads_up": "on", "title_mode": "gallery", "note": "", "zip": "off", "csrf_token": vcsrf, "label": "Eurotrip", "scope_type": "folders", "scope_folders": '["Eurotrip"]', "only": "1", "downloads": "off"}, {**vauth, "X-Requested-With": "gallery-fetch"}, vjar)
+        vraw = open(SITE_V + "/.gallery-links.php").read(); vdata = json.loads(vraw[vraw.index("\n") + 1:])
+        vtok = [l["token"] for l in vdata["links"].values()][0]
+        b.viewport(1280, 900)
+        VSEE = "({text: document.body.innerText, headsUp: !!document.getElementById('link-headsup'), alts: [...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt'))})"
+        # the link's own door: its button, and the page it leads to is the link's view (narrowed to Eurotrip, with its expiry line)
+        b.goto(BV + "/?link=" + vtok, 0.8); b.js("document.querySelector('form button.big').click()"); b.drain(2.0)
+        v1 = b.js(VSEE)
+        ok("Eurotrip" in v1["text"] and "Sunrises" not in v1["text"] and v1["headsUp"], "[link view] opening the link's address lands in the link's view: only Eurotrip is listed (the narrowing the owner chose) and the link's expiry line shows", str(v1)[:300])
+        # the owner's case: a typed front page is the open gallery, and a click into Eurotrip still shows the link's private photo
+        b.goto(BV + "/", 1.5)
+        v2 = b.js(VSEE)
+        ok("Sunrises" in v2["text"] and "Eurotrip" in v2["text"] and not v2["headsUp"], "[link view] typing the gallery's address afterwards shows the whole public gallery (Sunrises is there) with no link banner", str(v2)[:300])
+        b.js("document.querySelector('a[href*=\"folder=Eurotrip\"]').click()"); b.drain(1.8)
+        v3 = b.js(VSEE)
+        ok("e1.jpg" in v3["alts"] and "e3.jpg" in v3["alts"] and not v3["headsUp"], "[link view] a click from there into Eurotrip shows the public photo AND the private one the link grants, still in the open navigation (no banner)", str(v3)[:300])
+        b.js("location.reload()"); b.drain(2.0)
+        v3b = b.js(VSEE)
+        ok("e3.jpg" in v3b["alts"] and not v3b["headsUp"], "[link view] reloading that page keeps the open navigation (a reload is not an arrival)", str(v3b)[:300])
+        b.js("document.querySelector('.breadcrumb a').click()"); b.drain(1.8)
+        v4 = b.js(VSEE)
+        ok("Sunrises" in v4["text"] and not v4["headsUp"], "[link view] ...and the way up from there is the whole gallery, not the link's narrowed front page", str(v4)[:300])
+        # a bookmark made inside the link opens in the link's view; the way up from it is the link's own front page
+        b.goto(BV + "/?folder=Eurotrip", 1.5)
+        v5 = b.js(VSEE)
+        ok(v5["headsUp"] and "e3.jpg" in v5["alts"], "[link view] a typed address inside a folder the link covers (a bookmark) opens in the link's view with its private photo", str(v5)[:300])
+        b.js("location.reload()"); b.drain(2.0)
+        v5b = b.js(VSEE)
+        ok(v5b["headsUp"], "[link view] ...and a reload there stays in the link's view", str(v5b)[:300])
+        b.js("document.querySelector('.breadcrumb a').click()"); b.drain(1.8)
+        v6 = b.js(VSEE)
+        ok("Eurotrip" in v6["text"] and "Sunrises" not in v6["text"] and v6["headsUp"], "[link view] ...where the way up is the link's own front page (narrowed to Eurotrip)", str(v6)[:300])
+        b.goto(BV + "/?folder=Sunrises", 1.5)
+        v7 = b.js(VSEE)
+        ok("s1.jpg" in v7["alts"] and not v7["headsUp"], "[link view] a typed address of a public folder the link does not cover is the public gallery, not a not-found", str(v7)[:300])
+        ok(not b.problems(IGN), "[link view] ...with no console or CSP errors on any of those pages", "; ".join(b.problems(IGN))[:300])
+    finally:
+        srvV.terminate(); srvV.wait()
+
     # ---------------- the owner's shell: the admin's header and sidebar around one frame ----------------
     print("== the owner's shell: the admin's header and sidebar around one frame")
     SITE_S = WORK + "/shellsite"; os.makedirs(SITE_S + "/Rome/Vatican"); os.makedirs(SITE_S + "/Pisa"); DEEP = "Summer 2025/Italy trip/Tuscany region/Florence old town/Day three morning/Uffizi queue/Room 12"; os.makedirs(SITE_S + "/" + DEEP); os.makedirs(WORK + "/evil")

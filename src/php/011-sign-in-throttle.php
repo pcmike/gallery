@@ -124,6 +124,7 @@ function send_sensitive_page_headers() {
  *  for a trusted viewer — it would list hidden items to the next
  *  anonymous request for the same URL. */
 function send_viewer_aware_cache_headers() {
+    link_nav_mode();   // (decides, and sets the navigation cookie, before anything is sent)
     header('Vary: Cookie', false);   // (added, not replacing: nav_top may have said the page varies on Sec-Fetch-Site too)
     if (is_revealed() || link_viewer() !== null) {
         header('Cache-Control: private, no-store');

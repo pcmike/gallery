@@ -6841,7 +6841,7 @@ check('[downloads] for a link that shows nothing private "everything but private
 [$idS, , $ckS] = $s2Make('S Rome, downloads off', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome'])]);
 $s2Std = ['ADMIN_PASSWORD' => cfg_read("$fxS2/.gallery-config.php")['ADMIN_PASSWORD'], 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true];
 file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + ['PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_ROOT' => true]));
-check('[downloads] the main page\'s switch is for people without a link: with it on a stranger gets a public original, but a person on a link whose downloads say Off does not', $s2Dl(null, 'pub.jpg') === 200 && $s2Dl($ckS, 'pub.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 200 && !str_contains(http_get("$baseS2/", $s2Hdr($ckS))[1], 'id="lightbox-download"'));
+check('[downloads] a person on a link is never worse off than a stranger: with the main page\'s switch on, a stranger gets a public original and so does someone on a link whose downloads say Off (the link\'s Off is about what only the link shows), while a private photo the link covers stays closed to them', $s2Dl(null, 'pub.jpg') === 200 && $s2Dl($ckS, 'pub.jpg') === 200 && $s2Dl($ckA, 'pub.jpg') === 200 && $s2Dl($ckS, 'Rome/r1.jpg') === 404 && str_contains(http_get("$baseS2/", $s2Hdr($ckS))[1], 'id="lightbox-download"'));
 // People without a link: each folder stands on its own (2.6.6). The older Everything, and the old on/off line, are read as Off.
 $s2Mode = function (array $extra) use ($fxS2, $s2Std) { file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + $extra)); };
 $s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'all']);
@@ -6986,6 +6986,157 @@ $ncHealth = preg_match('~(\d+) things? to look at~', http_get("$baseS2/?admin", 
 check('[shell] Settings has a red number only when the Health check has something to fix, and it is that number', $ncHealth > 0 ? preg_match('~data-tab="site">Settings\s*<span class="count bad"[^>]*>' . $ncHealth . '</span>~', $shBody) === 1 : !str_contains($shBody, 'count bad'), "health=$ncHealth");
 [, $ncFrag] = http_get("$baseS2/?admin&shellcounts=1", $shOwner);
 check('[shell] the sidebar\'s numbers can be asked for again (a fragment, signed in only), so they follow what is done in the frame', str_contains($ncFrag, 'data-tab="features"') && !str_contains($ncFrag, '<html') && !str_contains(http_get("$baseS2/?admin&shellcounts=1")[1], 'data-tab="features"'));
+echo "== link view: a share link's cookie grants content; the way a person ARRIVES decides the navigation ==\n";
+
+$fxLv = new_fixture_dir('linkview');
+foreach (['Sunrises', 'Eurotrip/Paris', 'Wedding'] as $d) mkdir("$fxLv/$d", 0775, true);
+foreach (['pub.jpg' => 1, 'Sunrises/s1.jpg' => 2, 'Sunrises/s2.jpg' => 3, 'Eurotrip/e1.jpg' => 4, 'Eurotrip/e2.jpg' => 5, 'Eurotrip/e3.jpg' => 6, 'Eurotrip/e4.jpg' => 7, 'Eurotrip/Paris/p1.jpg' => 8, 'Wedding/w1.jpg' => 9] as $f => $n) make_jpeg("$fxLv/$f", 60 + $n, 50, 20 * $n % 255, 90, 30 * $n % 255);
+write_data_file("$fxLv/Eurotrip/.gallery-items.php", ['items' => ['e3.jpg' => ['restriction' => 'private'], 'e4.jpg' => ['restriction' => 'private']], 'groups' => []]);
+write_data_file("$fxLv/Wedding/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+$lvCfgW = fn (array $o = []) => file_put_contents("$fxLv/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => 'lv-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+$lvCfgW();
+copy($indexSrc, "$fxLv/index.php");
+$portLv = find_free_port(); start_server($fxLv, $portLv); $baseLv = "http://127.0.0.1:$portLv";
+[, , $lvLogin] = http_post("$baseLv/?admin", ['access_code' => 'lv-admin-pw-1'], [], false);
+$lvAdminCookie = extract_cookie_header($lvLogin);
+$lvCsrf = extract_csrf_token(http_get("$baseLv/?admin", ["Cookie: $lvAdminCookie"])[1]);
+// Rewriting the settings file starts the owner's sign-in over (it is tied to the password's stored form), so a config change signs in again.
+$lvRelogin = function () use ($baseLv, $fxLv, &$lvAdminCookie, &$lvCsrf) {
+    @unlink("$fxLv/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseLv/?admin", ['access_code' => 'lv-admin-pw-1'], [], false);
+    $lvAdminCookie = extract_cookie_header($h);
+    $lvCsrf = extract_csrf_token(http_get("$baseLv/?admin", ["Cookie: $lvAdminCookie"])[1]);
+};
+$lvCfg = function (array $o = []) use ($lvCfgW, $lvRelogin) { $lvCfgW($o); $lvRelogin(); };
+$lvAdmin = function (array $fields) use ($baseLv, &$lvAdminCookie, &$lvCsrf) {
+    [, $body] = http_post("$baseLv/?admin", $fields + ['csrf_token' => $lvCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $lvAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$lvLinks = fn () => read_data_file("$fxLv/.gallery-links.php");
+$lvMake = function (string $label, array $f) use ($lvAdmin, $lvLinks, $baseLv, $fxLv) {
+    $made = $lvAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'on', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return [null, null, null, $made];
+    $token = $lvLinks()['links'][$made['id']]['token'];
+    @unlink("$fxLv/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseLv/?link=$token", ['go' => '1'], [], false);
+    return [$made['id'], $token, extract_cookie_header($h), $h];
+};
+// The owner's own case: a link for "Eurotrip (everything)", Show only these on.
+[$lvId, $lvTok, $lvCk, $lvOpenHdr] = $lvMake('Eurotrip, everything', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Eurotrip']), 'only' => '1']);
+check('[link view] the Eurotrip link (everything in it, "Show only these") can be made and opened', $lvId !== null && $lvCk !== '');
+// The cookies the way a browser holds them: the link's own, and the navigation marker made by hand (the install secret is in the fixture, the same way the page signs it).
+$lvLinkCookie = ''; foreach (explode('; ', $lvCk) as $p) if (str_starts_with($p, 'gallery_link_')) $lvLinkCookie = $p;
+$lvSecret = ''; if (preg_match('/^[0-9a-f]{64}$/m', (string) @file_get_contents("$fxLv/.gallery-secret.php"), $m)) $lvSecret = $m[0];
+$lvNav = fn (string $mode, ?string $id = null) => 'gallery_nav_' . substr(hash('sha256', realpath($fxLv)), 0, 10) . '=' . $mode . '.' . ($id ?? $lvId) . '.' . hash_hmac('sha256', 'nav|' . $mode . '|' . ($id ?? $lvId) . '|' . realpath($fxLv), $lvSecret);
+$lvTyped = ['Sec-Fetch-Site: none', 'Sec-Fetch-Mode: navigate', 'Sec-Fetch-Dest: document'];   // an address typed or bookmarked
+$lvClick = ['Sec-Fetch-Site: same-origin', 'Sec-Fetch-Mode: navigate', 'Sec-Fetch-Dest: document'];   // a click inside the gallery
+$lvGet = fn (string $q, string $cookie, array $extra = []) => http_get("$baseLv/$q", array_merge($cookie !== '' ? ["Cookie: $cookie"] : [], $extra));
+$lvHas = fn (string $body, string $name) => (bool) preg_match('~' . preg_quote($name, '~') . '~', $body);
+check('[link view] the link\'s address, opened, also leaves a one-shot "door" marker for the page it leads to (and the link cookie as before)', str_contains($lvCk, 'gallery_link_') && str_contains($lvCk, 'gallery_nav_') && preg_match('~^Set-Cookie: gallery_nav_[0-9a-f]+=D\.' . $lvId . '\.[0-9a-f]{64}; ~mi', implode("\n", $lvOpenHdr)) === 1, json_encode($lvOpenHdr));
+
+// 1. The front page TYPED (an arrival that is not at a place the link covers): the open gallery, with what the link grants where it belongs.
+[$st, $body] = $lvGet('', $lvLinkCookie, $lvTyped);
+check('[link view] typed front page: Sunrises (public) is listed, Eurotrip too, nothing narrowed, no link banner (the cookie must not make the gallery look like the link\'s view)', $st === 200 && $lvHas($body, 'Sunrises') && $lvHas($body, 'Eurotrip') && !str_contains($body, 'id="link-headsup"'));
+check('[link view] ...and the private folder the link does not cover stays out of it (exactly as for a stranger)', !$lvHas($body, 'Wedding'));
+// 2. Older browser: no Sec-Fetch headers and no Referer is an arrival too.
+[$st, $body] = $lvGet('', $lvLinkCookie);
+check('[link view] a browser that sends nothing about how it arrived and has no Referer is an arrival: the open gallery', $st === 200 && $lvHas($body, 'Sunrises') && !str_contains($body, 'id="link-headsup"'));
+[$st, $body] = $lvGet('', $lvLinkCookie . '; ' . $lvNav('L'), ["Referer: $baseLv/?folder=Eurotrip"]);
+check('[link view] ...but one whose Referer is a page of the gallery is a click: it keeps the link\'s view (the front page narrowed to Eurotrip)', $st === 200 && $lvHas($body, 'Eurotrip') && !$lvHas($body, 'Sunrises') && str_contains($body, 'id="link-headsup"'));
+[$st, $body] = $lvGet('', $lvLinkCookie . '; ' . $lvNav('L'), ['Referer: https://elsewhere.example/page']);
+check('[link view] a Referer from another site is an arrival: the open gallery', $lvHas($body, 'Sunrises') && !str_contains($body, 'id="link-headsup"'));
+// 3. Clicking from the open gallery into Eurotrip: the link's hidden photos show (content), and the navigation stays open.
+[$st, $body] = $lvGet('?folder=Eurotrip', $lvLinkCookie . '; ' . $lvNav('O'), $lvClick);
+check('[link view] clicking from the open front page into Eurotrip shows the link\'s private photos as well as the public ones (what the link grants)', $st === 200 && $lvHas($body, 'e1.jpg') && $lvHas($body, 'e3.jpg') && $lvHas($body, 'e4.jpg'));
+check('[link view] ...in the open navigation (no link banner), so the way up is the whole gallery, not the link\'s', !str_contains($body, 'id="link-headsup"'));
+// 4. The link's own door, and a bookmark inside the link.
+[$st, $body] = $lvGet('?folder=Eurotrip', $lvLinkCookie . '; ' . $lvNav('D'), ['Sec-Fetch-Site: cross-site', 'Sec-Fetch-Mode: navigate', 'Sec-Fetch-Dest: document']);
+check('[link view] the page the link\'s address leads to is the link\'s view however it arrives (a chat app\'s click is cross-site): its banner, its private photos', $st === 200 && str_contains($body, 'id="link-headsup"') && $lvHas($body, 'e3.jpg'));
+[$st, $body] = $lvGet('?folder=Eurotrip', $lvLinkCookie, $lvTyped);
+check('[link view] a bookmark of a folder the link covers (typed, no marker at all) opens in the link\'s view with everything it grants', $st === 200 && str_contains($body, 'id="link-headsup"') && $lvHas($body, 'e3.jpg'));
+[$st, $body] = $lvGet('?folder=' . rawurlencode('Eurotrip/Paris'), $lvLinkCookie, $lvTyped);
+check('[link view] ...also one nested below it', $st === 200 && str_contains($body, 'id="link-headsup"') && $lvHas($body, 'p1.jpg'));
+[$st, $body] = $lvGet('?folder=Sunrises', $lvLinkCookie, $lvTyped);
+check('[link view] a bookmark of a public folder the link does not cover opens as the public gallery: its photos, no banner', $st === 200 && $lvHas($body, 's1.jpg') && !str_contains($body, 'id="link-headsup"'));
+[$stW, $bodyW] = $lvGet('?folder=Wedding', $lvLinkCookie, $lvTyped);
+[$stS, $bodyS] = http_get("$baseLv/?folder=Wedding", $lvTyped);
+check('[link view] a private folder the link does not cover is "not found" to its holder, the very same answer a stranger gets', $stW === $stS && $stW === 404 && $bodyW === $bodyS && !$lvHas($bodyW, 'w1.jpg'));
+// 5. Inside the link's view: clicks keep it (the hub), and the narrowing holds.
+[$st, $body] = $lvGet('', $lvLinkCookie . '; ' . $lvNav('L'), $lvClick);
+check('[link view] a click up to the front page from inside the link\'s view keeps the link\'s view: only Eurotrip is listed (the narrowing the owner chose)', $st === 200 && $lvHas($body, 'Eurotrip') && !$lvHas($body, 'Sunrises') && str_contains($body, 'id="link-headsup"'));
+[$st, $body] = $lvGet('?folder=Sunrises', $lvLinkCookie . '; ' . $lvNav('L'), $lvClick);
+check('[link view] ...and a click to a public folder outside the link is not found, as "Show only these" says', $st === 404 && !$lvHas($body, 's1.jpg'));
+// 6. A damaged, forged or another link's marker means nothing: judged as an arrival.
+[$idOther, , $ckOther] = $lvMake('Another link', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Sunrises']), 'only' => '1']);
+foreach (['a damaged marker' => 'gallery_nav_' . substr(hash('sha256', realpath($fxLv)), 0, 10) . '=L.' . $lvId . '.' . str_repeat('0', 64), 'another link\'s marker' => $lvNav('L', $idOther), 'a garbage marker' => 'gallery_nav_' . substr(hash('sha256', realpath($fxLv)), 0, 10) . '=%00%00'] as $what => $bad) {
+    [$st, $body] = $lvGet('', $lvLinkCookie . '; ' . $bad, $lvClick);
+    check("[link view] $what is ignored (the page is then judged by where it is going: the front page is the open gallery)", $st === 200 && $lvHas($body, 'Sunrises') && !str_contains($body, 'id="link-headsup"'));
+}
+// 7. A link that covers the whole gallery has nothing to narrow: always its own view.
+[$idAll, , $ckAll] = $lvMake('Everything', []);
+$lvAllLink = ''; foreach (explode('; ', $ckAll) as $p) if (str_starts_with($p, 'gallery_link_')) $lvAllLink = $p;
+[$st, $body] = $lvGet('', $lvAllLink, $lvTyped);
+check('[link view] an "Everything" link is its own view wherever the person arrives (its banner shows, nothing is narrowed)', $st === 200 && str_contains($body, 'id="link-headsup"') && $lvHas($body, 'Sunrises') && $lvHas($body, 'Wedding'));
+// 8. A closed gallery has no open view for anyone on a link.
+$lvCfg(['CLOSE_PUBLIC_GALLERY' => true]);
+[$st, $body] = $lvGet('', $lvLinkCookie, $lvTyped);
+check('[link view] in a closed gallery a link\'s holder never gets the open view: typed front page is still the link\'s narrowed view', $st === 200 && $lvHas($body, 'Eurotrip') && !$lvHas($body, 'Sunrises'));
+[$st, ] = http_get("$baseLv/", $lvTyped);
+check('[link view] ...while a stranger still gets nothing from a closed gallery', $st !== 200 || !$lvHas(http_get("$baseLv/", $lvTyped)[1], 'Sunrises'));
+$lvCfg();
+// 10. An Only me photo's own address ignores a share link's cookie in the browser: no link banner, and the navigation marker is left as it was.
+mkdir("$fxLv/Mine", 0775); make_jpeg("$fxLv/Mine/m1.jpg", 70, 50, 99, 90, 30);
+write_data_file("$fxLv/Mine/.gallery-items.php", ['restriction' => 'private', 'unlisted' => true, 'items' => [], 'groups' => []]);
+$lvAdminQ = function (array $fields, string $q = '') use ($baseLv, &$lvAdminCookie, &$lvCsrf) {
+    [, $body] = http_post("$baseLv/?admin$q", $fields + ['csrf_token' => $lvCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $lvAdminCookie"]);
+    return json_decode($body, true) ?? [];
+};
+$lvMe = $lvAdminQ(['action' => 'set_folder_visibility', 'level' => 'me'], '&folder=Mine');
+$lvAddr = $lvAdminQ(['action' => 'photo_address', 'file' => 'm1.jpg'], '&folder=Mine');
+$lvCode = (string) ($lvAddr['code'] ?? '');
+check('[link view] the fixture has an Only me photo with an address', preg_match('/^[A-Za-z0-9]{8}$/', $lvCode) === 1, json_encode($lvAddr));
+[$st, $body, $hd] = http_get("$baseLv/?photo=Mine%2Fm1.jpg&k=$lvCode", array_merge(["Cookie: $lvLinkCookie; " . $lvNav('L')], $lvTyped), false);
+check('[link view] an Only me photo\'s address opens for someone holding a link cookie with no link banner (the page is that photo alone, not a link\'s view) and leaves the navigation marker as it was', $st === 200 && str_contains($body, $lvCode) && !str_contains($body, 'id="link-headsup"') && !preg_grep('~^Set-Cookie: gallery_nav_~i', $hd), json_encode($hd));
+
+// 11. Logs: the link's view goes in the link's log; the open gallery in the public log; what only the link shows is always the link's.
+$lvCfg(['LOG_PUBLIC_VISITS' => true, 'TRACK_VIEWS' => true]);
+$lvBeacon = function (array $events, string $cookie, string $ua) use ($baseLv) {
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", ["Cookie: $cookie", 'Content-Type: application/json', 'Sec-Fetch-Site: same-origin', "User-Agent: $ua"]), 'content' => json_encode(['e' => $events]), 'ignore_errors' => true, 'timeout' => 5]];
+    @file_get_contents("$baseLv/?linklog", false, stream_context_create($opts));
+};
+$lvKeys = fn (string $src) => array_keys(vl_items($fxLv, $src)['t']);
+$lvHasItem = fn (array $keys, string $item) => (bool) array_filter($keys, fn ($k) => str_ends_with($k, '|' . $item));
+$lvBeacon([['s', 'Sunrises/s1.jpg'], ['s', 'Eurotrip/e3.jpg'], ['s', 'Eurotrip/e1.jpg']], $lvLinkCookie . '; ' . $lvNav('O'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 open');
+$lvPub = $lvKeys(PUBLIC_LOG_ID_FOR_TESTS); $lvLnk = $lvKeys($lvId);
+check('[link view] in the open gallery the public photos a link\'s holder looks at are the public address\'s log (the public log is on)', $lvHasItem($lvPub, 'Sunrises/s1.jpg') && $lvHasItem($lvPub, 'Eurotrip/e1.jpg'), json_encode([$lvPub, $lvLnk]));
+check('[link view] ...and a private photo only the link shows is the link\'s log, never the public one', $lvHasItem($lvLnk, 'Eurotrip/e3.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e3.jpg') && !$lvHasItem($lvLnk, 'Sunrises/s1.jpg'), json_encode([$lvPub, $lvLnk]));
+$lvBeacon([['s', 'Eurotrip/e2.jpg'], ['s', 'Eurotrip/e4.jpg']], $lvLinkCookie . '; ' . $lvNav('L'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 link');
+$lvPub = $lvKeys(PUBLIC_LOG_ID_FOR_TESTS); $lvLnk = $lvKeys($lvId);
+check('[link view] in the link\'s own view everything they look at is the link\'s log, nothing of it the public one', $lvHasItem($lvLnk, 'Eurotrip/e2.jpg') && $lvHasItem($lvLnk, 'Eurotrip/e4.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e2.jpg') && !$lvHasItem($lvPub, 'Eurotrip/e4.jpg'), json_encode([$lvPub, $lvLnk]));
+$lvCfg(['TRACK_VIEWS' => true]);
+$lvBeacon([['s', 'Sunrises/s2.jpg'], ['s', 'Eurotrip/p-none.jpg'], ['s', 'Eurotrip/Paris/p1.jpg']], $lvLinkCookie . '; ' . $lvNav('O'), 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120 nolog');
+check('[link view] with the public log off, a holder in the open gallery is not logged anywhere for public photos (not in the link\'s log either)', !$lvHasItem($lvKeys($lvId), 'Sunrises/s2.jpg') && !$lvHasItem($lvKeys(PUBLIC_LOG_ID_FOR_TESTS), 'Sunrises/s2.jpg'));
+$lvCfg();
+
+// 12. Locations: a link set to show every location shows them for what it covers in the open gallery, and everywhere in its own view.
+make_gps_jpeg("$fxLv/Sunrises/geo.jpg", 'N', [[48, 1], [51, 1], [0, 1]], 'E', [[2, 1], [21, 1], [0, 1]]);
+make_gps_jpeg("$fxLv/Eurotrip/geo2.jpg", 'N', [[48, 1], [51, 1], [0, 1]], 'E', [[2, 1], [21, 1], [0, 1]]);
+$lvCfg(['ENABLE_PHOTO_LOCATION' => true]);
+[$idLoc, , $ckLoc, $lvOpenHdrLoc] = $lvMake('Eurotrip, all locations and downloads', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Eurotrip']), 'only' => '1', 'locations' => 'all', 'downloads' => 'all']);
+check('[link view] the link with every location and every download can be made', $idLoc !== null, json_encode($lvOpenHdrLoc ?? null));
+$lvLocCookie = ''; foreach (explode('; ', (string) $ckLoc) as $p) if (str_starts_with($p, 'gallery_link_')) $lvLocCookie = $p;
+$lvOrig = fn (string $file, string $marker) => http_get("$baseLv/?original=" . rawurlencode($file), ["Cookie: $lvLocCookie; " . $lvNav($marker, $idLoc)]);
+$lvGeo2 = (string) file_get_contents("$fxLv/Eurotrip/geo2.jpg"); $lvGeo = (string) file_get_contents("$fxLv/Sunrises/geo.jpg");
+check('[link view] a photo the link covers keeps its location in the copy the person downloads, in the open gallery and in the link\'s view (the link says show every location)', $lvOrig('Eurotrip/geo2.jpg', 'O')[1] === $lvGeo2 && $lvOrig('Eurotrip/geo2.jpg', 'L')[1] === $lvGeo2);
+[$stG, $bodyG] = $lvOrig('Sunrises/geo.jpg', 'O');
+check('[link view] ...but a public photo the link does NOT cover, opened in the open gallery, has its hidden location taken out like anyone\'s (the link\'s "every location" is about what it covers)', $stG !== 200 || $bodyG !== $lvGeo, "status $stG");
+check('[link view] a link\'s download rule is about what it covers: in the open gallery it gives the original of a photo it covers (public or private) and NOT a public photo outside it (the gallery\'s own rule decides that, and it says no here)', $lvOrig('Eurotrip/e1.jpg', 'O')[0] === 200 && $lvOrig('Eurotrip/e3.jpg', 'O')[0] === 200 && $stG === 404 && $lvOrig('Sunrises/s1.jpg', 'O')[0] === 404);
+$lvCfg();
+
+// 9. Which readers of the link cookie exist (the narrowing must never depend on a third place that reads it).
+$lvSrc = (string) file_get_contents($indexSrc);
+check('[link view] the link cookie is read in exactly two places (the link\'s address and link_viewer), so what it grants is decided in one function and the navigation in another', preg_match_all('~\$_COOKIE\[LINK_COOKIE_NAME\]\s*\?\?~', $lvSrc) === 2);
+
 // A notes page that is in use shows "On" on Features; one without {gallery} says it needs setup (this used to say "Not used" whenever the page was in use).
 $fxNc = new_fixture_dir('navnotes'); make_jpeg("$fxNc/a.jpg", 80, 50, 20, 90, 30);
 file_put_contents("$fxNc/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nc-admin-pw-1']));

@@ -85,6 +85,7 @@ function items_get_all_for_files($dir, $files) {
             // structure just to find out which folder a file lives in.
             $entry['_folderLocationEnabled'] = folder_location_on($dir, ($fr = dirname($folderFiles[0])) === '.' ? '' : $fr);   // (the folder's own choice, or the one it takes from the folder above)
             $entry['_folderKeepLocation'] = ($data['keepLocation'] ?? null) === true;   // (the folder's own "keep the location in files visitors get")
+            $entry['_linkSeesLocation'] = viewer_sees_all_locations($file);   // (a share link set to show every location: for what it covers in the open gallery, everywhere in its own view)
             $result[$file] = $entry;
         }
     }
@@ -105,7 +106,7 @@ function photo_location_visible($itemEntry) {
     if (empty($itemEntry['location'])) return false;
     static $trusted = null;
     if ($trusted === null) $trusted = viewer_sees_all_locations();
-    if ($trusted) return true;
+    if ($trusted || !empty($itemEntry['_linkSeesLocation'])) return true;
     $visibility = $itemEntry['locationVisibility'] ?? 'inherit';
     if ($visibility === 'hide') return false;
     if ($visibility === 'show') return true;
