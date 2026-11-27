@@ -61,6 +61,7 @@ function slugify($text) {
 // An Only me photo's own address arrives as /photos/<8 letters and digits> or /photos/?<8 letters and digits>, which is ?link=<them> to the script: when it
 // is one, the request becomes that photo's page (?photo=<path>&k=<code>) here; when it is not, it goes on as a share link's address below.
 if (request_route() === 'link') photo_address_translate($dir, $files, $itemsData);
+link_nav_mode();   // (decided here, whatever is asked for: whether a photo exists must not show in whether the navigation cookie is set)
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
     $candidate = $_GET['photo'];

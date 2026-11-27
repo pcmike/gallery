@@ -107,7 +107,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
     if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (an Unlisted folder's pictures are for whoever has its address, not for a search engine's image results)
     // Someone using a share link is sent a private picture: noted in that link's log (their browser reports what was on screen too).
-    if ($variant !== 'full' && ($linkNote = visitor_logged_link(true)) !== null && file_is_hidden($dir, $filename, $itemsData)) link_queue_delivery($linkNote, 's', $filename);
+    if ($variant !== 'full' && ($linkNote = visitor_logged_link(link_grants_delivery($dir, $filename, $itemsData))) !== null && file_is_hidden($dir, $filename, $itemsData)) link_queue_delivery($linkNote, 's', $filename);
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
     $maxDim = image_variant_dim($variant);
 

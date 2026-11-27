@@ -311,6 +311,14 @@ function visitor_logged_link($byGrant = false) {
     if ($ready) $memo[$k] = $r;
     return $r;
 }
+/** Is this delivery one the share link itself gives (a private photo it allows; for a download, one only its rule allows, not the gallery's own)? Then it is the link's
+ *  log whichever navigation the person is in; otherwise the log follows the navigation. An Only me photo opened by its code, or something a private-view sign-in gives,
+ *  is not the link's. */
+function link_grants_delivery($dir, $file, $itemsData, $download = false) {
+    $lv = link_viewer();
+    if ($lv === null || !link_allows_item($lv, $dir, $file, $itemsData)) return false;
+    return $download ? !public_download_allows($dir, $file, $itemsData) : file_is_hidden($dir, $file, $itemsData);
+}
 /** Everyone the log records: the above, and an ordinary visitor when the public address's log is on. */
 function visitor_log_link() {
     $l = visitor_logged_link();
@@ -398,6 +406,7 @@ function link_nav_set_cookie($mode, $linkId) {
     if (headers_sent() || !preg_match('/^[0-9a-f]{10}$/', (string) $linkId)) return;
     install_secret(true);
     $v = link_nav_cookie_value($mode, $linkId);
+    header('Cache-Control: private, no-store'); header('Vary: Cookie', false);   // (a response that sets this cookie is for this browser alone, whatever else it says)
     $opts = ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax'];   // (a session cookie: no end date, except the door's, which is for the very next page)
     if ($mode === 'D') $opts['expires'] = time() + 120;
     setcookie(LINK_NAV_COOKIE_NAME, $v, $opts);
@@ -405,7 +414,7 @@ function link_nav_set_cookie($mode, $linkId) {
 }
 /** Is this request a page of the gallery being opened (not a picture, a script's fetch, a download or a POST)? Only those decide a navigation mode. */
 function link_nav_is_page_request() {
-    if (request_route() !== '' || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return false;
+    if (request_route() !== '' || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return false;   // (a prefetch or prerender is judged like any page: the page a browser preloads is the page the person is shown, so its mode has to be the one stored)
     $dest = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_DEST'] ?? ''));
     return $dest === '' || $dest === 'document';
 }
@@ -423,6 +432,33 @@ function link_nav_request_is_click() {
     $path = (string) parse_url($ref, PHP_URL_PATH); $base = rtrim(gallery_cookie_path(), '/');
     return $base === '' || $path === $base || strncmp($path, $base . '/', strlen($base) + 1) === 0;
 }
+/** The folders this link opens, worked out once per request over the gallery's own list (so the work does not depend on the name a request asks for, and nothing about a
+ *  hidden folder's size shows in how long an answer takes): 'open' = folders in or at one it shares that hold something it allows; 'hid' = every folder above something
+ *  PRIVATE that it allows. */
+function link_open_sets($l, $files = null, $items = null) {
+    static $memo = [];
+    $id = (string) ($l['id'] ?? '');
+    if (isset($memo[$id])) return $memo[$id];
+    $files = $files ?? ($GLOBALS['files'] ?? null); $dir = $GLOBALS['dir'] ?? null; $items = $items ?? ($GLOBALS['itemsData'] ?? null);
+    $open = []; $hid = []; $reach = [];
+    // (the first question about a link holder's navigation can come while the gallery's item data is still being built, so it may not exist yet: it is read here then,
+    // which asks the mode again from inside: that answer is the link's view, the narrower one, and only for the entries of this one throwaway list)
+    if (is_array($files) && is_string($dir) && !is_array($items)) $items = items_get_all_for_files($dir, $files);
+    if (is_array($files) && is_string($dir) && is_array($items)) {
+        foreach ($files as $f) {
+            if (!link_allows_item($l, $dir, $f, $items)) continue;
+            $hidden = file_is_hidden($dir, $f, $items);
+            for ($d = dirname($f); $d !== '.' && $d !== '' && $d !== '/'; $d = dirname($d)) {
+                if ($hidden) $hid[$d] = true;
+                if (isset($open[$d])) continue;
+                if (!isset($reach[$d])) $reach[$d] = link_folder_reachable($l, $dir, $d);
+                if ($reach[$d]) $open[$d] = true;
+            }
+        }
+        return $memo[$id] = ['open' => $open, 'hid' => $hid];
+    }
+    return ['open' => $open, 'hid' => $hid];   // (the lists are not ready: not remembered)
+}
 /** Does link $l cover the place this page request is for (a folder in or at one it shares, a photo it allows; everything for an Everything or a Just-the-public link)?
  *  The front page, and a folder that is only on the way to a covered one, are NOT covered: what is typed there is the open gallery. null: the gallery's own lists are
  *  not ready to say yet (the caller then treats it as the link's view and decides again later). Only the request's own folder and photo are looked at, and only when they
@@ -432,11 +468,13 @@ function link_nav_target_covered($l) {
     if ($type === 'all' || $type === 'public') return true;
     $files = $GLOBALS['files'] ?? null; $dir = $GLOBALS['dir'] ?? null;
     if (!is_array($files) || !is_string($dir)) return null;
+    // Covered means the holder could OPEN it through this link. A photo or folder that is not there, one the link does not allow, and one that exists but is
+    // private to the link (public items only, an Only me folder) all answer the same (not covered), so the mode never tells a holder what exists.
     $photo = $_GET['photo'] ?? null; $folder = $_GET['folder'] ?? null;
-    if (is_string($photo) && $photo !== '' && in_array($photo, $files, true)) return link_allows_item($l, $dir, $photo, items_get_all_for_files($dir, [$photo]));
+    if (is_string($photo) && $photo !== '' && in_array($photo, $files, true) && link_allows_item($l, $dir, $photo, items_get_all_for_files($dir, [$photo]))) return true;
     if (is_string($folder) && $folder !== '') {
-        $rel = trim($folder, '/');
-        if ($rel !== '' && in_array($rel, all_folder_paths($files), true)) return link_folder_reachable($l, $dir, $rel);
+        $sets = link_open_sets($l);   // (built whatever the folder asked for is, so a name that is not there costs the same as one that is)
+        return isset($sets['open'][trim($folder, '/')]);
     }
     return false;
 }

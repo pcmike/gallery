@@ -226,17 +226,17 @@ function browser_issue($kind, $stored = null, $viaScript = false) {
 }
 
 function browser_revoke_current() {
-    $wasOwner = is_admin_browser();   // (asked before the sign-in goes: the owner signing out is not to be left holding a share link's view)
+    $wasOwner = is_admin_browser();   // (asked before the sign-in goes: the owner signing out is not to be left holding a share link's view; also true of the ended record below, which is the owner's even while previewing a link)
     $c = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
     if (is_string($c) && preg_match('/^[0-9a-f]{64}$/', $c) && is_file(browsers_path())) {
         $h = hash('sha256', $c); $gone = null;
         json_file_update(browsers_path(), [], function (&$d) use ($h, &$gone) { if (isset($d[$h])) { $gone = $d[$h]; unset($d[$h]); } });
-        if (is_array($gone)) signin_ended_add(substr($h, 0, 12), $gone, 'logout');
+        if (is_array($gone)) { signin_ended_add(substr($h, 0, 12), $gone, 'logout'); if (($gone['kind'] ?? '') === 'owner') $wasOwner = true; }
     }
     gallery_cookie_expire(REVEAL_COOKIE_NAME, 'Lax');
     // A share link's cookie (or a link preview's) in this browser is ignored while the owner is signed in and takes over the moment they sign out, so the gallery would look
     // different from what the owner just had (a link that shows only some folders hides the rest). Signing out as the owner forgets them: the page afterwards is the public gallery.
-    if ($wasOwner) { gallery_cookie_expire(LINK_COOKIE_NAME, 'Lax'); gallery_cookie_expire(PREVIEW_COOKIE_NAME, 'Lax'); unset($_COOKIE[LINK_COOKIE_NAME], $_COOKIE[PREVIEW_COOKIE_NAME]); }
+    if ($wasOwner) { gallery_cookie_expire(LINK_COOKIE_NAME, 'Lax'); gallery_cookie_expire(PREVIEW_COOKIE_NAME, 'Lax'); gallery_cookie_expire(LINK_NAV_COOKIE_NAME, 'Lax'); unset($_COOKIE[LINK_COOKIE_NAME], $_COOKIE[PREVIEW_COOKIE_NAME], $_COOKIE[LINK_NAV_COOKIE_NAME]); }
     legacy_stay_forget();
     browser_lookup(true);
 }

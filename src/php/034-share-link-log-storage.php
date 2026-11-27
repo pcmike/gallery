@@ -482,12 +482,19 @@ function linklog_post_is_ours() {
  *  has one row; a hidden, empty or missing one, and one that is not the gallery's at all, are all dropped the same way, doing the same work. $except is a photo
  *  whose code the request carries: it is not counted here, or the code's holder could ask the log whether a folder is there. The files are scanned once per request,
  *  and only when a post holds a folder line. */
+function linklog_scan($dir, $mediaExtensions, $self) {
+    static $s = null;
+    if ($s === null) {
+        $all = AUTO_GROUP_BY_FOLDER ? flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self)) : [];
+        $s = ['all' => $all, 'items' => $all ? items_get_all_for_files($dir, $all) : []];
+    }
+    return $s;
+}
 function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except = null) {
     static $v = null;
     if (!is_string($path) || $path === '') return false;
     if ($v === null) {
-        $all = AUTO_GROUP_BY_FOLDER ? flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self)) : [];
-        $items = $all ? items_get_all_for_files($dir, $all) : [];
+        ['all' => $all, 'items' => $items] = linklog_scan($dir, $mediaExtensions, $self);
         $visible = []; $folders = [];
         foreach ($all as $f) {
             if ($f === $except || !viewer_may_see_item($dir, $f, $items)) continue;
@@ -498,6 +505,18 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
     }
     if (isset($v['folders'][$path])) return true;
     return AUTO_GROUP_BY_FOLDER && collections_any() && collection_page($dir, $path, $v['all'], $v['visible']) !== null;
+}
+
+/** Is this folder (or collection) one only the share link shows the visitor, so that its page lines belong in the link's log and never in the public address's? A private
+ *  folder above something private the link allows, or a private collection the link names. */
+function linklog_grant_folder($l, $dir, $mediaExtensions, $self, $rel) {
+    if ($rel === '' || !is_array($l)) return false;
+    $scan = linklog_scan($dir, $mediaExtensions, $self);
+    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a private collection is the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
+        $type = $l['scope']['type'] ?? '';
+        return !empty($rec['private']) && ($type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true)));
+    }
+    return folder_is_private($dir, $rel) && isset(link_open_sets($l, $scan['all'], $scan['items'])['hid'][$rel]);
 }
 
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
@@ -529,7 +548,8 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             $seen[$k . "\0" . $item] = true;
             if ($k === 'f') {
                 if ($item !== '' && !linklog_folder_openable($dir, $mediaExtensions, $self, $item, $coded)) continue;
-                if ($link !== null) $batch[] = [$k, $item];
+                if ($splitGrant && linklog_grant_folder($grant, $dir, $mediaExtensions, $self, $item)) $grantBatch[] = [$k, $item];   // (a private folder only the link shows: the link's log)
+                elseif ($link !== null) $batch[] = [$k, $item];
                 continue;
             }
             if (!valid_media_path($dir, $item, $mediaExtensions, $self)) continue;
@@ -547,7 +567,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
         if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
             if (!empty($a['u'])) {   // an Only me photo opened by its own address: the photo is the code's, whatever the page says
                 if ($coded !== null) $arrive = ['f' => $coded, 'h' => $ah, 'u' => 1];
-            } elseif ($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) $arrive = ['f' => $af, 'h' => $ah];
+            } elseif (($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) && !($splitGrant && linklog_grant_folder($grant, $dir, $mediaExtensions, $self, $af))) $arrive = ['f' => $af, 'h' => $ah];   // (an arrival at a private folder is not the public address's to record)
         }
     }
     if ($grantBatch) {

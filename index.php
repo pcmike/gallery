@@ -1498,6 +1498,7 @@ function slugify($text) {
 // An Only me photo's own address arrives as /photos/<8 letters and digits> or /photos/?<8 letters and digits>, which is ?link=<them> to the script: when it
 // is one, the request becomes that photo's page (?photo=<path>&k=<code>) here; when it is not, it goes on as a share link's address below.
 if (request_route() === 'link') photo_address_translate($dir, $files, $itemsData);
+link_nav_mode();   // (decided here, whatever is asked for: whether a photo exists must not show in whether the navigation cookie is set)
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
     $candidate = $_GET['photo'];
@@ -2272,7 +2273,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    if (($linkNote = visitor_logged_link(true)) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved (a ZIP is something the link grants)
+    if (($linkNote = visitor_logged_link(!is_revealed())) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved (a ZIP is something the link grants; with the private-view sign-in it is theirs)
         $pairs = [['z', ($folder ?? '') . "\0" . count($entries)]];
         foreach ($entries as $e) $pairs[] = ['d', $e['rel']];
         link_queue_deliveries($linkNote, $pairs);
@@ -2307,7 +2308,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
-    if (($linkNote = visitor_logged_link(file_is_hidden($dir, $filename, $itemsData))) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log (a private photo only the link shows is the link's whichever navigation; a public one follows the navigation)
+    if (($linkNote = visitor_logged_link(link_grants_delivery($dir, $filename, $itemsData, true))) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log (a download only the link's rule allows, a private photo or a public one the gallery's own rule does not give, is the link's whichever navigation; one the gallery gives anyone follows the navigation)
     if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
 }
 
@@ -3570,7 +3571,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
     if (file_is_quiet($dir, $filename)) header('X-Robots-Tag: noindex, nofollow');   // (an Unlisted folder's pictures are for whoever has its address, not for a search engine's image results)
     // Someone using a share link is sent a private picture: noted in that link's log (their browser reports what was on screen too).
-    if ($variant !== 'full' && ($linkNote = visitor_logged_link(true)) !== null && file_is_hidden($dir, $filename, $itemsData)) link_queue_delivery($linkNote, 's', $filename);
+    if ($variant !== 'full' && ($linkNote = visitor_logged_link(link_grants_delivery($dir, $filename, $itemsData))) !== null && file_is_hidden($dir, $filename, $itemsData)) link_queue_delivery($linkNote, 's', $filename);
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
     $maxDim = image_variant_dim($variant);
 
@@ -6101,17 +6102,17 @@ function browser_issue($kind, $stored = null, $viaScript = false) {
 }
 
 function browser_revoke_current() {
-    $wasOwner = is_admin_browser();   // (asked before the sign-in goes: the owner signing out is not to be left holding a share link's view)
+    $wasOwner = is_admin_browser();   // (asked before the sign-in goes: the owner signing out is not to be left holding a share link's view; also true of the ended record below, which is the owner's even while previewing a link)
     $c = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
     if (is_string($c) && preg_match('/^[0-9a-f]{64}$/', $c) && is_file(browsers_path())) {
         $h = hash('sha256', $c); $gone = null;
         json_file_update(browsers_path(), [], function (&$d) use ($h, &$gone) { if (isset($d[$h])) { $gone = $d[$h]; unset($d[$h]); } });
-        if (is_array($gone)) signin_ended_add(substr($h, 0, 12), $gone, 'logout');
+        if (is_array($gone)) { signin_ended_add(substr($h, 0, 12), $gone, 'logout'); if (($gone['kind'] ?? '') === 'owner') $wasOwner = true; }
     }
     gallery_cookie_expire(REVEAL_COOKIE_NAME, 'Lax');
     // A share link's cookie (or a link preview's) in this browser is ignored while the owner is signed in and takes over the moment they sign out, so the gallery would look
     // different from what the owner just had (a link that shows only some folders hides the rest). Signing out as the owner forgets them: the page afterwards is the public gallery.
-    if ($wasOwner) { gallery_cookie_expire(LINK_COOKIE_NAME, 'Lax'); gallery_cookie_expire(PREVIEW_COOKIE_NAME, 'Lax'); unset($_COOKIE[LINK_COOKIE_NAME], $_COOKIE[PREVIEW_COOKIE_NAME]); }
+    if ($wasOwner) { gallery_cookie_expire(LINK_COOKIE_NAME, 'Lax'); gallery_cookie_expire(PREVIEW_COOKIE_NAME, 'Lax'); gallery_cookie_expire(LINK_NAV_COOKIE_NAME, 'Lax'); unset($_COOKIE[LINK_COOKIE_NAME], $_COOKIE[PREVIEW_COOKIE_NAME], $_COOKIE[LINK_NAV_COOKIE_NAME]); }
     legacy_stay_forget();
     browser_lookup(true);
 }
@@ -6698,9 +6699,11 @@ function folder_private_first_href($dir, $folderPath) {
  *  store it would hand it to the next anonymous request for the same URL.
  *  So hidden items are private and never stored. */
 function file_cache_control($dir, $file, $itemsData) {
-    return file_is_hidden($dir, $file, $itemsData)
-        ? 'private, no-store'
-        : 'public, max-age=31536000, immutable';
+    if (file_is_hidden($dir, $file, $itemsData)) return 'private, no-store';
+    // A public photo's full-size file still carries its location for someone trusted with every location (the owner, the private-view password, a link set to show
+    // every location) while a stranger gets a copy with it taken out, at the same address: the trusted one must never be kept by a cache shared with strangers.
+    if (is_admin_browser() || is_revealed() || viewer_sees_all_locations($file)) { header('Vary: Cookie', false); return 'private, max-age=31536000, immutable'; }   // (varies on who asks: the same browser must not reuse it after signing out)
+    return 'public, max-age=31536000, immutable';
 }
 
 /** Whether a folder is private (on its own, or because a folder above it is). */
@@ -7060,6 +7063,14 @@ function visitor_logged_link($byGrant = false) {
     if ($ready) $memo[$k] = $r;
     return $r;
 }
+/** Is this delivery one the share link itself gives (a private photo it allows; for a download, one only its rule allows, not the gallery's own)? Then it is the link's
+ *  log whichever navigation the person is in; otherwise the log follows the navigation. An Only me photo opened by its code, or something a private-view sign-in gives,
+ *  is not the link's. */
+function link_grants_delivery($dir, $file, $itemsData, $download = false) {
+    $lv = link_viewer();
+    if ($lv === null || !link_allows_item($lv, $dir, $file, $itemsData)) return false;
+    return $download ? !public_download_allows($dir, $file, $itemsData) : file_is_hidden($dir, $file, $itemsData);
+}
 /** Everyone the log records: the above, and an ordinary visitor when the public address's log is on. */
 function visitor_log_link() {
     $l = visitor_logged_link();
@@ -7147,6 +7158,7 @@ function link_nav_set_cookie($mode, $linkId) {
     if (headers_sent() || !preg_match('/^[0-9a-f]{10}$/', (string) $linkId)) return;
     install_secret(true);
     $v = link_nav_cookie_value($mode, $linkId);
+    header('Cache-Control: private, no-store'); header('Vary: Cookie', false);   // (a response that sets this cookie is for this browser alone, whatever else it says)
     $opts = ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax'];   // (a session cookie: no end date, except the door's, which is for the very next page)
     if ($mode === 'D') $opts['expires'] = time() + 120;
     setcookie(LINK_NAV_COOKIE_NAME, $v, $opts);
@@ -7154,7 +7166,7 @@ function link_nav_set_cookie($mode, $linkId) {
 }
 /** Is this request a page of the gallery being opened (not a picture, a script's fetch, a download or a POST)? Only those decide a navigation mode. */
 function link_nav_is_page_request() {
-    if (request_route() !== '' || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return false;
+    if (request_route() !== '' || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return false;   // (a prefetch or prerender is judged like any page: the page a browser preloads is the page the person is shown, so its mode has to be the one stored)
     $dest = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_DEST'] ?? ''));
     return $dest === '' || $dest === 'document';
 }
@@ -7172,6 +7184,33 @@ function link_nav_request_is_click() {
     $path = (string) parse_url($ref, PHP_URL_PATH); $base = rtrim(gallery_cookie_path(), '/');
     return $base === '' || $path === $base || strncmp($path, $base . '/', strlen($base) + 1) === 0;
 }
+/** The folders this link opens, worked out once per request over the gallery's own list (so the work does not depend on the name a request asks for, and nothing about a
+ *  hidden folder's size shows in how long an answer takes): 'open' = folders in or at one it shares that hold something it allows; 'hid' = every folder above something
+ *  PRIVATE that it allows. */
+function link_open_sets($l, $files = null, $items = null) {
+    static $memo = [];
+    $id = (string) ($l['id'] ?? '');
+    if (isset($memo[$id])) return $memo[$id];
+    $files = $files ?? ($GLOBALS['files'] ?? null); $dir = $GLOBALS['dir'] ?? null; $items = $items ?? ($GLOBALS['itemsData'] ?? null);
+    $open = []; $hid = []; $reach = [];
+    // (the first question about a link holder's navigation can come while the gallery's item data is still being built, so it may not exist yet: it is read here then,
+    // which asks the mode again from inside: that answer is the link's view, the narrower one, and only for the entries of this one throwaway list)
+    if (is_array($files) && is_string($dir) && !is_array($items)) $items = items_get_all_for_files($dir, $files);
+    if (is_array($files) && is_string($dir) && is_array($items)) {
+        foreach ($files as $f) {
+            if (!link_allows_item($l, $dir, $f, $items)) continue;
+            $hidden = file_is_hidden($dir, $f, $items);
+            for ($d = dirname($f); $d !== '.' && $d !== '' && $d !== '/'; $d = dirname($d)) {
+                if ($hidden) $hid[$d] = true;
+                if (isset($open[$d])) continue;
+                if (!isset($reach[$d])) $reach[$d] = link_folder_reachable($l, $dir, $d);
+                if ($reach[$d]) $open[$d] = true;
+            }
+        }
+        return $memo[$id] = ['open' => $open, 'hid' => $hid];
+    }
+    return ['open' => $open, 'hid' => $hid];   // (the lists are not ready: not remembered)
+}
 /** Does link $l cover the place this page request is for (a folder in or at one it shares, a photo it allows; everything for an Everything or a Just-the-public link)?
  *  The front page, and a folder that is only on the way to a covered one, are NOT covered: what is typed there is the open gallery. null: the gallery's own lists are
  *  not ready to say yet (the caller then treats it as the link's view and decides again later). Only the request's own folder and photo are looked at, and only when they
@@ -7181,11 +7220,13 @@ function link_nav_target_covered($l) {
     if ($type === 'all' || $type === 'public') return true;
     $files = $GLOBALS['files'] ?? null; $dir = $GLOBALS['dir'] ?? null;
     if (!is_array($files) || !is_string($dir)) return null;
+    // Covered means the holder could OPEN it through this link. A photo or folder that is not there, one the link does not allow, and one that exists but is
+    // private to the link (public items only, an Only me folder) all answer the same (not covered), so the mode never tells a holder what exists.
     $photo = $_GET['photo'] ?? null; $folder = $_GET['folder'] ?? null;
-    if (is_string($photo) && $photo !== '' && in_array($photo, $files, true)) return link_allows_item($l, $dir, $photo, items_get_all_for_files($dir, [$photo]));
+    if (is_string($photo) && $photo !== '' && in_array($photo, $files, true) && link_allows_item($l, $dir, $photo, items_get_all_for_files($dir, [$photo]))) return true;
     if (is_string($folder) && $folder !== '') {
-        $rel = trim($folder, '/');
-        if ($rel !== '' && in_array($rel, all_folder_paths($files), true)) return link_folder_reachable($l, $dir, $rel);
+        $sets = link_open_sets($l);   // (built whatever the folder asked for is, so a name that is not there costs the same as one that is)
+        return isset($sets['open'][trim($folder, '/')]);
     }
     return false;
 }
@@ -7686,12 +7727,16 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
 
 /** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
+/** Does the gallery's OWN rule let a stranger download this item's original (not a link's)? */
+function public_download_allows($dir, $file, $itemsData) {
+    return ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $file, $itemsData) && public_download_folder_covers($file);
+}
 function viewer_may_download($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
     if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Only me folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
-    $publicOk = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $file, $itemsData) && public_download_folder_covers($file);
+    $publicOk = public_download_allows($dir, $file, $itemsData);
     // Someone using a share link is never worse off than a stranger: a PUBLIC item can be downloaded if the gallery's own rule or the link's allows it; a private
     // item only the link shows, by the link's rule alone (the public rule never covers it).
     if ($l !== null) return $publicOk || (link_rule_applies($l, $dir, $file, $itemsData) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData));
@@ -16050,12 +16095,19 @@ function linklog_post_is_ours() {
  *  has one row; a hidden, empty or missing one, and one that is not the gallery's at all, are all dropped the same way, doing the same work. $except is a photo
  *  whose code the request carries: it is not counted here, or the code's holder could ask the log whether a folder is there. The files are scanned once per request,
  *  and only when a post holds a folder line. */
+function linklog_scan($dir, $mediaExtensions, $self) {
+    static $s = null;
+    if ($s === null) {
+        $all = AUTO_GROUP_BY_FOLDER ? flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self)) : [];
+        $s = ['all' => $all, 'items' => $all ? items_get_all_for_files($dir, $all) : []];
+    }
+    return $s;
+}
 function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except = null) {
     static $v = null;
     if (!is_string($path) || $path === '') return false;
     if ($v === null) {
-        $all = AUTO_GROUP_BY_FOLDER ? flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self)) : [];
-        $items = $all ? items_get_all_for_files($dir, $all) : [];
+        ['all' => $all, 'items' => $items] = linklog_scan($dir, $mediaExtensions, $self);
         $visible = []; $folders = [];
         foreach ($all as $f) {
             if ($f === $except || !viewer_may_see_item($dir, $f, $items)) continue;
@@ -16066,6 +16118,18 @@ function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except =
     }
     if (isset($v['folders'][$path])) return true;
     return AUTO_GROUP_BY_FOLDER && collections_any() && collection_page($dir, $path, $v['all'], $v['visible']) !== null;
+}
+
+/** Is this folder (or collection) one only the share link shows the visitor, so that its page lines belong in the link's log and never in the public address's? A private
+ *  folder above something private the link allows, or a private collection the link names. */
+function linklog_grant_folder($l, $dir, $mediaExtensions, $self, $rel) {
+    if ($rel === '' || !is_array($l)) return false;
+    $scan = linklog_scan($dir, $mediaExtensions, $self);
+    if (($rec = collection_at($dir, $rel, $scan['all'])) !== null) {   // (a private collection is the link's when THE LINK shows it: an Everything link, or one that names it; not merely because this visitor may see it by another sign-in)
+        $type = $l['scope']['type'] ?? '';
+        return !empty($rec['private']) && ($type === 'all' || (in_array($type, ['folders', 'mixed'], true) && in_array($rec['id'] ?? '', (array) ($l['scope']['folders'] ?? []), true)));
+    }
+    return folder_is_private($dir, $rel) && isset(link_open_sets($l, $scan['all'], $scan['items'])['hid'][$rel]);
 }
 
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
@@ -16097,7 +16161,8 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             $seen[$k . "\0" . $item] = true;
             if ($k === 'f') {
                 if ($item !== '' && !linklog_folder_openable($dir, $mediaExtensions, $self, $item, $coded)) continue;
-                if ($link !== null) $batch[] = [$k, $item];
+                if ($splitGrant && linklog_grant_folder($grant, $dir, $mediaExtensions, $self, $item)) $grantBatch[] = [$k, $item];   // (a private folder only the link shows: the link's log)
+                elseif ($link !== null) $batch[] = [$k, $item];
                 continue;
             }
             if (!valid_media_path($dir, $item, $mediaExtensions, $self)) continue;
@@ -16115,7 +16180,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
         if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
             if (!empty($a['u'])) {   // an Only me photo opened by its own address: the photo is the code's, whatever the page says
                 if ($coded !== null) $arrive = ['f' => $coded, 'h' => $ah, 'u' => 1];
-            } elseif ($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) $arrive = ['f' => $af, 'h' => $ah];
+            } elseif (($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) && !($splitGrant && linklog_grant_folder($grant, $dir, $mediaExtensions, $self, $af))) $arrive = ['f' => $af, 'h' => $ah];   // (an arrival at a private folder is not the public address's to record)
         }
     }
     if ($grantBatch) {

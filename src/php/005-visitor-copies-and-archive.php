@@ -223,7 +223,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    if (($linkNote = visitor_logged_link(true)) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved (a ZIP is something the link grants)
+    if (($linkNote = visitor_logged_link(!is_revealed())) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved (a ZIP is something the link grants; with the private-view sign-in it is theirs)
         $pairs = [['z', ($folder ?? '') . "\0" . count($entries)]];
         foreach ($entries as $e) $pairs[] = ['d', $e['rel']];
         link_queue_deliveries($linkNote, $pairs);
@@ -258,7 +258,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
-    if (($linkNote = visitor_logged_link(file_is_hidden($dir, $filename, $itemsData))) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log (a private photo only the link shows is the link's whichever navigation; a public one follows the navigation)
+    if (($linkNote = visitor_logged_link(link_grants_delivery($dir, $filename, $itemsData, true))) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log (a download only the link's rule allows, a private photo or a public one the gallery's own rule does not give, is the link's whichever navigation; one the gallery gives anyone follows the navigation)
     if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
 }
 

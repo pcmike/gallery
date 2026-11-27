@@ -371,12 +371,16 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
 
 /** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
+/** Does the gallery's OWN rule let a stranger download this item's original (not a link's)? */
+function public_download_allows($dir, $file, $itemsData) {
+    return ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $file, $itemsData) && public_download_folder_covers($file);
+}
 function viewer_may_download($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
     if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Only me folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
-    $publicOk = ENABLE_PUBLIC_DOWNLOAD && !file_is_hidden($dir, $file, $itemsData) && public_download_folder_covers($file);
+    $publicOk = public_download_allows($dir, $file, $itemsData);
     // Someone using a share link is never worse off than a stranger: a PUBLIC item can be downloaded if the gallery's own rule or the link's allows it; a private
     // item only the link shows, by the link's rule alone (the public rule never covers it).
     if ($l !== null) return $publicOk || (link_rule_applies($l, $dir, $file, $itemsData) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData));

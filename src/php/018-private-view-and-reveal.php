@@ -309,9 +309,11 @@ function folder_private_first_href($dir, $folderPath) {
  *  store it would hand it to the next anonymous request for the same URL.
  *  So hidden items are private and never stored. */
 function file_cache_control($dir, $file, $itemsData) {
-    return file_is_hidden($dir, $file, $itemsData)
-        ? 'private, no-store'
-        : 'public, max-age=31536000, immutable';
+    if (file_is_hidden($dir, $file, $itemsData)) return 'private, no-store';
+    // A public photo's full-size file still carries its location for someone trusted with every location (the owner, the private-view password, a link set to show
+    // every location) while a stranger gets a copy with it taken out, at the same address: the trusted one must never be kept by a cache shared with strangers.
+    if (is_admin_browser() || is_revealed() || viewer_sees_all_locations($file)) { header('Vary: Cookie', false); return 'private, max-age=31536000, immutable'; }   // (varies on who asks: the same browser must not reuse it after signing out)
+    return 'public, max-age=31536000, immutable';
 }
 
 /** Whether a folder is private (on its own, or because a folder above it is). */
