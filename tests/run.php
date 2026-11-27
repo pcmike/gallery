@@ -1769,6 +1769,17 @@ file_put_contents("$fxQu/Trips/QuietBox/.gallery-items.php", data_file_guard_lin
 // A link to the Unlisted folder that shows only its public items: the folder is public, so it is covered, and the link's guest finds it listed
 $quLinkPO = $quMake('Public items of the quiet box', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Trips/QuietBox']), 'scope_public_only' => json_encode(['Trips/QuietBox'])]);
 check('[unlisted] a link that names the Unlisted folder and shows only its public items brings the folder along (it is public), and nothing else of the Unlisted ones that the link does not name', $quLinkPO !== null && str_contains(http_get("$baseQu/?folder=Trips%2FQuietBox", $quLinkPO ?? [], false)[1], 'QUIET-SENTINEL.jpg') && str_contains(http_get("$baseQu/", $quLinkPO ?? [], false)[1] . http_get("$baseQu/?folder=Trips", $quLinkPO ?? [], false)[1], 'QuietBox'));
+// The owner signing out forgets this browser's share-link cookie (it is ignored while signed in and takes over at once on signing out, which made the gallery look different from what the owner had)
+[, , $quSoH] = http_post("$baseQu/?admin", ['access_code' => 'qu-admin-pw-1'], [], false); $quSoOwn = extract_cookie_header($quSoH);
+$quSoCookie = 'Cookie: ' . $quSoOwn . ($quLinkTrips ? '; ' . substr($quLinkTrips[0], 8) : '');
+$quSoCsrf = (string) extract_csrf_token(http_get("$baseQu/?admin", [$quSoCookie])[1]);
+[$quSoSt, , $quSoHd] = http_post("$baseQu/?admin", ['action' => 'logout', 'csrf_token' => $quSoCsrf], [$quSoCookie, 'X-Requested-With: gallery-fetch'], false);
+$quSoDeleted = fn (string $prefix) => (bool) preg_grep('~^Set-Cookie: ' . preg_quote($prefix, '~') . '[0-9a-f]+=(deleted|;|\s)|^Set-Cookie: ' . preg_quote($prefix, '~') . '[0-9a-f]+=; ~i', $quSoHd) || (bool) preg_grep('~^Set-Cookie: ' . preg_quote($prefix, '~') . '[0-9a-f]+=[^;]*; expires=.*1970~i', $quSoHd);
+check('[sign out] the owner signing out also forgets this browser\'s share-link cookie and link-preview cookie (the response expires both), so the page afterwards is the public gallery and not a link\'s view', $quLinkTrips !== null && $quSoDeleted('gallery_link_') && $quSoDeleted('gallery_preview_'), json_encode($quSoHd));
+// ...but someone who only holds the private-view password and signs out keeps their link cookie (they are not the owner)
+[, , $quSoH2] = http_post("$baseQu/?reveal", ['access_code' => 'qu-view-pw-1'], [], false); $quSoView = 'Cookie: ' . extract_cookie_header($quSoH2) . ($quLinkTrips ? '; ' . substr($quLinkTrips[0], 8) : '');
+[, , $quSoHd2] = http_post("$baseQu/?reveal", ['logout' => '1'], [$quSoView], false);
+check('[sign out] ...while a private-view sign-out leaves a share-link cookie alone', !preg_grep('~^Set-Cookie: gallery_link_~i', $quSoHd2), json_encode($quSoHd2));
 // Flat: the folder above shows the photos of the folders under it, all on one page; the Unlisted one must not be among them
 file_put_contents("$fxQu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'qu-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'qu-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'FOLDER_FLAT_NOTES' => true]));
 // (Rewriting the settings file ended the private-view sign-in as well: the sign-in is tied to the stored password, which was a hash when the cookie was made and is plain text now. The viewer signs in

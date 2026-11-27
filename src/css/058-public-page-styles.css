@@ -1,4 +1,5 @@
   :root {
+    --follow-w: 2px;   /* the one width of a dashed edge: every choice that follows (a folder's own settings, a photo that follows its folder) is drawn with it, only the colour differs */
     --bg: #0f0f10;
     --card: #1a1a1c;
     --text: #eaeaea;
@@ -418,7 +419,7 @@
   .folder-priv .ico { width: 1em; height: 1em; }
   .folder-priv.own.unlisted { cursor: default; pointer-events: none; background: rgba(58,18,20,0.95); border-color: #ed4245; color: #ff9a9c; }   /* (Only me: darker than Private, so the two cannot be mistaken) */
   .folder-priv.own.quiet { background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; a button, like the red Private one: it asks, then shows the folder to everyone) */
-  .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
+  .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: var(--follow-w) dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
   .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
   .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
   .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
@@ -426,7 +427,7 @@
   .folder-priv.own:active { transform: scale(0.94); }
   .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } .folder-priv.own.quiet:hover { background: #9b7400; } }
-  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
+  .folder-priv.inh { background: rgba(0,0,0,0.55); border: var(--follow-w) dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
   .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
   .folder-cover-count.has-priv-count { position: relative; }
   .folder-cover-count .fc-main { color: inherit; text-decoration: none; }
@@ -557,7 +558,7 @@
   .select-bar.in-private .select-btns button { padding: 10px 4px; }
   .select-bar.in-private .sb-private:not(:disabled) { background: #ed4245; border-color: rgba(255,255,255,0.3); color: #fff; }
   .select-bar.in-private .sb-private:hover:not(:disabled) { background: #f4585b; border-color: rgba(255,255,255,0.4); }
-  .select-bar.in-private .sb-folder { border: 1.5px dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
+  .select-bar.in-private .sb-folder { border: var(--follow-w) dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
   .select-bar .sb-folder[hidden], .select-bar .select-btns button[hidden] { display: none; }
   .select-top button { border-color: transparent; color: #aab2ff; padding: 6px 9px; }
   .select-bar button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }

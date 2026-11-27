@@ -866,7 +866,7 @@
   .switch input:checked + .slider::before { transform:translateX(18px); }
   .switch input:focus-visible + .slider { outline:2px solid #fff; outline-offset:2px; }
   /* A switch that follows the folder above (nothing of its own): drawn with a dotted edge, as the Who-can-see buttons are dashed when they follow; a choice of its own is solid. */
-  .switch.following .slider { box-sizing:border-box; border:2px dashed rgba(255,255,255,.75); }
+  .switch.following .slider { box-sizing:border-box; border-style:dashed; border-width:var(--follow-w, 2px); border-color:rgba(255,255,255,.75); }
   .switch.following .slider::before { left:1px; top:1px; }
   @media (max-width: 800px) {
     .admin-main .site-row { grid-template-columns:1fr; }
@@ -1074,7 +1074,7 @@
   .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
   .flat-choice { min-width:0; }
   .flat-choice > label { display:block; margin:0 0 6px; }
-  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
+  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; border-width:var(--follow-w, 2px); padding:5px 13px; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
   .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
   .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
   .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
@@ -1262,6 +1262,6 @@
   .folder-switches > .own-gallery-row .own-note { margin:0; }
   .vis-choice { min-width:0; }
   .vis-seg label.is-off { cursor:not-allowed; } .vis-seg label.is-off span { opacity:.38; }
-  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; }
+  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; border-width:var(--follow-w, 2px); padding:5px 13px; }   /* (the same dashed edge as every following choice; the padding gives back what the thicker edge takes, so the button does not grow) */
   .vis-choice .vis-follow { margin:6px 0 2px; max-width:62ch; } .vis-choice .vis-follow a { color:inherit; text-decoration:underline; }
   .vis-choice > label { display:block; margin:0 0 6px; }

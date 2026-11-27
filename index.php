@@ -6099,6 +6099,7 @@ function browser_issue($kind, $stored = null, $viaScript = false) {
 }
 
 function browser_revoke_current() {
+    $wasOwner = is_admin_browser();   // (asked before the sign-in goes: the owner signing out is not to be left holding a share link's view)
     $c = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
     if (is_string($c) && preg_match('/^[0-9a-f]{64}$/', $c) && is_file(browsers_path())) {
         $h = hash('sha256', $c); $gone = null;
@@ -6106,6 +6107,9 @@ function browser_revoke_current() {
         if (is_array($gone)) signin_ended_add(substr($h, 0, 12), $gone, 'logout');
     }
     gallery_cookie_expire(REVEAL_COOKIE_NAME, 'Lax');
+    // A share link's cookie (or a link preview's) in this browser is ignored while the owner is signed in and takes over the moment they sign out, so the gallery would look
+    // different from what the owner just had (a link that shows only some folders hides the rest). Signing out as the owner forgets them: the page afterwards is the public gallery.
+    if ($wasOwner) { gallery_cookie_expire(LINK_COOKIE_NAME, 'Lax'); gallery_cookie_expire(PREVIEW_COOKIE_NAME, 'Lax'); unset($_COOKIE[LINK_COOKIE_NAME], $_COOKIE[PREVIEW_COOKIE_NAME]); }
     legacy_stay_forget();
     browser_lookup(true);
 }
@@ -20953,7 +20957,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .switch input:checked + .slider::before { transform:translateX(18px); }
   .switch input:focus-visible + .slider { outline:2px solid #fff; outline-offset:2px; }
   /* A switch that follows the folder above (nothing of its own): drawn with a dotted edge, as the Who-can-see buttons are dashed when they follow; a choice of its own is solid. */
-  .switch.following .slider { box-sizing:border-box; border:2px dashed rgba(255,255,255,.75); }
+  .switch.following .slider { box-sizing:border-box; border-style:dashed; border-width:var(--follow-w, 2px); border-color:rgba(255,255,255,.75); }
   .switch.following .slider::before { left:1px; top:1px; }
   @media (max-width: 800px) {
     .admin-main .site-row { grid-template-columns:1fr; }
@@ -21161,7 +21165,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
   .flat-choice { min-width:0; }
   .flat-choice > label { display:block; margin:0 0 6px; }
-  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
+  .seg-site > label.site span { border-color:#5865f2; border-style:dashed; border-width:var(--follow-w, 2px); padding:5px 13px; background:rgba(88,101,242,0.16); color:#d4d8ff; }   /* (the option that is what Settings says: the folder follows it, so it is dashed like every inherited choice) */
   .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
   .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
   .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
@@ -21349,7 +21353,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .folder-switches > .own-gallery-row .own-note { margin:0; }
   .vis-choice { min-width:0; }
   .vis-seg label.is-off { cursor:not-allowed; } .vis-seg label.is-off span { opacity:.38; }
-  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; }
+  .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; border-width:var(--follow-w, 2px); padding:5px 13px; }   /* (the same dashed edge as every following choice; the padding gives back what the thicker edge takes, so the button does not grow) */
   .vis-choice .vis-follow { margin:6px 0 2px; max-width:62ch; } .vis-choice .vis-follow a { color:inherit; text-decoration:underline; }
   .vis-choice > label { display:block; margin:0 0 6px; }
   <?= owner_phone_bar_css() ?>
@@ -28326,6 +28330,7 @@ send_viewer_aware_cache_headers();
 <?php endif; ?>
 <style>
   :root {
+    --follow-w: 2px;   /* the one width of a dashed edge: every choice that follows (a folder's own settings, a photo that follows its folder) is drawn with it, only the colour differs */
     --bg: #0f0f10;
     --card: #1a1a1c;
     --text: #eaeaea;
@@ -28745,7 +28750,7 @@ send_viewer_aware_cache_headers();
   .folder-priv .ico { width: 1em; height: 1em; }
   .folder-priv.own.unlisted { cursor: default; pointer-events: none; background: rgba(58,18,20,0.95); border-color: #ed4245; color: #ff9a9c; }   /* (Only me: darker than Private, so the two cannot be mistaken) */
   .folder-priv.own.quiet { background: rgba(122,92,0,0.95); border-color: #f5a623; color: #ffd58a; }   /* (Unlisted: amber; a button, like the red Private one: it asks, then shows the folder to everyone) */
-  .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
+  .folder-priv.inh.quiet { background: rgba(0,0,0,0.55); border: var(--follow-w) dashed rgba(245,166,35,0.95); color: #ffd58a; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
   .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
   .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
   .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
@@ -28753,7 +28758,7 @@ send_viewer_aware_cache_headers();
   .folder-priv.own:active { transform: scale(0.94); }
   .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } .folder-priv.own.quiet:hover { background: #9b7400; } }
-  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
+  .folder-priv.inh { background: rgba(0,0,0,0.55); border: var(--follow-w) dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
   .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
   .folder-cover-count.has-priv-count { position: relative; }
   .folder-cover-count .fc-main { color: inherit; text-decoration: none; }
@@ -28884,7 +28889,7 @@ send_viewer_aware_cache_headers();
   .select-bar.in-private .select-btns button { padding: 10px 4px; }
   .select-bar.in-private .sb-private:not(:disabled) { background: #ed4245; border-color: rgba(255,255,255,0.3); color: #fff; }
   .select-bar.in-private .sb-private:hover:not(:disabled) { background: #f4585b; border-color: rgba(255,255,255,0.4); }
-  .select-bar.in-private .sb-folder { border: 1.5px dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
+  .select-bar.in-private .sb-folder { border: var(--follow-w) dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
   .select-bar .sb-folder[hidden], .select-bar .select-btns button[hidden] { display: none; }
   .select-top button { border-color: transparent; color: #aab2ff; padding: 6px 9px; }
   .select-bar button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
@@ -29023,7 +29028,7 @@ send_viewer_aware_cache_headers();
   .priv-toggle .ico { width: 1em; height: 1em; }
   .priv-toggle.is-private { background: rgba(237,66,69,0.88); border-color: rgba(255,255,255,0.35); opacity: 1; }
   /* Private only because its folder is: dashed, not solid (it becomes public when the folder opens). */
-  .priv-toggle.is-folder { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  .priv-toggle.is-folder { background: rgba(0,0,0,0.55); border: var(--follow-w) dashed rgba(255,120,122,0.95); color: #ff9a9c; }
   .priv-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .priv-toggle:not(.is-private) { opacity: 0; } .card:hover .priv-toggle:not(.is-private), .priv-toggle:focus-visible { opacity: 0.9; } }
   .cover-toggle { position: absolute; top: 6px; right: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
@@ -29449,7 +29454,7 @@ send_viewer_aware_cache_headers();
   .lbe-pill .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
   .lbe-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
   #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: rgba(255,255,255,0.3); }
-  #lbe-private.is-folder, #lbe-private.is-folder[aria-pressed="false"] { background: rgba(237,66,69,0.12); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  #lbe-private.is-folder, #lbe-private.is-folder[aria-pressed="false"] { background: rgba(237,66,69,0.12); border: var(--follow-w) dashed rgba(255,120,122,0.95); color: #ff9a9c; }
   #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: #ed4245; }
   #lbe-cover[aria-pressed="true"] { background: #f5c542; border-color: #f5c542; color: #1a1a1c; }
   #lbe-cover[aria-pressed="true"] .ico { fill: currentColor; }
@@ -29458,7 +29463,8 @@ send_viewer_aware_cache_headers();
   @media (hover: hover) { .lbe-pill:hover:not(:disabled) { border-color: #6b77f0; } .lbe-pill[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); } }
   .lbe-note { margin: -4px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
   .lbe-note[hidden] { display: none; }
-  .lbe-pill.is-following { border-style: dashed; border-width: 1.5px; border-color: #7a7a8a; }   /* (a location switch that follows its folder: dashed, as every inherited choice is) */
+  .lbe-pill.is-following { border-style: dashed; border-width: var(--follow-w); border-color: #b4b4c4; }   /* (a pin that follows its folder: a bold dashed edge, as every inherited choice is) */
+  .lbe-pill.is-following[aria-pressed="true"] { border-color: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }   /* (on the blue fill the edge is white, so it can be seen) */   /* (a location switch that follows its folder: dashed, as every inherited choice is) */
   .lbe-note-loc .linklike { background: none; border: 0; padding: 0; font: inherit; color: #aab2ff; cursor: pointer; text-decoration: underline; }
   .lbe-locrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
   .lbe-locrow .ico { flex: none; color: #aab2ff; }
