@@ -174,8 +174,10 @@ foreach ($folderGroups as $ogTop => $ogMembers) {
 }
 $ogPhotos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
 $ogPool = $ogCovers ?: $ogPhotos;
-$ogRootPhoto = ($rootMeta['cover'] !== null && in_array($rootMeta['cover'], $files, true)) ? $rootMeta['cover']
-    : ($ogPool ? $ogPool[crc32(gmdate('Y-m-d') . '|' . $dir) % count($ogPool)] : ($files[0] ?? null));
+// The front page's own choice (a photo anywhere in the gallery, the newest, or one a day) comes first, from the public photos only; nothing chosen (or what was chosen is not public
+// or not there) leaves the automatic pick.
+$ogRootPhoto = ($currentFolderPath === null ? root_cover_choice($dir, $files, $rootMeta['cover'], $itemsData) : null)
+    ?? ($ogPool ? $ogPool[crc32(gmdate('Y-m-d') . '|' . $dir) % count($ogPool)] : ($files[0] ?? null));
 $ogImageUrl = $ogRootPhoto !== null ? $baseUrl . '/' . img_url($ogRootPhoto, 'share') : '';
 if ($currentFolderPath !== null) {
     // $pageTitle is already folder-prefixed (see the ?folder= validation

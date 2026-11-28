@@ -950,7 +950,7 @@
       var rn = flatBox.querySelector('[data-flat-row=names]'), rt = flatBox.querySelector('[data-flat-row=notes]');
       if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
     }
-    [].forEach.call(form.querySelectorAll('.seg-site input[type=radio]'), function (r) {
+    [].forEach.call(form.querySelectorAll('.flat-choices .seg-site input[type=radio]'), function (r) {   // (the order choices have their own handler below: they send the whole group)
       r.addEventListener('change', function () {
         flatSync(); post([[r.name, r.value]], stateOf(r));
         var src = r.closest('.flat-choice') && r.closest('.flat-choice').querySelector('.seg-src'); if (src) src.setAttribute('data-own', r.value === '' ? '0' : '1');   // (the line under it: Settings' choice, or this folder's own)
@@ -987,6 +987,25 @@
       });
     });
     // The order of the photos: every choice sends the whole group (the server rebuilds the folder's own order from all of it).
+    // The one-line summary of the "Inside this folder" box (what is set, so a closed box still says it), worked out from its choices.
+    function insideSummary(det) {
+      var sum = det.querySelector('.ib-sum'); if (!sum) return;
+      var val = function (n) { var c = det.querySelector('input[name=' + n + ']:checked'); return c ? c.value : ''; };
+      var box = det.querySelector('.flat-choices'), parts = [];
+      if (box) {
+        var flat = val('subfolder_style') === 'flat' || (val('subfolder_style') === '' && box.getAttribute('data-site-flat') === '1');
+        var names = val('flat_names') === '1' || (val('flat_names') === '' && box.getAttribute('data-site-names') === '1');
+        var notes = val('flat_notes') === '1' || (val('flat_notes') === '' && box.getAttribute('data-site-notes') === '1');
+        parts.push(flat ? 'Flat' + (names ? ', folder names on' : '') + (names && notes ? ', notes on' : '') : 'Cards');
+      }
+      var o = val('photo_sort_order'), d = val('photo_sort_dir'), f = val('photo_sort_first');
+      if (!o && !d && !f) parts.push(box ? 'photo order from Settings' : 'Taken from Settings');
+      else {
+        var bits = []; if (o) bits.push(o === 'name' ? 'Name' : 'Date'); if (d) bits.push(d === 'desc' ? 'last to first' : 'first to last');
+        if (bits.length) parts.push(bits.join(', ')); if (f === 'own') parts.push('own put-first');
+      }
+      sum.textContent = parts.join(' \u00b7 ');
+    }
     [].forEach.call(form.querySelectorAll('details.sort-details'), function (det) {
       var timer = 0, node = det.querySelector('summary .rowstate');
       function send() {
@@ -995,8 +1014,13 @@
         post(f, node);
       }
       function soon() { clearTimeout(timer); timer = setTimeout(send, 120); }
-      det.addEventListener('change', soon);
-      det.addEventListener('sf-changed', soon);
+      det.addEventListener('change', function (e) {
+        insideSummary(det);
+        if (e.target && e.target.name && e.target.name.indexOf('photo_sort_') !== 0) return;   // (the Cards/Flat choices share the box but save themselves)
+        soon();
+      });
+      det.addEventListener('sf-changed', function () { insideSummary(det); soon(); });
+      det.addEventListener('sf-summary', function () { insideSummary(det); });
     });
   });
   // The Edited tab: filter chips, one card per folder that opens and closes, a header that says what is inside (as filtered); the locks on
@@ -1974,7 +1998,7 @@
   // Who can see this folder: four buttons (Public, Unlisted, Private, Only me), each saved the moment it is pressed. Opening a folder up (leaving Private or Only
   // me for Public or Unlisted) first says what will happen (how many photos stay private, how many become public) and waits for a yes; closing it needs none.
   [].forEach.call(document.querySelectorAll('.vis-choice'), function (wrap) {
-    var csrf = wrap.getAttribute('data-csrf'), node = wrap.querySelector('.rowstate'), desc = wrap.querySelector('.vis-desc'), modal = document.getElementById('priv-modal');
+    var csrf = wrap.getAttribute('data-csrf'), node = (document.getElementById('vis-label') || wrap).querySelector('.rowstate'), desc = wrap.querySelector('.vis-desc'), modal = document.getElementById('priv-modal');
     var radios = [].slice.call(wrap.querySelectorAll('input[name=vis]')), level = wrap.getAttribute('data-level');
     var counts = { stay: +wrap.getAttribute('data-stay') || 0, open: +wrap.getAttribute('data-open') || 0 }, noun = wrap.getAttribute('data-noun') || 'photo', pending = null, descs = {};
     // A folder cannot be more open than the folder it sits in: when a folder above is stricter than this folder's own setting, the folder follows it (the page says which
@@ -2271,14 +2295,8 @@
     var hidden = box.querySelector('input.sf-order'), radios = box.querySelectorAll('input[name=photo_sort_first]');
     function orderNow() { return [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(','); }
     function own(isOwn) { [].forEach.call(radios, function (r) { r.checked = (r.value === 'own') === isOwn; }); label(); }
-    // The heading of the section says whether anything here is the folder's own (it follows what is on the page, not only what is saved).
-    function label() {
-      var det = box.closest('details'), tag = det && det.querySelector('summary .muted');
-      if (!tag) return;
-      var custom = false;
-      [].forEach.call(det.querySelectorAll('input[type=radio]:checked'), function (r) { if (r.value !== '') custom = true; });
-      tag.innerHTML = custom ? '&middot; this folder\'s own order' : '&middot; taken from Settings';
-    }
+    // The one-line summary of the Inside this folder box follows what is on the page (not only what is saved): the box's own script reads it back when told.
+    function label() { box.dispatchEvent(new CustomEvent('sf-summary', { bubbles: true })); }
     [].forEach.call(det_radios(), function (r) { r.addEventListener('change', label); });
     function det_radios() { var det = box.closest('details'); return det ? det.querySelectorAll('.sort-row input[type=radio]') : []; }
     var siteOrder = (box.getAttribute('data-site-order') || '').split(','), siteOn = {};
@@ -3035,42 +3053,38 @@
       go(b.classList.contains('dl-in-on') ? 'on' : 'off');
     });
   });
-  // The Cover photo row of a folder that holds folders: the cover in use, and a picker with a tile for each folder under it (the folder then
-  // follows that folder's cover), or any photo inside it by "Pick any photo instead". Each choice is one request and shows at once.
+  // The Cover photo row (a folder's, and the front page's): the cover in use as a small card, the choices Automatic, Most recent and Random, a picker for a photo (the front
+  // page lists public photos only: the server says which) and, for a folder that holds folders, a picker for the folder whose cover this follows. Each choice is one request and
+  // shows at once.
   [].forEach.call(document.querySelectorAll('[data-cover]'), function (box) {
     var form = box.closest('form'), csrf = form ? form.querySelector('input[name=csrf_token]').value : '';
-    var pick = box.querySelector('.cv-pick'), any = box.querySelector('.cv-anywhere'), state = box.querySelector('.rowstate');
+    var pick = box.querySelector('.cv-pick'), follow = box.querySelector('.cv-follow-pick'), state = box.querySelector('.rowstate');
+    var radios = [].slice.call(box.querySelectorAll('input[name=cover_mode]'));
+    function checkedMode() { var c = radios.filter(function (r) { return r.checked; })[0]; return c ? c.value : ''; }
+    var curMode = checkedMode();
     function say(text, kind) { state.textContent = text; state.className = 'rowstate ' + (kind || ''); clearTimeout(state._t); if (kind === 'ok') state._t = setTimeout(function () { state.textContent = ''; state.className = 'rowstate'; }, 3000); }
     function send(fields) {
       var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
       return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
-    function fail(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); }
+    function fail(e) { paintMode(curMode); say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); }
+    function paintMode(m) { radios.forEach(function (r) { r.checked = r.value === m; }); }
     function show(c) {
       var img = box.querySelector('.cv-img'); if (c.url) { img.src = c.url; img.hidden = false; } else img.hidden = true;
       box.querySelector('.cv-title').textContent = c.title; box.querySelector('.cv-small').textContent = c.small;
-      box.querySelector('.cv-auto').hidden = c.mode === 'auto';
-      [].forEach.call(box.querySelectorAll('.cv-tile'), function (t) { t.classList.toggle('sel', t.getAttribute('data-child') === c.from); });
+      curMode = radios.some(function (r) { return r.value === c.mode; }) ? c.mode : ''; paintMode(curMode);
+      [].forEach.call(box.querySelectorAll('.cv-tile'), function (t) { t.classList.toggle('sel', c.mode === 'follow' && t.getAttribute('data-child') === c.from); });
     }
+    function closePanels() { if (pick) pick.hidden = true; if (follow) follow.hidden = true; }
     function choose(fields) {
       say('Saving…', 'busy');
       return send(Object.assign({ action: 'set_folder_cover' }, fields)).then(function (j) {
-        if (!j.ok) { say(j.text, 'err'); return; }
-        if (j.cover) show(j.cover); pick.hidden = true; say('Saved', 'ok'); window.__siteDirty = true;
+        if (!j.ok) { paintMode(curMode); say(j.text, 'err'); return; }
+        if (j.cover) show(j.cover); closePanels(); say('Saved', 'ok'); window.__siteDirty = true;
       }).catch(fail);
     }
-    box.querySelector('.cv-choose').addEventListener('click', function () { pick.hidden = !pick.hidden; });
-    box.querySelector('.cv-cancel').addEventListener('click', function () { pick.hidden = true; any.hidden = true; });
-    box.querySelector('.cv-auto').addEventListener('click', function () { choose({ mode: 'auto' }); });
-    box.querySelector('.cv-any').addEventListener('click', function () { any.hidden = !any.hidden; });
-    box.addEventListener('click', function (e) {
-      var tile = e.target.closest ? e.target.closest('.cv-tile') : null;
-      if (tile) { choose({ mode: 'follow', child: tile.getAttribute('data-child') }); return; }
-      var ph = e.target.closest ? e.target.closest('.cv-photo') : null;
-      if (ph) { choose({ mode: 'pin', file: ph.getAttribute('data-path') }); return; }
-      var tab = e.target.closest ? e.target.closest('.cv-tab') : null;
-      if (!tab) return;
+    function loadPhotos(tab) {
       [].forEach.call(box.querySelectorAll('.cv-tab'), function (t) { t.classList.toggle('on', t === tab); });
       var holder = box.querySelector('.cv-photos'); holder.textContent = 'Loading…';
       send({ action: 'cover_photos', child: tab.getAttribute('data-child') }).then(function (j) {
@@ -3084,8 +3098,25 @@
         });
         holder.appendChild(grid);
         if (!(j.photos || []).length) holder.textContent = 'No photos here.';
-        if (j.more) { var n = document.createElement('p'); n.className = 'hint'; n.textContent = 'The first 300 are shown. For a photo further in, set the cover of the folder that holds it, then follow that folder.'; holder.appendChild(n); }
+        if (j.more) { var n = document.createElement('p'); n.className = 'hint'; n.textContent = 'The first 300 are shown. For a photo further in, open the folder that holds it.'; holder.appendChild(n); }
       }).catch(function () { holder.textContent = 'Couldn\'t load the photos.'; });
+    }
+    radios.forEach(function (r) { r.addEventListener('change', function () { if (r.checked && r.value !== curMode) choose({ mode: r.value }); }); });
+    var chooseBtn = box.querySelector('.cv-choose'), followBtn = box.querySelector('.cv-follow');
+    if (chooseBtn) chooseBtn.addEventListener('click', function () {
+      if (follow) follow.hidden = true;
+      pick.hidden = !pick.hidden;
+      if (!pick.hidden && !box.querySelector('.cv-tab.on')) { var first = box.querySelector('.cv-tab'); if (first) loadPhotos(first); }
+    });
+    if (followBtn) followBtn.addEventListener('click', function () { if (pick) pick.hidden = true; if (follow) follow.hidden = !follow.hidden; });
+    [].forEach.call(box.querySelectorAll('.cv-cancel'), function (b) { b.addEventListener('click', closePanels); });
+    box.addEventListener('click', function (e) {
+      var tile = e.target.closest ? e.target.closest('.cv-tile') : null;
+      if (tile) { choose({ mode: 'follow', child: tile.getAttribute('data-child') }); return; }
+      var ph = e.target.closest ? e.target.closest('.cv-photo') : null;
+      if (ph) { choose({ mode: 'pin', file: ph.getAttribute('data-path') }); return; }
+      var tab = e.target.closest ? e.target.closest('.cv-tab') : null;
+      if (tab) loadPhotos(tab);
     });
   });
   // Collections, the owner's side: make one from a name, delete one, and look after a collection's members. Each press is one request to the page's own

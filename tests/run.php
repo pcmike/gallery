@@ -2344,7 +2344,7 @@ check('[metadata settings] with the main switch off the fold is still there to l
 check('[metadata settings] ...a greyed-out row sends nothing when the whole form is saved (no hidden "off" field), so saving Settings with the main switch off leaves the five that start on as they are', substr_count($piMore, 'type="hidden" name="set_INFO_') === 0);
 check('[metadata settings] ...and with nothing switched on in Settings no folder is offered a panel: the photo\'s info address answers 404 and the page names no folder for it', $piGet('Italy/a.jpg')['status'] === 404 && str_contains(http_get("$basePi/?folder=Italy")[1], 'const infoFolders = [];'));
 $piFolderOff = http_get("$basePi/?admin&folder=Italy", [$piOwner])[1];
-check('[metadata folder] a folder\'s Metadata section has the media info switch FIRST (above the location switch), greyed with a link to Settings while the main switch is off', preg_match('#<h3 class="subhead">Metadata</h3>#', $piFolderOff) === 1 && strpos($piFolderOff, 'Show media info to visitors for this folder') < strpos($piFolderOff, 'Show photo locations to visitors for this folder') && str_contains($piFolderOff, 'class="info-under no-info"') && str_contains($piFolderOff, 'the info panel is off for the whole gallery'));
+check('[metadata folder] a folder\'s Media metadata section has the media info switch FIRST (above the location switch), greyed with a link to Settings while the main switch is off', preg_match('#<h3 class="subhead">Media metadata</h3>#', $piFolderOff) === 1 && strpos($piFolderOff, 'Show media info to visitors for this folder') < strpos($piFolderOff, 'Show photo locations to visitors for this folder') && str_contains($piFolderOff, 'class="info-under no-info"') && str_contains($piFolderOff, 'the info panel is off for the whole gallery'));
 check('[metadata folder] ...then the location switch, the map and its pin grouping, and the old wording ("photo info") is gone', strpos($piFolderOff, 'Show photo locations to visitors for this folder') < strpos($piFolderOff, 'name="keeploc"') && strpos($piFolderOff, 'name="keeploc"') < strpos($piFolderOff, 'name="map_enabled"') && strpos($piFolderOff, 'name="map_enabled"') < strpos($piFolderOff, 'name="map_radius"') && !str_contains($piFolderOff, 'Show photo info'));
 $piFeatOff = http_get("$basePi/?admin", [$piOwner])[1];
 check('[metadata features] the Features tab has a Media metadata row next to Photo locations and maps (two features, each with its own switch), Off while the main switch is off, with a button that jumps to the Info panel switch', preg_match('#Photo locations and maps.*?Media metadata <span class="ft-chip ft-off">Off</span>.*?setting-INFO_PANEL#s', $piFeatOff) === 1);
@@ -2419,7 +2419,7 @@ $pfStored = function () use ($fxPf) { $d = json_decode(data_file_strip_guard_for
 $pfFolderPost(['photo_sort_order' => '', 'photo_sort_first' => 'own', 'photo_sort_priority' => 'video,located,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'on', 'photo_sort_private' => 'off']);
 check('[put first] a folder\'s own list is stored with the folder (each kind on or off, and the order), and it beats the site\'s order in that folder', $pfStored() == ['video' => true, 'located' => true, 'private' => false, 'priority' => ['video', 'located', 'private']] && $pfOrder() === ['m.mp4', 'z-located.jpg', 'a.jpg', 'b.jpg'], json_encode([$pfStored(), $pfOrder()]));
 [, $pfAdmin3] = http_get("$basePf/?admin", $pfHdrs);
-check('[put first] ...and the folder\'s page opens with the section open, "this folder\'s own order", the pill on This folder\'s own, in the folder\'s order', str_contains($pfAdmin3, 'class="field wide sort-details" open') && str_contains($pfAdmin3, '&middot; this folder\'s own order') && preg_match('#name="photo_sort_first" value="own" checked#', $pfAdmin3) && str_contains($pfAdmin3, 'name="photo_sort_priority" class="sf-order" value="video,located,private"'));
+check('[put first] ...and the folder\'s page opens with the section open, "this folder\'s own order", the pill on This folder\'s own, in the folder\'s order', str_contains($pfAdmin3, 'class="field wide fs-inside inside-box sort-details" open>') && str_contains($pfAdmin3, 'own put-first') && preg_match('#name="photo_sort_first" value="own" checked#', $pfAdmin3) && str_contains($pfAdmin3, 'name="photo_sort_priority" class="sf-order" value="video,located,private"'));
 $pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'located,video,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'on', 'photo_sort_private' => 'off']);
 check('[put first] a folder\'s own list that sorts exactly as the site\'s does (same kinds on, same order) is not stored: the folder keeps following the site', $pfStored() === null, json_encode($pfStored()));
 $pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'located,video,private', 'photo_sort_video' => 'off', 'photo_sort_located' => 'off', 'photo_sort_private' => 'off']);
@@ -3543,10 +3543,10 @@ check('[privacy] the owner\'s folder buttons carry a lock in each private folder
 check('[privacy] "private first" puts the photos kept private on their own first, even in a private folder where everything is hidden', preg_match_all('#class="card[^"]*"[^>]*data-file="([^"]+)"#', $p3PrivFirst, $p3Order) && ($p3Order[1][0] ?? '') === 'Europe/France/Paris/eiffel.jpg');
 // Folder settings that save field by field
 [, $p3Settings] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
-check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Metadata section with the location switch, the photo info switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'id="vis-choice"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Metadata</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
+check('[settings] the folder settings page: a form that saves by itself, the folder switches in one run, then a Media metadata section with the location switch, the photo info switch and the map, and no Privacy, Navigation or separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'id="vis-choice"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Media metadata</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Privacy</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Navigation</h3>') && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
 $p3Pos = function ($needle) use ($p3Settings) { $at = strpos($p3Settings, $needle); return $at === false ? PHP_INT_MAX : $at; };
-check('[settings order] a folder\'s settings run: name, dates, position, description, Cards/Flat, then Who can see this folder (Public, Unlisted, Private, Only me), Gallery of its own, then the order of the photos, then Metadata', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('id="vis-choice"') && $p3Pos('id="vis-choice"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('class="field wide sort-details"') && $p3Pos('class="field wide sort-details"') < $p3Pos('<h3 class="subhead">Metadata</h3>') && $p3Pos('<h3 class="subhead">Metadata</h3>') < $p3Pos('id="map-under"'));
-check('[settings order] ...the order of the photos is a form of its own (so the switches can sit above it), sharing the one fingerprint, and the words beside the switches are short (the sentence under the four buttons says what each means)', substr_count($p3Settings, 'class="identity-form') === 2 && substr_count($p3Settings, 'name="loaded_hash"') === 2 && str_contains($p3Settings, 'Gallery of its own <small class="muted">(limits navigation)</small>') && !str_contains($p3Settings, 'class="hint priv-folder-note"') && !str_contains($p3Settings, 'visitors who arrive here can go no higher') && str_contains($p3Settings, 'each photo&#039;s own address') && !str_contains($p3Settings, 'Private folder <small'));
+check('[settings order] a folder\'s settings: name, dates, position, the cover photo, the description, then one Inside this folder box (Cards/Flat, then the order of the photos); the visibility block (Public, Unlisted, Private, Only me, Gallery of its own) follows the form in the page and is placed beside the cover by the grid; Media metadata last', $p3Pos('name="display_name"') < $p3Pos('name="dates"') && $p3Pos('name="dates"') < $p3Pos('name="sort_order"') && $p3Pos('name="sort_order"') < $p3Pos('data-cover') && $p3Pos('data-cover') < $p3Pos('name="description"') && $p3Pos('name="description"') < $p3Pos('class="field wide fs-inside inside-box sort-details"') && $p3Pos('class="field wide fs-inside inside-box sort-details"') < $p3Pos('name="subfolder_style"') && $p3Pos('name="subfolder_style"') < $p3Pos('name="photo_sort_order"') && $p3Pos('name="photo_sort_order"') < $p3Pos('id="vis-label"') && $p3Pos('id="vis-label"') < $p3Pos('id="vis-choice"') && $p3Pos('id="vis-choice"') < $p3Pos('name="owngallery"') && $p3Pos('name="owngallery"') < $p3Pos('<h3 class="subhead">Media metadata</h3>') && $p3Pos('<h3 class="subhead">Media metadata</h3>') < $p3Pos('id="map-under"'));
+check('[settings order] ...the whole of a folder\'s identity (name, cover, description, the Inside this folder box) is ONE form with one fingerprint, the visibility block sits outside it (it has a form of its own), and the words beside the switches are short', substr_count($p3Settings, 'class="identity-form') === 1 && substr_count($p3Settings, 'name="loaded_hash"') === 1 && str_contains($p3Settings, 'class="fs-grid"') && str_contains($p3Settings, 'Gallery of its own <small class="muted">(limits navigation)</small>') && !str_contains($p3Settings, 'class="hint priv-folder-note"') && !str_contains($p3Settings, 'visitors who arrive here can go no higher') && str_contains($p3Settings, 'each photo&#039;s own address') && !str_contains($p3Settings, 'Private folder <small'));
 check('[settings] ...each field has its own save note, and the Save buttons are only for a browser without JavaScript', substr_count($p3Settings, 'class="rowstate"') >= 8 && preg_match('#<div class="nojs-only"><button type="submit">Save folder settings</button></div>#', $p3Settings) === 1);
 $p3Hash = preg_match('/name="loaded_hash" value="([0-9a-f]{32})"/', $p3Settings, $m3) ? $m3[1] : '';
 $p3Desc = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'description' => 'Typed on its own', 'loaded_hash' => $p3Hash]);
@@ -7243,6 +7243,123 @@ $lvCfg();
 $lvSrc = (string) file_get_contents($indexSrc);
 check('[link view] the link cookie is read in exactly two places (the link\'s address and link_viewer), so what it grants is decided in one function and the navigation in another', preg_match_all('~\$_COOKIE\[LINK_COOKIE_NAME\]\s*\?\?~', $lvSrc) === 2);
 
+echo "== cover modes: Most recent and Random for folders and the front page, public photos only ==\n";
+
+$fxCm = new_fixture_dir('covermodes');
+foreach (['Sun/Deep', 'Priv', 'Mixed', 'Unl'] as $d) mkdir("$fxCm/$d", 0775, true);
+$cmNow = time();
+$cmPhotos = ['r1.jpg' => 400, 'Sun/s1.jpg' => 300, 'Sun/s2.jpg' => 100, 'Sun/s3.jpg' => 10, 'Sun/Deep/d1.jpg' => 1, 'Priv/p1.jpg' => 0, 'Mixed/m1.jpg' => 50, 'Mixed/m2.jpg' => 2, 'Unl/u1.jpg' => 0];
+$cmN = 0; foreach ($cmPhotos as $f => $daysAgo) { make_jpeg("$fxCm/$f", 60 + ++$cmN, 50, 20 * $cmN % 255, 90, 30 * $cmN % 255); touch("$fxCm/$f", $cmNow - $daysAgo * 86400 - ($f === 'Priv/p1.jpg' || $f === 'Unl/u1.jpg' ? 3600 : 0)); }
+make_minimal_mp4("$fxCm/Sun/clip.mp4", 5); touch("$fxCm/Sun/clip.mp4", $cmNow - 600);   // (the newest thing in Sun, and a video: never a cover)
+write_data_file("$fxCm/Priv/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+write_data_file("$fxCm/Unl/.gallery-items.php", ['quiet' => true, 'items' => [], 'groups' => []]);
+write_data_file("$fxCm/Mixed/.gallery-items.php", ['items' => ['m2.jpg' => ['restriction' => 'private']], 'groups' => []]);   // (its newest photo is private)
+file_put_contents("$fxCm/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cm-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true]));
+copy($indexSrc, "$fxCm/index.php");
+$portCm = find_free_port(); start_server($fxCm, $portCm); $baseCm = "http://127.0.0.1:$portCm";
+[, , $cmLogin] = http_post("$baseCm/?admin", ['access_code' => 'cm-admin-pw-1'], [], false);
+$cmAdminCookie = extract_cookie_header($cmLogin);
+$cmCsrf = extract_csrf_token(http_get("$baseCm/?admin&folder=Sun", ["Cookie: $cmAdminCookie"])[1]);
+$cmAdmin = function (array $fields, string $q = '') use ($baseCm, $cmAdminCookie, $cmCsrf) {
+    [, $body] = http_post("$baseCm/?admin$q", $fields + ['csrf_token' => $cmCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $cmAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+// What the front page shows as the cover of a folder's card, and what its og:image is, for someone with no sign-in.
+$cmCard = function (string $folder, string $cookie = '') use ($baseCm) {
+    [, $html] = http_get("$baseCm/", $cookie !== '' ? ["Cookie: $cookie"] : []);
+    return preg_match('~href="\?folder=' . preg_quote($folder, '~') . '"[^>]*>(?:(?!</a>).)*?src="[^"]*img=([^&"]+)~s', $html, $m) ? rawurldecode(html_entity_decode($m[1])) : null;
+};
+$cmOg = function () use ($baseCm) {
+    [, $html] = http_get("$baseCm/");
+    return preg_match('~<meta property="og:image" content="[^"]*img=([^&"]+)~', $html, $m) ? rawurldecode(html_entity_decode($m[1])) : null;
+};
+check('[cover modes] automatic is the first photo of a folder, as before', $cmCard('Sun') === 'Sun/Deep/d1.jpg' || $cmCard('Sun') === 'Sun/s1.jpg', (string) $cmCard('Sun'));
+$cmR = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest'], '&folder=Sun');
+check('[cover modes] a folder can be set to Most recent', ($cmR['ok'] ?? false) === true && ($cmR['cover']['mode'] ?? '') === 'latest', json_encode($cmR));
+check('[cover modes] Most recent is the newest PHOTO under the folder (nested folders count, a video never does)', $cmCard('Sun') === 'Sun/Deep/d1.jpg', (string) $cmCard('Sun'));
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest'], '&folder=Mixed');
+check('[cover modes] a stranger gets the newest PUBLIC photo (the folder\'s newer private one is never the cover)', $cmCard('Mixed') === 'Mixed/m1.jpg', (string) $cmCard('Mixed'));
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'random'], '&folder=Sun');
+$cmRand1 = $cmCard('Sun'); $cmRand2 = $cmCard('Sun');
+check('[cover modes] Random is one photo of the folder (never the video), the same one every time that day', in_array($cmRand1, ['Sun/s1.jpg', 'Sun/s2.jpg', 'Sun/s3.jpg', 'Sun/Deep/d1.jpg'], true) && $cmRand1 === $cmRand2, json_encode([$cmRand1, $cmRand2]));
+check('[cover modes] a private folder and an Unlisted folder are not on the front page at all (no card, no cover)', $cmCard('Priv') === null && $cmCard('Unl') === null);
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'auto'], '&folder=Sun');
+check('[cover modes] Automatic puts it back', ($cmCard('Sun') ?? '') !== '' && $cmCard('Sun') !== null);
+$cmBad = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'newest'], '&folder=Sun');
+check('[cover modes] an unknown choice is refused', ($cmBad['ok'] ?? true) === false);
+// A link to the folder previews with the folder's cover.
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest'], '&folder=Sun');
+$cmLink = $cmAdmin(['action' => 'link_create', 'label' => 'Sun link', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'off', 'scope_type' => 'folders', 'scope_folders' => json_encode(['Sun']), 'downloads' => 'off', 'zip' => 'off', 'picture' => '1', 'picture_seed' => '0a1b2c3d']);
+$cmLinks = read_data_file("$fxCm/.gallery-links.php"); $cmTok = $cmLinks['links'][$cmLink['id'] ?? '']['token'] ?? '';
+$cmOpen = http_get("$baseCm/?link=$cmTok")[1];
+$cmPic = preg_match('/<img class="pic" src="[^"]*img=([^&"]+)/', $cmOpen, $m) ? rawurldecode(html_entity_decode($m[1])) : null;
+check('[cover modes] a share link to the folder previews with its most recent photo (the link\'s automatic picture follows the folder\'s cover)', $cmPic === 'Sun/Deep/d1.jpg', (string) $cmPic);
+
+// The front page's own cover.
+$cmRoot = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest']);
+check('[front page cover] the front page can be set to Most recent', ($cmRoot['ok'] ?? false) === true && ($cmRoot['cover']['mode'] ?? '') === 'latest', json_encode($cmRoot));
+check('[front page cover] its preview picture is the newest PUBLIC photo in the whole gallery (not the private, Unlisted or video ones, which are newer)', $cmOg() === 'Sun/Deep/d1.jpg', (string) $cmOg());
+$cmPin = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => 'Sun/s2.jpg']);
+check('[front page cover] it can be any public photo in the gallery, not only one at the top (the root of this gallery has one photo)', ($cmPin['ok'] ?? false) === true && $cmOg() === 'Sun/s2.jpg', json_encode([$cmPin, $cmOg()]));
+foreach (['Priv/p1.jpg' => 'a private folder\'s photo', 'Unl/u1.jpg' => 'an Unlisted folder\'s photo', 'Mixed/m2.jpg' => 'a private photo in a public folder', 'Sun/clip.mp4' => 'a video', 'Sun/nope.jpg' => 'a photo that is not there', '../index.php' => 'a path out of the gallery'] as $f => $what) {
+    $r = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => $f]);
+    check("[front page cover] $what is refused (the front page takes public photos only), and the cover stays as it was", ($r['ok'] ?? true) === false && $cmOg() === 'Sun/s2.jpg', json_encode($r));
+}
+$cmStar = $cmAdmin(['action' => 'set_cover', 'file' => 'r1.jpg']);   // (the star on a root-level public photo still works)
+check('[front page cover] the star on a photo at the top still sets it', ($cmStar['ok'] ?? false) === true && $cmOg() === 'r1.jpg', json_encode([$cmStar, $cmOg()]));
+$cmPick = fn (string $child) => $cmAdmin(['action' => 'cover_photos', 'child' => $child]);
+$cmPaths = fn (array $r) => array_map(fn ($p) => $p['path'], $r['photos'] ?? []);
+check('[front page cover] the picker lists a public folder\'s photos, from any depth, and no video', count(array_diff(['Sun/s1.jpg', 'Sun/s2.jpg', 'Sun/s3.jpg', 'Sun/Deep/d1.jpg'], $cmPaths($cmPick('Sun')))) === 0 && !in_array('Sun/clip.mp4', $cmPaths($cmPick('Sun')), true), json_encode($cmPaths($cmPick('Sun'))));
+check('[front page cover] ...and nothing from a private folder or an Unlisted one, nor the private photo of a public folder', $cmPaths($cmPick('Priv')) === [] && $cmPaths($cmPick('Unl')) === [] && $cmPaths($cmPick('Mixed')) === ['Mixed/m1.jpg'], json_encode([$cmPaths($cmPick('Priv')), $cmPaths($cmPick('Unl')), $cmPaths($cmPick('Mixed'))]));
+// Something that was public when chosen and is not any more: the automatic pick takes over for visitors.
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => 'Mixed/m1.jpg']);
+write_data_file("$fxCm/Mixed/.gallery-items.php", ['items' => ['m2.jpg' => ['restriction' => 'private'], 'm1.jpg' => ['restriction' => 'private']], 'groups' => []]);
+check('[front page cover] a photo that has since gone private is not used: visitors get the automatic pick', $cmOg() !== 'Mixed/m1.jpg' && $cmOg() !== null, (string) $cmOg());
+
+// Found by the review: a photo marked public inside a PRIVATE folder is not a front-page cover (public folders all the way up); the cover row of a folder does not count an Unlisted folder
+// beneath it; and a number-named top-level folder takes part in the front page's automatic pick.
+mkdir("$fxCm/Pp", 0775, true); make_jpeg("$fxCm/Pp/pub.jpg", 90, 50, 20, 90, 30); touch("$fxCm/Pp/pub.jpg", $cmNow + 3600);
+write_data_file("$fxCm/Pp/.gallery-items.php", ['restriction' => 'private', 'items' => ['pub.jpg' => ['restriction' => 'public']], 'groups' => []]);
+$cmPubPriv = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => 'Pp/pub.jpg']);
+$cmPubList = $cmAdmin(['action' => 'cover_photos', 'child' => 'Pp']);
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest']);
+check('[front page cover] a photo marked public inside a PRIVATE folder is refused as the front page\'s cover, is not listed by the picker, and Most recent passes it by', ($cmPubPriv['ok'] ?? true) === false && !in_array('Pp/pub.jpg', array_column($cmPubList['photos'] ?? [], 'path'), true) && $cmOg() !== 'Pp/pub.jpg');
+$cmAdmin(['action' => 'set_folder_cover', 'mode' => 'auto']);
+foreach (['Nest2/Open', 'Nest2/Quiet'] as $d) mkdir("$fxCm/$d", 0775, true);
+make_jpeg("$fxCm/Nest2/Open/o.jpg", 91, 50, 20, 90, 30); touch("$fxCm/Nest2/Open/o.jpg", $cmNow - 5 * 86400);
+make_jpeg("$fxCm/Nest2/Quiet/q.jpg", 92, 50, 20, 90, 30); touch("$fxCm/Nest2/Quiet/q.jpg", $cmNow - 86400);
+write_data_file("$fxCm/Nest2/Quiet/.gallery-items.php", ['quiet' => true, 'items' => [], 'groups' => []]);
+$cmNest = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'latest'], '&folder=Nest2');
+check('[cover row] the "now:" photo of Most recent leaves out an Unlisted folder beneath it (a visitor never gets it), and so does the card', str_contains($cmNest['cover']['small'] ?? '', 'o.jpg') && !str_contains($cmNest['cover']['small'] ?? '', 'q.jpg') && $cmCard('Nest2') === 'Nest2/Open/o.jpg', json_encode($cmNest['cover'] ?? null));
+$fxNum = new_fixture_dir('covernum');
+$cmH = crc32(gmdate('Y-m-d') . '|' . $fxNum); $cmN2 = 2; foreach ([2, 3, 5] as $cmTry) { if ($cmH % $cmTry !== 0) { $cmN2 = $cmTry; break; } }
+for ($i = 1; $i <= $cmN2; $i++) { mkdir("$fxNum/$i", 0775, true); make_jpeg("$fxNum/$i/a.jpg", 60 + $i, 50, 20, 90, 30); }
+file_put_contents("$fxNum/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cn-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxNum/index.php");
+$portNum = find_free_port(); start_server($fxNum, $portNum); $baseNum = "http://127.0.0.1:$portNum";
+[, , $cnLogin] = http_post("$baseNum/?admin", ['access_code' => 'cn-admin-pw-1'], [], false); $cnCk = extract_cookie_header($cnLogin);
+$cnCsrf = extract_csrf_token(http_get("$baseNum/?admin&folder=1", ["Cookie: $cnCk"])[1]);
+[, $cnBody] = http_post("$baseNum/?admin", ['action' => 'set_folder_cover', 'mode' => 'auto', 'csrf_token' => $cnCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $cnCk"]);
+$cnCover = json_decode($cnBody, true)['cover'] ?? [];
+$cnWant = ($cmH % $cmN2 + 1) . '%2Fa.jpg';
+check('[front page cover] folders named with numbers take part in the automatic daily pick (the row shows the photo the preview will use)', str_contains($cnCover['url'] ?? '', $cnWant) && $cmH % $cmN2 !== 0, json_encode($cnCover) . " want $cnWant");
+
+// The settings page's layout: a leaf folder has the cover row (Pick a photo, no Follow), the front page has one and its Photo order box, and the Inside this folder box is closed
+// until something in it is the folder's own.
+$cmCk = ["Cookie: $cmAdminCookie"];
+$cmAdminAuto = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'auto'], '&folder=Sun'); $cmAdminAuto = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'auto']);
+$cmPgLeaf = http_get("$baseCm/?admin&folder=Sun/Deep", $cmCk)[1];
+$cmPgSun = http_get("$baseCm/?admin&folder=Sun", $cmCk)[1];
+$cmPgRoot = http_get("$baseCm/?admin", $cmCk)[1];
+check('[cover row] a folder with no folders under it has the Cover photo row (Pick a photo… and the three choices) and no Follow a folder…; a folder that holds folders has both', str_contains($cmPgLeaf, '<div class="field cover-field fs-cover" data-cover') && str_contains($cmPgLeaf, 'class="secondary cv-choose"') && !str_contains($cmPgLeaf, 'class="secondary cv-follow"') && substr_count($cmPgLeaf, 'name="cover_mode"') === 3 && str_contains($cmPgSun, 'class="secondary cv-follow"') && str_contains($cmPgSun, 'class="secondary cv-choose"'));
+check('[cover row] the front page has the row too (under the gallery title, no Follow), its box is called Photo order and has no Cards/Flat or visibility block', str_contains($cmPgRoot, 'data-root="1"') && !str_contains($cmPgRoot, 'class="secondary cv-follow"') && str_contains($cmPgRoot, '<span class="ib-title">Photo order</span>') && !str_contains($cmPgRoot, '<input type="radio" name="subfolder_style"') && !str_contains($cmPgRoot, '<div class="vis-choice') && str_contains($cmPgRoot, '<div class="fs-grid root">'));
+check('[inside box] closed while nothing in it is the folder\'s own (its summary says the order comes from Settings), on a folder and on the front page', !str_contains($cmPgLeaf, 'inside-box sort-details" open>') && !str_contains($cmPgLeaf, 'inside-box sort-details" open ') && str_contains($cmPgLeaf, 'Cards · photo order from Settings') && !str_contains($cmPgRoot, 'inside-box sort-details" open>'));
+$cmAdmin(['action' => 'save_folder_identity', 'photo_sort_order' => 'name', 'photo_sort_dir' => 'desc', 'photo_sort_video' => 'off'], '&folder=Sun/Deep');
+$cmItemsDeep = read_data_file("$fxCm/Sun/Deep/.gallery-items.php");
+$cmPgLeaf2 = http_get("$baseCm/?admin&folder=Sun/Deep", $cmCk)[1];
+check('[inside box] once the folder has an order of its own the box opens by itself and the summary says it', (($cmItemsDeep['photoSort']['order'] ?? '') === 'name') && str_contains($cmPgLeaf2, 'inside-box sort-details" open>') && str_contains($cmPgLeaf2, 'Cards · Name, last to first'));
+check('[media metadata] the section is Media metadata, and Keep the location and the map share one group', str_contains($cmPgLeaf, '<h3 class="subhead">Media metadata</h3>') && !str_contains($cmPgLeaf, '<h3 class="subhead">Metadata</h3>') && str_contains($cmPgLeaf, 'class="loc-group"'));
+
 // A notes page that is in use shows "On" on Features; one without {gallery} says it needs setup (this used to say "Not used" whenever the page was in use).
 $fxNc = new_fixture_dir('navnotes'); make_jpeg("$fxNc/a.jpg", 80, 50, 20, 90, 30);
 file_put_contents("$fxNc/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nc-admin-pw-1']));
@@ -9288,7 +9405,7 @@ check('[collections admin] ...and switched off again they are off, and the galle
 // the owner's pages
 $caHighHash = null;
 [, $caFrance] = http_get("$baseCa/?admin&folder=France", $caOwn);
-check('[collections admin] a folder\'s settings have a Collections section (before Metadata): the collections in it with Open settings and Delete collection, and a box to make a new one from just a name', str_contains($caFrance, '<h3 class="subhead">Collections</h3>') && str_contains($caFrance, 'class="cm-section"') && str_contains($caFrance, 'Open settings') && str_contains($caFrance, 'Delete collection') && str_contains($caFrance, 'Name of the new collection') && strpos($caFrance, 'class="subhead">Collections<') < strpos($caFrance, 'class="subhead">Metadata<') && str_contains($caFrance, 'Highlights'));
+check('[collections admin] a folder\'s settings have a Collections section (before Media metadata): the collections in it with Open settings and Delete collection, and a box to make a new one from just a name', str_contains($caFrance, '<h3 class="subhead">Collections</h3>') && str_contains($caFrance, 'class="cm-section"') && str_contains($caFrance, 'Open settings') && str_contains($caFrance, 'Delete collection') && str_contains($caFrance, 'Name of the new collection') && strpos($caFrance, 'class="subhead">Collections<') < strpos($caFrance, 'class="subhead">Media metadata<') && str_contains($caFrance, 'Highlights'));
 [, $caRootPage] = http_get("$baseCa/?admin", $caOwn);
 check('[collections admin] ...and so do the gallery\'s own settings, for the collections on the front page', str_contains($caRootPage, 'class="cm-section" data-csrf') && str_contains($caRootPage, 'data-parent=""'));
 [, $caCollPage] = http_get("$baseCa/?admin&folder=France%2Fhighlights", $caOwn);
@@ -9875,7 +9992,7 @@ check('[Flat] with no choice of its own a folder follows the gallery (Flat with 
 $flWrite("$fxFl/sub1/.gallery-items.php", $flItems);
 $flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
 $flFolderForm = http_get("$baseFl/?admin&folder=sub1", $flAuth)[1];
-check('[Flat] Folder settings has the three choices as two buttons each; the one that is what Settings says is marked (Flat for the style, Off for names and notes here), and the names and notes rows are shown only while the folder is Flat', substr_count($flFolderForm, 'class="seg seg-site"') === 3 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="subfolder_style" value="" checked><span>Flat</span>~', $flFolderForm) === 1 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="flat_names" value="" checked><span>Off</span>~', $flFolderForm) === 1 && !preg_match('~data-flat-row="names" hidden~', $flFolderForm) && preg_match('~data-flat-row="notes" hidden~', $flFolderForm) === 1);
+check('[Flat] Folder settings has the three choices as two buttons each; the one that is what Settings says is marked (Flat for the style, Off for names and notes here), and the names and notes rows are shown only while the folder is Flat', substr_count($flFolderForm, 'class="seg seg-site"') === 6 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="subfolder_style" value="" checked><span>Flat</span>~', $flFolderForm) === 1 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="flat_names" value="" checked><span>Off</span>~', $flFolderForm) === 1 && !preg_match('~data-flat-row="names" hidden~', $flFolderForm) && preg_match('~data-flat-row="notes" hidden~', $flFolderForm) === 1);
 $flCfg([]);
 $flFolderForm2 = http_get("$baseFl/?admin&folder=sub1", $flAuth)[1];
 check('[Flat] ...with Cover cards in Settings the style choice marks Cards, and the names and notes rows are hidden (the folder has not chosen Flat)', preg_match('~<label class="site" title="What Settings says"><input type="radio" name="subfolder_style" value="" checked><span>Cards</span>~', $flFolderForm2) === 1 && preg_match('~data-flat-row="names" hidden~', $flFolderForm2) === 1 && preg_match('~data-flat-row="notes" hidden~', $flFolderForm2) === 1);
@@ -10739,7 +10856,7 @@ foreach (['follow a folder that is not there' => ['mode' => 'follow', 'child' =>
     $r = $cvPost(['action' => 'set_folder_cover'] + $f, 'trip');
     check("[cover] $why is refused and nothing changes", ($r['ok'] ?? null) === false && (string) file_get_contents("$fxCv/trip/.gallery-items.php") === $cvBefore);
 }
-check('[cover] the root has no such choice', ($cvPost(['action' => 'set_folder_cover', 'mode' => 'auto'], '')['ok'] ?? null) === false);
+check('[cover] the front page has the choice too (Automatic goes through)', ($cvPost(['action' => 'set_folder_cover', 'mode' => 'auto'], '')['ok'] ?? null) === true);
 $r = $cvPost(['action' => 'set_folder_cover', 'mode' => 'auto'], 'trip');
 check('[cover] Automatic puts it back (the cover of the first folder, which has its own choice, b)', ($r['ok'] ?? null) === true && ($r['cover']['mode'] ?? '') === 'auto' && $cvFront() === 'trip/florence/b.jpg' && !isset($cvItems('trip')['cover']) && !isset($cvItems('trip')['coverFollow']));
 $cvPost(['action' => 'set_folder_cover', 'mode' => 'follow', 'child' => 'rome'], 'trip');
@@ -10750,7 +10867,7 @@ check('[cover] a private folder\'s cover is never shown to a stranger: the card 
 check('[cover] ...while the owner still sees it follow Rome', $cvFront($cvOwn) === 'trip/rome/c.jpg', (string) $cvFront($cvOwn));
 $cvPost(['action' => 'toggle_folder_restriction', 'hidden' => '0'], 'trip/rome');
 $cvSet = http_get("$baseCv/?admin&classic=1&folder=trip", $cvOwn)[1]; $cvLeaf = http_get("$baseCv/?admin&classic=1&folder=trip%2Fflorence", $cvOwn)[1];
-check('[cover] the folder\'s settings have the Cover photo row with a tile for each folder under it; a folder with no folders under it has none', str_contains($cvSet, 'cover-field') && substr_count($cvSet, 'class="cv-tile') === 3 && str_contains($cvSet, 'Follows the cover of rome') && !str_contains($cvLeaf, 'cover-field'));
+check('[cover] the folder\'s settings have the Cover photo row with a tile for each folder under it; a folder with no folders under it has the row without the follow choice', str_contains($cvSet, 'cover-field') && substr_count($cvSet, 'class="cv-tile') === 3 && str_contains($cvSet, 'Follows the cover of rome') && str_contains($cvLeaf, 'cover-field') && !str_contains($cvLeaf, 'class="secondary cv-follow"') && !str_contains($cvLeaf, 'class="cv-tile'));
 $r = $cvPost(['action' => 'cover_photos', 'child' => 'paris'], 'trip');
 check('[cover] "pick any photo" lists the photos of one folder under it, by their path in the folder, and refuses a name that is not a folder under it', ($r['ok'] ?? null) === true && array_column($r['photos'] ?? [], 'path') === ['paris/a.jpg', 'paris/b.jpg', 'paris/c.jpg'] && ($cvPost(['action' => 'cover_photos', 'child' => '../solo'], 'trip')['ok'] ?? null) === false && ($cvPost(['action' => 'cover_photos', 'child' => 'solo'], 'trip')['photos'] ?? ['x']) === []);
 $cvPost(['action' => 'set_cover', 'file' => 'a.jpg'], 'trip/paris');

@@ -627,6 +627,9 @@ define('TRUSTED_PROXY_RANGES', gallery_setting('TRUSTED_PROXY_RANGES', []));
 // first request is routed.
 define('LINK_COOKIE_NAME', 'gallery_link_' . substr(hash('sha256', __DIR__), 0, 10));
 define('PREVIEW_COOKIE_NAME', 'gallery_preview_' . substr(hash('sha256', __DIR__), 0, 10));   // the owner previewing a link in this browser
+// A folder's (or the front page's) cover chosen by rule instead of by photo: see pick_folder_cover().
+const COVER_LATEST = '@latest';
+const COVER_RANDOM = '@random';
 define('LINK_NAV_COOKIE_NAME', 'gallery_nav_' . substr(hash('sha256', __DIR__), 0, 10));   // which navigation a share-link holder arrived with (link or open): see link_nav_mode()
 const PREVIEW_SECONDS = 14400;   // a preview ends by itself after four hours
 define('LINK_PROBE_TOKEN', '0000-probe-0000');   // the admin asks for this one to learn whether the tidy address reaches the script (it has hyphens, so only the rule that allows custom names lets it through)

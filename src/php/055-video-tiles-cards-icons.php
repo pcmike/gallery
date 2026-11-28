@@ -265,7 +265,66 @@ function status_accent_color($status, $customColor) {
  * photos at all. Shared by the cover card and the folder's link preview
  * so the two can never disagree about which photo represents a folder.
  */
+/* Cover modes. A folder's own `cover` (and the front page's) is a photo's name or path, 'follow:<folder>', or one of two words that choose by rule each time the page is
+ * built: '@latest' (the newest photo) and '@random' (one photo a day). A name can't be mistaken for a word: a photo's name has an extension. Older versions of the gallery
+ * read a word as "no such photo" and fall back to the automatic pick. */
+/** The photo among $files (relative paths) taken most recently: by the capture date in the file, else its modified time (the dates the Taken sort uses); a tie goes to the
+ *  first by name. A video is never a cover. null when there is no photo. */
+function cover_pick_latest($dir, $files) {
+    $by = [];
+    foreach ($files as $f) { if (is_video_file($f)) continue; $by[containing_folder_real_path($dir, $f)][] = $f; }
+    $best = null; $bestT = null;
+    foreach ($by as $real => $list) {
+        $times = media_taken_times($real, array_map('basename', $list));
+        foreach ($list as $f) {
+            $t = (int) ($times[basename($f)] ?? 0);
+            if ($best === null || $t > $bestT || ($t === $bestT && strcmp($f, $best) < 0)) { $best = $f; $bestT = $t; }
+        }
+    }
+    return $best;
+}
+
+/** One photo of $files for today (UTC), the same one for everyone all day and a different one in each folder ($salt). null when there is no photo. */
+function cover_pick_random($files, $salt) {
+    $pool = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
+    if (!$pool) return null;
+    sort($pool, SORT_STRING);   // (a stable order: the same photos give the same pick whatever order they came in)
+    return $pool[crc32(gmdate('Y-m-d') . '|' . $salt) % count($pool)];
+}
+
+/** May this photo be the front page's cover, or be offered for it? Public all the way: in a Public folder (and every folder above it), not Unlisted, not a private photo, and
+ *  not a video. The front page is public-facing, so nothing narrower is ever chosen or shown there. */
+function root_cover_allows($dir, $file, $itemsData = null) {
+    if (is_video_file($file)) return false;
+    $d = $itemsData ?? items_get_all_for_files($dir, [$file]);
+    return !file_is_hidden($dir, $file, $d) && !file_is_quiet($dir, $file) && !folder_above_is_private($dir, $file);   // (a photo marked public inside a private folder is still not the front page's: public folders all the way up)
+}
+
+/** The front page's cover by the root's own choice ($spec: a photo's path in the gallery, '@latest', '@random', or null for automatic), taken only from the PUBLIC photos
+ *  among $candidates. null: nothing chosen, or what was chosen can't be used (not there, or not public), so the automatic pick stands. */
+function root_cover_choice($dir, $candidates, $spec, $itemsData = null) {
+    if (!is_string($spec) || $spec === '') return null;
+    $candidates = array_values($candidates);
+    if ($spec !== COVER_LATEST && $spec !== COVER_RANDOM) {   // (a pinned photo: one look at that photo, not at the whole gallery)
+        if (!in_array($spec, $candidates, true)) return null;
+        return root_cover_allows($dir, $spec, $itemsData ?? items_get_all_for_files($dir, [$spec])) ? $spec : null;
+    }
+    static $memo = [];   // (the same question asked again in one request, as when every link of a closed gallery is checked, is answered once)
+    $key = $spec . '|' . $dir . '|' . gmdate('Y-m-d') . '|' . md5(implode("\n", $candidates));
+    if (array_key_exists($key, $memo)) return $memo[$key];
+    if ($itemsData === null) $itemsData = $candidates ? items_get_all_for_files($dir, $candidates) : [];
+    $pool = [];
+    foreach ($candidates as $f) if (root_cover_allows($dir, $f, $itemsData)) $pool[] = $f;
+    if (!$pool) return $memo[$key] = null;
+    return $memo[$key] = $spec === COVER_LATEST ? cover_pick_latest($dir, $pool) : cover_pick_random($pool, "\0root");
+}
+
 function pick_folder_cover($recursiveFiles, $manualCover = null, $folderPath = null) {
+    if ($manualCover === COVER_LATEST || $manualCover === COVER_RANDOM) {
+        $picked = $manualCover === COVER_LATEST ? cover_pick_latest($GLOBALS['dir'], $recursiveFiles) : cover_pick_random($recursiveFiles, (string) $folderPath);
+        if ($picked !== null) return $picked;
+        $manualCover = null;   // (only videos in it: the automatic pick)
+    }
     $prefix = $folderPath !== null && $folderPath !== '' ? rtrim($folderPath, '/') . '/' : null;
     if ($manualCover !== null) {
         if (strncmp($manualCover, 'follow:', 7) === 0) {

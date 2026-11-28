@@ -1265,3 +1265,99 @@
   .vis-choice.following .vis-seg label input:checked + span { border-style:dashed; border-width:var(--follow-w, 2px); padding:5px 13px; }   /* (the same dashed edge as every following choice; the padding gives back what the thicker edge takes, so the button does not grow) */
   .vis-choice .vis-follow { margin:6px 0 2px; max-width:62ch; } .vis-choice .vis-follow a { color:inherit; text-decoration:underline; }
   .vis-choice > label { display:block; margin:0 0 6px; }
+
+  /* ---- A folder's (or the gallery's) own settings: the form's fields and the visibility block in one grid ---- */
+  .fs-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; align-items:start; }
+  .fs-grid.root { grid-template-columns:2fr 1fr; }
+  .fs-grid > .identity-form, .fs-grid > .identity-form > .settings-grid { display:contents; }   /* (the form and its grid take no box of their own: the fields are the grid's items; the form still submits as one) */
+  .fs-grid .fs-name { grid-column:1; grid-row:1; min-width:0; }
+  .fs-grid .fs-dates { grid-column:2; grid-row:1; min-width:0; }
+  .fs-grid .fs-pos { grid-column:3; grid-row:1; min-width:0; }
+  .fs-grid .fs-cover { grid-column:1; grid-row:2; min-width:0; }
+  .fs-grid .fs-vis { grid-column:2 / -1; grid-row:2; min-width:0; }
+  .fs-grid .fs-desc { grid-column:1 / -1; grid-row:3; }
+  .fs-grid .fs-inside { grid-column:1 / -1; grid-row:4; }
+  @media (max-width:800px) {
+    .fs-grid, .fs-grid.root { grid-template-columns:minmax(0,1fr) 118px; gap:18px 14px; }
+    .fs-grid.root { grid-template-columns:minmax(0,1fr); }
+    .fs-grid .fs-name, .fs-grid .fs-cover, .fs-grid .fs-vis, .fs-grid .fs-desc, .fs-grid .fs-inside { grid-column:1 / -1; }
+    .fs-grid .fs-name { grid-row:1; } .fs-grid .fs-cover { grid-row:2; } .fs-grid .fs-vis { grid-row:3; }
+    .fs-grid .fs-dates { grid-column:1; grid-row:4; } .fs-grid .fs-pos { grid-column:2; grid-row:4; }
+    .fs-grid .fs-desc { grid-row:5; } .fs-grid .fs-inside { grid-row:6; }
+    .fs-grid.root .fs-name { grid-row:1; } .fs-grid.root .fs-cover { grid-row:2; } .fs-grid.root .fs-dates { grid-column:1; grid-row:3; } .fs-grid.root .fs-desc { grid-row:4; } .fs-grid.root .fs-inside { grid-row:5; }
+  }
+  .fs-grid.root .fs-name { grid-column:1; } .fs-grid.root .fs-dates { grid-column:2; } .fs-grid.root .fs-cover { grid-column:1; }
+
+  /* Cover photo: a small boxed card (what it is, the buttons), then the choices */
+  .cover-field .cv-card { border:1px solid #2e2e34; border-radius:12px; background:#0f0f12; padding:12px; }
+  .cover-field .cv-row { padding:0; border:0; background:none; flex-wrap:nowrap; }
+  .cover-field .cv-acts { margin-top:12px; }
+  .cover-field .seg-cover { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 0; max-width:100%; }
+  .cover-field .seg-cover > label span { text-align:center; }
+  .cover-field .cv-hint { margin:6px 0 0; }
+  .cv-follow-pick { border:1px solid #3d4194; border-radius:12px; background:#0f0f14; padding:12px; margin:10px 0 0; }
+  .cv-follow-pick[hidden] { display:none; }
+  .cv-follow-pick h4 { margin:0 0 4px; font-size:0.95rem; }
+  .cv-follow-pick p { margin:0 0 10px; color:var(--muted); font-size:0.82rem; }
+  .cv-follow-pick .cv-tile b { display:block; padding:6px 8px; font-size:0.82rem; font-weight:600; }
+  .cv-follow-pick .cv-tile small { display:block; padding:0 8px 6px; color:#f2c86b; font-size:0.72rem; }
+  .cv-pick-note { margin:0 0 10px; }
+  @media (max-width:800px) { .cover-field .seg-cover { flex-wrap:nowrap; } .cover-field .seg-cover > label { flex:1 1 auto; min-width:0; } }
+
+  /* Who can see this folder: the title above, then one box holding the choice, what it means, and the switches that go with it */
+  .fs-vis > label { display:block; margin:0 0 6px; }
+  .fs-vis .folder-switches { margin:0; gap:0; padding:14px 16px; border:1px solid #2c2c33; border-radius:12px; background:#0f0f12; }
+  .fs-vis .vis-choice .vis-desc { margin:6px 0 0; }
+  .fs-vis .vis-seg { margin:0 0 8px; }
+  .fs-vis .folder-switches > .unlisted-sub { padding-left:0; margin-top:12px; gap:10px; }
+  .fs-vis .folder-switches > .own-gallery-row, .fs-vis .folder-switches > .dl-block { margin-top:12px; }
+  .fs-vis .own-gallery-row.is-moot { display:none; }   /* (an Only me folder is nobody's gallery of its own: the row is not drawn at all) */
+  @media (max-width:800px) {
+    .fs-vis .vis-seg { display:flex; flex-wrap:nowrap; gap:6px; width:100%; }
+    .fs-vis .vis-seg > label { flex:1 1 auto; min-width:0; }
+    .fs-vis .vis-seg > label span { text-align:center; padding:8px clamp(2px,1vw,4px); font-size:clamp(0.7rem,3.45vw,0.84rem); }
+  }
+
+  /* Inside this folder: one joined box, closed unless something in it is customised */
+  details.inside-box.sort-details { border:1px solid #2c2c33; border-radius:12px; background:#0f0f12; padding:0; }
+  details.inside-box.sort-details > summary { display:flex; align-items:center; gap:10px; margin:0; padding:12px 16px; cursor:pointer; list-style:none; color:var(--text); font-size:1rem; }
+  details.inside-box.sort-details > summary::before { display:none; }
+  details.inside-box.sort-details > summary::-webkit-details-marker { display:none; }
+  details.inside-box .ib-title { font-weight:600; }
+  details.inside-box .ib-sum { flex:1 1 auto; min-width:0; color:var(--muted); font-size:0.88rem; }
+  details.inside-box .ib-chev { flex:none; font-size:1.5rem; line-height:1; color:var(--muted); transition:transform .15s; }
+  details.inside-box[open] > summary .ib-chev { transform:rotate(90deg); }
+  details.inside-box[open] > summary { border-bottom:1px solid #23232a; }
+  details.inside-box > summary .rowstate { flex:none; }
+  .ib-body { padding:0 16px 8px; }
+  .ib-body .ib-row { display:grid; grid-template-columns:130px minmax(0,1fr); align-items:center; gap:6px 12px; margin:0; padding:12px 0; border-top:1px solid #23232a; }
+  .ib-body .flat-choices > .ib-row:first-child { border-top:0; }
+  .ib-body .flat-choices + .sort-rows > .ib-row:first-child { border-top:1px solid #23232a; }
+  .ib-body .sort-rows { margin:0; }
+  .ib-body > :first-child > .ib-row:first-child, .ib-body > .sort-rows:first-child > .ib-row:first-child { border-top:0; }
+  .ib-row > label, .ib-row > .sort-label { display:block; margin:0; color:var(--muted); font-size:0.88rem; min-width:0; }
+  .ib-row.sort-row-list { align-items:start; }
+  .ib-row.sort-row-list > .sort-label { padding-top:9px; }
+  .ib-row[hidden] { display:none; }
+  .ib-ctl { min-width:0; }
+  .ib-ctl .seg { margin:0; }
+  .ib-ctl .seg-src[data-own="0"] { display:none; }   /* (following Settings needs no line: the dashed button says it; a folder's own choice says how to go back) */
+  .ib-ctl .seg-src { margin:6px 0 0; }
+  .ib-body .sortfirst { max-width:420px; }
+  .ib-hint { margin:8px 0 6px; }
+  @media (max-width:800px) {
+    .ib-body .ib-row { grid-template-columns:minmax(0,1fr); }
+    details.inside-box.sort-details > summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px 10px; }
+    details.inside-box .ib-title { grid-column:1; grid-row:1; }
+    details.inside-box .ib-sum { grid-column:1; grid-row:2; font-size:0.82rem; }
+    details.inside-box > summary .rowstate { grid-column:1; grid-row:3; }
+    details.inside-box .ib-chev { grid-column:2; grid-row:1 / span 2; align-self:center; }
+  }
+
+  /* Media metadata: what depends on showing locations sits in one group, with one line, and Pin grouping is one step in */
+  .loc-group { margin:6px 0 10px 14px; padding-left:16px; border-left:2px solid #2c2c30; }
+  .loc-group > .loc-keep { padding-left:0; margin:0 0 6px; }
+  .loc-group > .loc-status { margin:0 0 14px; }
+  .loc-group > .map-under { margin:12px 0 0; padding-left:0; border-left:0; }
+  .loc-group > .map-under .map-sub { margin-left:26px; padding-left:0; border-left:0; }
+  main:not(.js-tabs) .cover-field { display:none; }   /* (the cover's choices save as they are pressed: without scripts there is nothing to press) */

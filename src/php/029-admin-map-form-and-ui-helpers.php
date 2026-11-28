@@ -246,6 +246,169 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
 <?php
 }
 
+/** Like ui_segmented, with the "Site's" choice (the one whose value is "") drawn as what Settings says: outlined, and picked it means "follow Settings". */
+function ui_segmented_inherit($name, $options, $current, $label = '') {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $out = '<div class="seg seg-site" role="radiogroup" aria-label="' . $esc($label) . '">';
+    foreach ($options as $value => $text) {
+        $isSite = (string) $value === '';
+        $out .= '<label' . ($isSite ? ' class="site" title="What Settings says"' : '') . '><input type="radio" name="' . $esc($name) . '" value="' . $esc($value) . '"' . ((string) $current === (string) $value ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
+    }
+    return $out . '</div>';
+}
+
+/** Has this folder (or the gallery) a choice of its own in the "Inside this folder" box (how the folders under it are shown, the order of its photos)? Then the box starts open. */
+function inside_box_is_custom($itemsHere, $isRoot) {
+    if (is_array($itemsHere['photoSort'] ?? null) && $itemsHere['photoSort']) return true;
+    if ($isRoot) return false;
+    return (string) ($itemsHere['subfolderStyle'] ?? '') !== '' || is_bool($itemsHere['flatNames'] ?? null) || is_bool($itemsHere['flatNotes'] ?? null);
+}
+
+/** The box's one-line summary, so a closed box still says what is set: "Cards · photo order from Settings", or what this folder has chosen. The page's script keeps it in step. */
+function inside_box_summary($itemsHere, $isRoot) {
+    $parts = [];
+    if (!$isRoot) {
+        $siteFlat = in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+        $ownStyle = (string) ($itemsHere['subfolderStyle'] ?? '');
+        $flat = $ownStyle !== '' ? $ownStyle === 'flat' : $siteFlat;
+        $names = is_bool($itemsHere['flatNames'] ?? null) ? $itemsHere['flatNames'] : FOLDER_FLAT_NAMES;
+        $notes = is_bool($itemsHere['flatNotes'] ?? null) ? $itemsHere['flatNotes'] : FOLDER_FLAT_NOTES;
+        $parts[] = $flat ? 'Flat' . ($names ? ', folder names on' : '') . ($names && $notes ? ', notes on' : '') : 'Cards';
+    }
+    $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : [];
+    if (!$ps) { $parts[] = $isRoot ? 'Taken from Settings' : 'photo order from Settings'; return implode(' · ', $parts); }
+    $bits = [];
+    if (isset($ps['order'])) $bits[] = $ps['order'] === 'name' ? 'Name' : 'Date';
+    if (isset($ps['desc']) && is_bool($ps['desc'])) $bits[] = $ps['desc'] ? 'last to first' : 'first to last';
+    if ($bits) $parts[] = implode(', ', $bits);
+    if (isset($ps['priority']) || isset($ps['video']) || isset($ps['located']) || isset($ps['private'])) $parts[] = 'own put-first';
+    return implode(' · ', $parts);
+}
+
+/** The order-of-photos rows of the "Inside this folder" box: Order, Direction and Put first (its choices and the real, draggable list). Each choice sends the whole group (the page's script). */
+function render_admin_sort_rows($itemsHere) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : [];
+    $dirNow = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : '';
+    $sfNames = sort_priority_names(); $sfOwn = isset($ps['priority']) || isset($ps['video']) || isset($ps['located']) || isset($ps['private']);
+    $sfOrder = (isset($ps['priority']) && is_array($ps['priority']) && count($ps['priority']) === 3) ? array_values($ps['priority']) : sort_priority_list();
+    foreach (array_keys($sfNames) as $k) if (!in_array($k, $sfOrder, true)) $sfOrder[] = $k;
+    $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = isset($ps[$k]) && is_bool($ps[$k]) ? $ps[$k] : (bool) constant($nm[2]);
+    $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; })));
+    $siteOrder = sort_priority_list(); $siteOn = []; foreach ($sfNames as $k => $nm) $siteOn[$k] = (bool) constant($nm[2]);
+    $siteOrder = array_merge(array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return $siteOn[$k]; })), array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return !$siteOn[$k]; })));
+?>
+          <div class="sort-rows">
+            <div class="sort-row ib-row"><span class="sort-label">Photo order</span><div class="ib-ctl"><?= ui_segmented_inherit('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Photo order') ?></div></div>
+            <div class="sort-row ib-row"><span class="sort-label">Direction</span><div class="ib-ctl"><?= ui_segmented_inherit('photo_sort_dir', ['' => "Site's", 'asc' => 'First to last', 'desc' => 'Last to first'], $dirNow, 'Direction') ?></div></div>
+            <div class="sort-row ib-row sort-row-list"><span class="sort-label">Put first</span>
+            <div class="ib-ctl">
+            <div class="sortfirst sf-form" data-mode="form" data-site-order="<?= $esc(implode(',', $siteOrder)) ?>" data-site-on="<?= $esc(json_encode($siteOn)) ?>">
+              <?= ui_segmented_inherit('photo_sort_first', ['' => "Site's", 'own' => "This folder's own"], $sfOwn ? 'own' : '', 'Put first') ?>
+              <ol class="sf-list">
+              <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
+                <li data-kind="<?= $esc($k) ?>">
+                  <button type="button" class="sf-grip" aria-label="Move <?= $esc($nm[1]) ?>: drag it, or press the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></g></svg></button>
+                  <span class="sf-name"><?= $esc($nm[0]) ?></span>
+                  <input type="hidden" name="photo_sort_<?= $esc($k) ?>" value="off">
+                  <label class="switch"><input type="checkbox" name="photo_sort_<?= $esc($k) ?>" value="on" <?= $sfOn[$k] ? 'checked' : '' ?> aria-label="<?= $esc($nm[0]) ?> first"><span class="slider"></span></label>
+                </li>
+              <?php endforeach; ?>
+              </ol>
+              <input type="hidden" name="photo_sort_priority" class="sf-order" value="<?= $esc(implode(',', $sfOrder)) ?>">
+              <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn, $siteOrder, $siteOn)) ?></p>
+            </div>
+            </div>
+            </div>
+          </div>
+          <p class="hint ib-hint">"Put first" is the same list as in Settings; until you change it here this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+<?php
+}
+
+/**
+ * A folder's own settings (or the gallery's, at the root), as one block: the name, dates and position; the cover photo; who can see the folder (beside the cover on a wide screen);
+ * the description; and, in one box that starts closed unless something in it is customised, how the folders under it are shown and the order of its photos. Every field saves by
+ * itself as it is changed (the page's script). The folder's visibility is its own small block outside the form (it has a form of its own for a browser without scripts), laid out
+ * with the form's fields in one grid. Collections keep render_admin_identity_form().
+ */
+function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, $dateSuggestion, $counts) {
+    $isRoot = $adminFolderPath === null;
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $name = $isRoot ? basename(__DIR__) : basename($adminFolderPath);
+    $open = inside_box_is_custom($itemsHere, $isRoot);
+    $flatRows = !$isRoot && AUTO_GROUP_BY_FOLDER;
+?>
+    <div class="fs-grid<?= $isRoot ? ' root' : '' ?>">
+    <form method="post" class="identity-form">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="save_folder_identity">
+      <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
+      <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
+        <div class="field fs-name">
+          <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <input type="text" name="display_name" aria-label="Name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
+          <?php if ($isRoot): ?>
+            <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
+          <?php else: ?>
+            <p class="hint">Shown on its cover card instead of "<?= $esc($name) ?>".</p>
+          <?php endif; ?>
+        </div>
+        <div class="field fs-dates">
+          <label>Dates (optional) <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <input type="text" name="dates" aria-label="Dates" maxlength="80" data-count="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
+            <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
+              <button type="button" class="linklike date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
+          <?php endif; ?>
+        </div>
+        <?php if (!$isRoot): ?>
+        <div class="field fs-pos">
+          <label>Position <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <input type="number" name="sort_order" aria-label="Position" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
+          <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
+        </div>
+        <?php endif; ?>
+        <?php if ($isRoot || AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
+        <div class="field wide fs-desc">
+          <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <textarea name="description" aria-label="Description" maxlength="1000" data-count="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
+        </div>
+        <details class="field wide fs-inside inside-box sort-details"<?= $open ? ' open' : '' ?>>
+          <summary><span class="ib-title"><?= $isRoot ? 'Photo order' : 'Inside this folder' ?></span><span class="ib-sum"><?= $esc(inside_box_summary($itemsHere, $isRoot)) ?></span><span class="rowstate" role="status" aria-live="polite"></span><span class="ib-chev" aria-hidden="true">&#8250;</span></summary>
+          <div class="ib-body">
+<?php if ($flatRows):
+          $siteFlat = in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+          $ownStyle = (string) ($itemsHere['subfolderStyle'] ?? ''); $ownNames = $itemsHere['flatNames'] ?? null; $ownNotes = $itemsHere['flatNotes'] ?? null;
+          $nowFlat = $ownStyle !== '' ? $ownStyle === 'flat' : $siteFlat;
+          $nowNames = is_bool($ownNames) ? $ownNames : FOLDER_FLAT_NAMES; ?>
+            <div class="flat-choices" data-site-flat="<?= $siteFlat ? '1' : '0' ?>" data-site-names="<?= FOLDER_FLAT_NAMES ? '1' : '0' ?>" data-site-notes="<?= FOLDER_FLAT_NOTES ? '1' : '0' ?>">
+              <div class="flat-choice ib-row">
+                <label>Folders inside it <span class="rowstate" role="status" aria-live="polite"></span></label>
+                <div class="ib-ctl"><?= ui_segmented_site('subfolder_style', ['overview' => 'Cards', 'flat' => 'Flat'], $siteFlat ? 'flat' : 'overview', $ownStyle, 'Folders inside it') ?></div>
+              </div>
+              <div class="flat-choice ib-row" data-flat-row="names"<?= $nowFlat ? '' : ' hidden' ?>>
+                <label>Show folder names <span class="rowstate" role="status" aria-live="polite"></span></label>
+                <div class="ib-ctl"><?= ui_segmented_site('flat_names', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NAMES ? '1' : '0', is_bool($ownNames) ? ($ownNames ? '1' : '0') : '', 'Show folder names') ?></div>
+              </div>
+              <div class="flat-choice ib-row" data-flat-row="notes"<?= $nowFlat && $nowNames ? '' : ' hidden' ?>>
+                <label>Notes under folders <span class="rowstate" role="status" aria-live="polite"></span></label>
+                <div class="ib-ctl"><?= ui_segmented_site('flat_notes', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NOTES ? '1' : '0', is_bool($ownNotes) ? ($ownNotes ? '1' : '0') : '', 'Notes under folders') ?></div>
+              </div>
+            </div>
+<?php endif; ?>
+<?php render_admin_sort_rows($itemsHere); ?>
+          </div>
+        </details>
+      </div>
+      <?php // Every field saves by itself as it is changed (the page's script); the button is only here for a browser without JavaScript. ?>
+      <div class="nojs-only"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
+    </form>
+<?php if (!$isRoot) render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts); ?>
+    </div>
+<?php
+}
+
 /**
  * The settings the admin's "Settings" screen can change: one table that
  * drives both the form and the validation, so nothing outside it can ever be

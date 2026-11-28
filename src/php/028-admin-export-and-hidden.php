@@ -321,7 +321,10 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (!empty($d['groups'])) $set[] = ['', count((array) $d['groups']) . ' group' . (count((array) $d['groups']) === 1 ? '' : 's')];
         // The folder's cover photo, shown as a picture in its card (not as a setting): its path, or missing when the file is gone.
         $cover = null;
-        if (is_string($d['cover'] ?? null) && $d['cover'] !== '') {
+        if (($d['cover'] ?? null) === COVER_LATEST || ($d['cover'] ?? null) === COVER_RANDOM) {   // (chosen by rule: shown as what it comes to today)
+            $latest = $d['cover'] === COVER_LATEST;
+            $cover = ['name' => $latest ? 'the most recent photo' : 'a random photo', 'file' => $path === '' ? root_cover_choice($dir, $files, $d['cover']) : pick_folder_cover(folder_files_under($files, $path), $d['cover'], $path)];
+        } elseif (is_string($d['cover'] ?? null) && $d['cover'] !== '') {
             $cf = ($path === '' ? '' : $path . '/') . $d['cover'];   // (a photo in the folder itself, or, with a / in it, one in a folder under it)
             $cover = ['name' => $d['cover'], 'file' => in_array($cf, strpos($d['cover'], '/') !== false ? $files : ($byFolder[$path] ?? []), true) ? $cf : null];
         } elseif (is_string($d['coverFollow'] ?? null) && $d['coverFollow'] !== '' && $path !== '') {
@@ -504,70 +507,129 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
 
 /** What the Cover photo row of a folder's settings shows, for the owner (every photo counts, private or not): the picture in use, how it was
  *  chosen, and the folders directly under it with the cover each one shows. Null when the folder holds no folder with photos in it. */
-function admin_cover_state($dir, $files, $folderPath) {
-    $prefix = $folderPath . '/';
-    $members = folder_files_under($files, $folderPath);
+function admin_cover_state($dir, $files, $folderPath) {   // $folderPath null: the front page
+    $isRoot = $folderPath === null;
+    $prefix = $isRoot ? '' : $folderPath . '/';
+    $members = $isRoot ? array_values($files) : folder_files_under($files, $folderPath);
     $kids = []; $own = 0;
     foreach ($members as $f) {
         $rest = substr($f, strlen($prefix)); $slash = strpos($rest, '/');
         if ($slash === false) $own++; else $kids[substr($rest, 0, $slash)] = true;
     }
-    if (!$kids) return null;
+    $items = $members ? items_get_all_for_files($dir, $members) : [];
     $label = function ($path, $fallback) use ($dir) { $l = folder_display_meta($dir, $path)['label']; return $l !== '' ? $l : $fallback; };
-    $spec = folder_display_meta($dir, $folderPath)['cover'];
-    $file = pick_folder_cover($members, $spec, $folderPath);
+    // What a visitor gets is what the row shows: the owner sees everything, so the pick is made from what a stranger could see (the front page: public photos only, nothing narrower).
+    $seen = function ($list) use ($dir, $items, $isRoot, $folderPath) {
+        $segs = $isRoot ? 0 : substr_count($folderPath, '/') + 1;
+        $pub = array_values(array_filter($list, function ($f) use ($dir, $items, $isRoot, $segs) {
+            if ($isRoot) return root_cover_allows($dir, $f, $items);
+            $q = quiet_root_depth($dir, $f);   // (an Unlisted folder beneath this one is left out of its page, so out of its cover too)
+            return !file_is_hidden($dir, $f, $items) && ($q === 0 || $q <= $segs);
+        }));
+        return $pub ?: ($isRoot ? [] : array_values($list));   // (a folder with nothing public: the owner's own view of it)
+    };
+    $spec = $isRoot ? root_display_meta($dir)['cover'] : folder_display_meta($dir, $folderPath)['cover'];
+    $mine = $seen($members);
+    $name = function ($f) { return $f === null ? '' : basename($f); };
     $childOf = function ($f) use ($prefix) { $rest = substr((string) $f, strlen($prefix)); $slash = strpos($rest, '/'); return $slash === false ? '' : substr($rest, 0, $slash); };
-    $src = $childOf($file);
-    if ($spec === null) { $mode = 'auto'; $title = $own || $src === '' ? 'Automatic: the first photo in it' : 'Automatic: the cover of ' . $label($prefix . $src, $src); $small = $own || $src === '' ? 'Nothing chosen.' : 'Its first folder. Nothing chosen.'; }
-    elseif (strncmp($spec, 'follow:', 7) === 0) { $mode = 'follow'; $title = 'Follows the cover of ' . $label($prefix . substr($spec, 7), substr($spec, 7)); $small = 'Change that folder\'s cover and this changes too.'; }
-    elseif (strpos($spec, '/') !== false) { $mode = 'pin'; $title = 'Chosen: ' . $label($prefix . $childOf($prefix . $spec), $childOf($prefix . $spec)) . ' / ' . basename($spec); $small = 'That photo, whatever the folder\'s own cover is.'; }
-    else { $mode = 'pin'; $title = 'Chosen: ' . $spec; $small = 'A photo in this folder.'; }
-    $tiles = [];
-    foreach (order_folder_children($dir, $prefix, array_keys($kids)) as $name) {
-        $under = array_values(array_filter($members, function ($f) use ($prefix, $name) { return strncmp($f, $prefix . $name . '/', strlen($prefix . $name) + 1) === 0; }));
-        $cspec = folder_display_meta($dir, $prefix . $name)['cover'];
-        $cf = pick_folder_cover($under, $cspec, $prefix . $name);
-        $rec = items_read(resolve_real_path($dir, $prefix . $name));
-        $tiles[] = ['name' => $name, 'label' => $label($prefix . $name, $name), 'file' => $cf, 'url' => $cf !== null ? img_url($cf, 'cover') : '', 'chosen' => $cspec !== null,
-            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'only me' : 'private') : (quiet_flag_of($rec) ? 'unlisted' : '')];
+    $file = null; $from = ''; $notPublic = false;
+    if ($spec === null) {
+        $mode = 'auto';
+        if ($isRoot) { $file = null; foreach ($seen($members) as $f) { $file = $f; break; } $title = 'Automatic: one of your folders\' covers'; $small = 'A different one each day. Nothing chosen.'; $pool = []; foreach (array_map('strval', array_keys($kids)) as $k) { $u = $seen(folder_files_under($members, $k)); $c = $u ? pick_folder_cover($u, folder_display_meta($dir, $k)['cover'], $k) : null; if ($c !== null && !is_video_file($c)) $pool[] = $c; } if ($pool) $file = $pool[crc32(gmdate('Y-m-d') . '|' . $dir) % count($pool)]; }
+        else {
+            $file = pick_folder_cover($mine, null, $folderPath); $src = $childOf($file);
+            $title = $own || $src === '' ? 'Automatic: the first photo in it' : 'Automatic: the cover of ' . $label($prefix . $src, $src);
+            $small = $own || $src === '' ? 'Nothing chosen.' : 'Its first folder. Nothing chosen.';
+            $from = $own ? '' : $src;
+        }
+    } elseif ($spec === COVER_LATEST) {
+        $mode = 'latest'; $file = $isRoot ? root_cover_choice($dir, $members, $spec, $items) : pick_folder_cover($mine, $spec, $folderPath);
+        $title = 'Most recent photo'; $small = ($isRoot ? 'The newest public photo in the whole gallery' : 'The newest photo in it by date taken') . ($file !== null ? ' (now: ' . $name($file) . ')' : '') . '. ' . ($isRoot ? 'Used when the gallery is shared.' : 'It changes as photos are added.');
+    } elseif ($spec === COVER_RANDOM) {
+        $mode = 'random'; $file = $isRoot ? root_cover_choice($dir, $members, $spec, $items) : pick_folder_cover($mine, $spec, $folderPath);
+        $title = 'A random photo'; $small = 'A different photo each day' . ($file !== null ? ' (today: ' . $name($file) . ')' : '') . ($isRoot ? ', from the whole gallery\'s public photos.' : '.');
+    } elseif (strncmp($spec, 'follow:', 7) === 0 && !$isRoot) {
+        $mode = 'follow'; $file = pick_folder_cover($mine, $spec, $folderPath); $from = substr($spec, 7);
+        $title = 'Follows the cover of ' . $label($prefix . $from, $from); $small = 'Change that folder\'s cover and this changes too.';
+    } else {
+        $mode = 'pin';
+        if ($isRoot) {
+            $notPublic = !in_array($spec, $members, true) || !root_cover_allows($dir, $spec, $items);
+            $file = in_array($spec, $members, true) ? $spec : null;
+            $title = 'Chosen: ' . basename($spec);
+            $small = $notPublic ? 'That photo is not public (or is gone), so visitors see the automatic pick instead. Choose another.' : 'That photo, whatever else the gallery holds.';
+        } else {
+            $file = pick_folder_cover($mine, $spec, $folderPath);
+            if (strpos($spec, '/') !== false) { $title = 'Chosen: ' . $label($prefix . $childOf($prefix . $spec), $childOf($prefix . $spec)) . ' / ' . basename($spec); $small = 'That photo, whatever the folder\'s own cover is.'; $from = ''; }
+            else { $title = 'Chosen: ' . $spec; $small = 'A photo in this folder.'; }
+        }
     }
-    return ['mode' => $mode, 'title' => $title, 'small' => $small, 'file' => $file, 'url' => $file !== null ? img_url($file, 'cover') : '', 'from' => $mode === 'follow' ? substr($spec, 7) : ($mode === 'auto' ? $src : ''), 'tiles' => $tiles];
+    $tiles = []; $tabs = [];
+    $ownCount = 0; foreach ($members as $f) { if (strpos(substr($f, strlen($prefix)), '/') === false && !is_video_file($f) && (!$isRoot || root_cover_allows($dir, $f, $items))) $ownCount++; }
+    if ($ownCount > 0) $tabs[] = ['child' => '', 'label' => $isRoot ? 'Front page' : 'This folder'];
+    foreach (order_folder_children($dir, $prefix, array_keys($kids)) as $kname) {
+        $under = array_values(array_filter($members, function ($f) use ($prefix, $kname) { return strncmp($f, $prefix . $kname . '/', strlen($prefix . $kname) + 1) === 0; }));
+        $vis = $isRoot ? array_values(array_filter($under, function ($f) use ($dir, $items) { return root_cover_allows($dir, $f, $items); })) : $under;
+        if ($isRoot && !$vis) continue;   // (a folder with nothing public in it is not offered for the front page)
+        $cspec = folder_display_meta($dir, $prefix . $kname)['cover'];
+        $cf = pick_folder_cover($isRoot ? $vis : $under, $cspec, $prefix . $kname);
+        $rec = items_read(resolve_real_path($dir, $prefix . $kname));
+        $tiles[] = ['name' => $kname, 'label' => $label($prefix . $kname, $kname), 'file' => $cf, 'url' => $cf !== null ? img_url($cf, 'cover') : '', 'chosen' => $cspec !== null,
+            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'only me' : 'private') : (quiet_flag_of($rec) ? 'unlisted' : '')];
+        $tabs[] = ['child' => $kname, 'label' => $label($prefix . $kname, $kname)];
+    }
+    return ['mode' => $mode, 'title' => $title, 'small' => $small, 'file' => $file, 'url' => $file !== null ? img_url($file, 'cover') : '', 'from' => $from, 'tiles' => $tiles, 'tabs' => $tabs,
+            'root' => $isRoot, 'hasKids' => (bool) $kids, 'notPublic' => $notPublic];
 }
 
-/** The Cover photo row (folder settings, above the description) of a folder that holds folders: the cover in use and a picker with a tile for each
- *  folder under it. The page's script (data-cover) does the rest. */
+/** The Cover photo row (folder settings, under the name; the front page's, under its title): the cover in use as a small card (its picture, what it is, "Pick a photo…", and for a
+ *  folder that holds folders "Follow a folder…"), the choices Automatic, Most recent and Random, and two pickers the page's script opens: a photo (the front page offers public ones only)
+ *  and, for a folder that holds folders, the folder whose cover this follows. Each choice is one request and shows at once. */
 function render_admin_cover_row($folderPath) {
     $dir = $GLOBALS['dir']; $files = $GLOBALS['__admin_files'] ?? [];
     $st = admin_cover_state($dir, $files, $folderPath);
-    if ($st === null) return;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $modes = ['auto' => 'Automatic', 'latest' => 'Most recent', 'random' => 'Random'];
+    $hint = $st['root'] ? 'Automatic rotates through the covers of your folders each day. Only public photos can be chosen.' : 'Random is a different photo each day. Pressing the star on a photo picks that one instead.';
 ?>
-        <div class="field wide cover-field" data-cover>
+        <div class="field cover-field fs-cover" data-cover data-root="<?= $st['root'] ? '1' : '0' ?>">
           <label>Cover photo <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <div class="cv-row">
-            <img class="cv-img" src="<?= $esc($st['url']) ?>" alt=""<?= $st['url'] === '' ? ' hidden' : '' ?>>
-            <div class="cv-main"><b class="cv-title"><?= $esc($st['title']) ?></b><small class="cv-small"><?= $esc($st['small']) ?></small></div>
-            <div class="cv-acts"><button type="button" class="secondary cv-choose">Choose&hellip;</button><button type="button" class="secondary cv-auto"<?= $st['mode'] === 'auto' ? ' hidden' : '' ?>>Automatic</button></div>
+          <div class="cv-card">
+            <div class="cv-row">
+              <img class="cv-img" src="<?= $esc($st['url']) ?>" alt=""<?= $st['url'] === '' ? ' hidden' : '' ?>>
+              <div class="cv-main"><b class="cv-title"><?= $esc($st['title']) ?></b><small class="cv-small"><?= $esc($st['small']) ?></small></div>
+            </div>
+            <div class="cv-acts"><button type="button" class="secondary cv-choose">Pick a photo&hellip;</button><?php if ($st['hasKids'] && !$st['root']): ?><button type="button" class="secondary cv-follow">Follow a folder&hellip;</button><?php endif; ?></div>
           </div>
+          <div class="seg seg-cover" role="radiogroup" aria-label="How the cover is chosen">
+<?php foreach ($modes as $v => $nm): ?>
+            <label><input type="radio" name="cover_mode" value="<?= $esc($v) ?>"<?= $st['mode'] === $v ? ' checked' : '' ?>><span><?= $esc($nm) ?></span></label>
+<?php endforeach; ?>
+          </div>
+          <p class="hint cv-hint"><?= $esc($hint) ?></p>
           <div class="cv-pick" hidden>
+            <h4>Pick a photo</h4>
+            <p class="cv-pick-note"><?= $st['root'] ? 'Public photos only: the front page is what everyone sees.' : 'This photo is the cover whatever else changes.' ?></p>
+            <div class="cv-tabs">
+<?php foreach ($st['tabs'] as $t): ?>
+              <button type="button" class="cv-tab" data-child="<?= $esc($t['child']) ?>"><?= $esc($t['label']) ?></button>
+<?php endforeach; ?>
+            </div>
+            <div class="cv-photos"><?= $st['tabs'] ? '' : 'There are no photos to pick from here.' ?></div>
+            <div class="cv-foot"><button type="button" class="secondary cv-cancel">Cancel</button></div>
+          </div>
+<?php if ($st['hasKids'] && !$st['root']): ?>
+          <div class="cv-follow-pick" hidden>
             <h4>Show the cover of&hellip;</h4>
             <p>This folder follows that folder's cover: change it there and this changes too.</p>
             <div class="cv-grid">
 <?php foreach ($st['tiles'] as $t): ?>
-              <button type="button" class="cv-tile<?= $t['name'] === $st['from'] ? ' sel' : '' ?>" data-child="<?= $esc($t['name']) ?>"><?php if ($t['url'] !== ''): ?><img src="<?= $esc($t['url']) ?>" alt="" loading="lazy"><?php endif; ?><i aria-hidden="true">&#10003;</i><span><?= $esc($t['label']) ?><?= $t['state'] !== '' ? ' <em>' . $esc($t['state']) . '</em>' : '' ?> <small><?= $t['chosen'] ? 'chosen' : 'automatic' ?></small></span></button>
+              <button type="button" class="cv-tile<?= $t['name'] === $st['from'] && $st['mode'] === 'follow' ? ' sel' : '' ?>" data-child="<?= $esc($t['name']) ?>"><?php if ($t['url'] !== ''): ?><img src="<?= $esc($t['url']) ?>" alt="" loading="lazy"><?php endif; ?><i aria-hidden="true"></i><b><?= $esc($t['label']) ?></b><?php if ($t['state'] !== ''): ?><small><?= $esc($t['state']) ?></small><?php endif; ?></button>
 <?php endforeach; ?>
             </div>
-            <div class="cv-foot"><button type="button" class="linklike cv-any">Pick any photo instead&hellip;</button><button type="button" class="secondary cv-cancel">Cancel</button></div>
-            <div class="cv-anywhere" hidden>
-              <p>A photo in:</p>
-              <div class="cv-tabs">
-<?php foreach ($st['tiles'] as $t): ?>
-                <button type="button" class="cv-tab" data-child="<?= $esc($t['name']) ?>"><?= $esc($t['label']) ?></button>
-<?php endforeach; ?>
-              </div>
-              <div class="cv-photos"></div>
-            </div>
+            <div class="cv-foot"><button type="button" class="secondary cv-cancel">Cancel</button></div>
           </div>
+<?php endif; ?>
         </div>
 <?php
 }
@@ -649,9 +711,11 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     $ownExplicit = array_key_exists('ownGallery', $itemsHere) && is_bool($itemsHere['ownGallery']) ? $itemsHere['ownGallery'] : null;
     $ownOn = $ownExplicit ?? $quiet;   // (an Unlisted folder is a gallery of its own unless the owner has said otherwise)
 ?>
+    <div class="fs-vis">
+    <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
     <div class="folder-switches">
     <div class="vis-choice<?= $follow !== null ? ' following' : '' ?>" id="vis-choice" data-level="<?= $esc($level) ?>" data-follow="<?= $follow !== null ? $esc($follow['level']) : '' ?>" data-from-name="<?= $follow !== null ? $esc($follow['label']) : '' ?>" data-above="<?= $above !== null ? $esc($above['level']) : '' ?>" data-above-name="<?= $above !== null ? $esc($above['label']) : '' ?>" data-above-path="<?= $above !== null ? $esc($above['path']) : '' ?>" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>" data-descs="<?= $esc(json_encode($descs)) ?>">
-      <label id="vis-label">Who can see this folder <span class="rowstate" role="status" aria-live="polite"></span></label>
+      
       <div class="seg vis-seg" role="radiogroup" aria-labelledby="vis-label">
         <?php foreach ($names as $v => $nm): $off = $follow !== null && $rank[$v] < $rank[$eff]; ?><label data-v="<?= $esc($v) ?>"<?= $off ? ' class="is-off" title="' . $esc('Cannot be more open than the folder above it (' . $follow['label'] . ' is ' . $names[$follow['level']] . ')') . '"' : '' ?>><input type="radio" name="vis" value="<?= $esc($v) ?>"<?= $eff === $v ? ' checked' : '' ?><?= $off ? ' disabled' : '' ?>><span><?= $esc($nm) ?></span></label><?php endforeach; ?>
       </div>
@@ -681,6 +745,7 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
       <?php endif; ?>
     </div>
     <?php endif; ?>
+    </div>
     </div>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
@@ -743,7 +808,7 @@ function admin_flag_payload($dir, $adminFolderPath, $key, $action, $field) {
     return ['following' => !$isRoot && $flag['own'] === null, 'on' => (bool) $flag['on'], 'html' => $html];
 }
 
-/** The "Metadata" section, last on a folder's (or the gallery's) settings: whether photo locations show, under that because it
+/** The "Media metadata" section, last on a folder's (or the gallery's) settings: whether photo locations show, under that because it
  *  only shows photos whose location is public the map. First comes whether the folder offers the viewer's info panel. */
 function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '', $dir = null) {
     $isRoot = $adminFolderPath === null;
@@ -751,7 +816,7 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
     $infoFlag = folder_flag_resolve($dir, $isRoot ? '' : $adminFolderPath, 'mediaInfo');
     $locOn = $locFlag['on'] && ENABLE_PHOTO_LOCATION;
 ?>
-    <h3 class="subhead">Metadata</h3>
+    <h3 class="subhead">Media metadata</h3>
     <?php $infoJump = !INFO_PANEL ? ' (the info panel is off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-INFO_PANEL\');">Settings</a>)' : ''; ?>
     <div class="info-under<?= INFO_PANEL ? '' : ' no-info' ?>" id="info-under">
       <?php render_admin_instant_toggle($csrfToken, 'toggle_media_info', 'info', $infoFlag['on'], $isRoot ? 'Show media info to visitors at the root' : 'Show media info to visitors for this folder', '', $infoJump, '', !$isRoot && $infoFlag['own'] === null); render_admin_flag_source($csrfToken, 'toggle_media_info', 'info', $infoFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'mediaInfo')['on']); ?>
@@ -760,6 +825,7 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
           render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag['on'], $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump, '', !$isRoot && $locFlag['own'] === null);
           render_admin_flag_source($csrfToken, 'toggle_location_enabled', 'enabled', $locFlag, $isRoot, $dir, $isRoot ? null : folder_flag_inherited($dir, $adminFolderPath, 'locationEnabled')['on']); ?>
+    <div class="loc-group">
     <?php if (ENABLE_PHOTO_LOCATION): ?>
     <div class="loc-keep"<?= $locFlag['on'] ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
@@ -775,6 +841,7 @@ function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath
       <p class="warn-note map-loc-note">Locations are off for this folder, so its map has nothing to show. A photo you set to show its location on its own still appears.</p>
       <?php endif; ?>
       <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot, $dir, $adminFolderPath); ?>
+    </div>
     </div>
 <?php
 }

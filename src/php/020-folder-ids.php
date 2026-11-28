@@ -483,8 +483,9 @@ function link_preview_picture($l, $dir, $draft = null) {
     // The owner's own choice, looked at again every time it is used: a photo that has since gone private, been deleted or fallen outside what the link covers is not in the list, and the automatic pick takes over.
     $chosen = (string) ($l['pictureFile'] ?? '');
     if ($chosen !== '' && $photo($chosen) && in_array($chosen, $public, true)) return $chosen;
-    $rootCover = root_display_meta($dir)['cover'];
-    if ($rootCover !== null && in_array($rootCover, $public, true) && $photo($rootCover)) return $rootCover;
+    // The front page's own choice (a photo anywhere in the gallery, the newest, or one a day), from the public photos this link covers (and nothing narrower than Public).
+    $rootCover = root_cover_choice($dir, $public, root_display_meta($dir)['cover']);
+    if ($rootCover !== null && $photo($rootCover)) return $rootCover;
     $level = split_folder_level($public, '');
     $pool = [];
     foreach ($level['folders'] as $top => $members) {

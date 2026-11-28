@@ -1148,6 +1148,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!in_array($adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare, $files, true)) {
             return ['type' => 'error', 'text' => 'Unknown file.'];
         }
+        if ($adminFolderPath === null && !root_cover_allows($dir, $bare)) {   // (the front page is what everyone sees: nothing narrower than Public, no video)
+            return ['type' => 'error', 'text' => 'Only a public photo can be the front page\'s cover.'];
+        }
         items_update($adminFolderReal, function (&$data) use ($bare) {
             $data['cover'] = $bare;
             unset($data['coverFollow']);   // (the latest choice is the one that counts)
@@ -1155,34 +1158,48 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'text' => '"' . $bare . '" set as ' . ($adminFolderPath === null ? 'the front page\'s cover photo (a shared link\'s preview may use it).' : 'this folder\'s cover photo.')];
     }
 
-    // The cover of a folder that holds folders: follow the cover of one folder under it, a photo from anywhere inside it, or back to automatic.
-    // What it follows or holds is checked against the folder's own files here, never taken from the request.
+    // A folder's cover (and the front page's): automatic, the newest photo, one a day, a photo picked, or (a folder that holds folders) the cover of one folder under it.
+    // What it follows or holds is checked against the gallery's own files here, never taken from the request; the front page takes public photos only.
     if ($action === 'set_folder_cover') {
-        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
-        $prefix = $adminFolderPath . '/'; $mode = (string) ($_POST['mode'] ?? '');
+        $isRoot = $adminFolderPath === null;
+        $prefix = $isRoot ? '' : $adminFolderPath . '/'; $mode = (string) ($_POST['mode'] ?? '');
+        $targetReal = $isRoot ? $dir : $adminFolderReal;
         if ($mode === 'auto') {
-            items_update($adminFolderReal, function (&$data) { unset($data['cover'], $data['coverFollow']); });
+            items_update($targetReal, function (&$data) { unset($data['cover'], $data['coverFollow']); });
             $text = 'The cover is automatic again.';
+        } elseif ($mode === 'latest' || $mode === 'random') {
+            $word = $mode === 'latest' ? COVER_LATEST : COVER_RANDOM;
+            items_update($targetReal, function (&$data) use ($word) { $data['cover'] = $word; unset($data['coverFollow']); });
+            $text = $mode === 'latest' ? 'The cover is now the most recent photo.' : 'The cover is now a random photo, a different one each day.';
         } elseif ($mode === 'follow') {
+            if ($isRoot) return ['type' => 'error', 'text' => 'The front page has no folder cover to follow: pick a photo instead.'];
             $child = (string) ($_POST['child'] ?? '');
             $has = false; foreach ($files as $f) if (strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0) { $has = true; break; }
             if ($child === '' || strpbrk($child, "/\\") !== false || !$has) return ['type' => 'error', 'text' => 'Unknown folder: nothing was changed.'];
-            items_update($adminFolderReal, function (&$data) use ($child) { unset($data['cover']); $data['coverFollow'] = $child; });
+            items_update($targetReal, function (&$data) use ($child) { unset($data['cover']); $data['coverFollow'] = $child; });
             $text = 'This folder now shows the cover of that folder.';
         } elseif ($mode === 'pin') {
             $rel = (string) ($_POST['file'] ?? '');
-            if ($rel === '' || strpos($rel, '/') === false || !in_array($prefix . $rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown photo: nothing was changed.'];
-            items_update($adminFolderReal, function (&$data) use ($rel) { $data['cover'] = $rel; unset($data['coverFollow']); });
-            $text = '"' . basename($rel) . '" is now this folder\'s cover.';
+            if ($rel === '' || !in_array($prefix . $rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown photo: nothing was changed.'];
+            if ($isRoot && !root_cover_allows($dir, $rel)) return ['type' => 'error', 'text' => 'Only a public photo can be the front page\'s cover: nothing was changed.'];
+            if (!$isRoot && is_video_file($rel)) return ['type' => 'error', 'text' => 'A video can\'t be a cover: nothing was changed.'];
+            items_update($targetReal, function (&$data) use ($rel) { $data['cover'] = $rel; unset($data['coverFollow']); });
+            $text = '"' . basename($rel) . '" is now ' . ($isRoot ? 'the front page\'s cover.' : 'this folder\'s cover.');
         } else return ['type' => 'error', 'text' => 'Unknown choice.'];
         return ['type' => 'ok', 'text' => $text, 'cover' => admin_cover_state($dir, $files, $adminFolderPath)];
     }
-    // The photos inside one folder under this one (the first 300, in the folder's own order), for choosing one as the cover.
+    // The photos to pick a cover from: this folder's own ("child" empty) or those inside one folder under it, in the folder's own order (the first 300). The front page lists public
+    // photos only, from anywhere in the gallery.
     if ($action === 'cover_photos') {
-        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
-        $prefix = $adminFolderPath . '/'; $child = (string) ($_POST['child'] ?? '');
-        if ($child === '' || strpbrk($child, "/\\") !== false) return ['type' => 'error', 'text' => 'Unknown folder.'];
-        $under = array_values(array_filter($files, function ($f) use ($prefix, $child) { return strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0 && !is_video_file($f); }));
+        $isRoot = $adminFolderPath === null;
+        $prefix = $isRoot ? '' : $adminFolderPath . '/'; $child = (string) ($_POST['child'] ?? '');
+        if (strpbrk($child, "/\\") !== false) return ['type' => 'error', 'text' => 'Unknown folder.'];
+        $under = array_values(array_filter($files, function ($f) use ($prefix, $child) {
+            if ($child === '') return strncmp($f, $prefix, strlen($prefix)) === 0 && strpos(substr($f, strlen($prefix)), '/') === false;
+            return strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0;
+        }));
+        $under = array_values(array_filter($under, function ($f) { return !is_video_file($f); }));
+        if ($isRoot && $under) { $items = items_get_all_for_files($dir, $under); $under = array_values(array_filter($under, function ($f) use ($dir, $items) { return root_cover_allows($dir, $f, $items); })); }
         $out = [];
         foreach (array_slice($under, 0, 300) as $f) $out[] = ['path' => substr($f, strlen($prefix)), 'url' => img_url($f, 'cover')];
         return ['type' => 'ok', 'text' => '', 'photos' => $out, 'more' => count($under) > 300];

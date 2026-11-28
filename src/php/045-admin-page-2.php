@@ -106,18 +106,15 @@
   <?php elseif ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath)), 'main'); ?>
-    <?php render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath)); ?>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, null, 'sort'); ?>
+    <?php render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath)), folder_privacy_counts($dir, $files, $adminFolderPath)); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, $adminFolderPath, $csrfToken); ?>
     <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus, $dir); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files), 'main'); ?>
+    <?php render_admin_folder_settings($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files), null); ?>
     <?php render_admin_root_downloads($csrfToken); ?>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, null, null, 'sort'); ?>
     <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, '', $csrfToken); ?>
     <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus, $dir); ?>
   </section>
