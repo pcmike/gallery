@@ -914,6 +914,9 @@
   [].forEach.call(document.querySelectorAll('.identity-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, hashInput = form.querySelector('input[name=loaded_hash]');
+    // The form's fields may sit outside it (in the folder's grid, tied to it by their form attribute): look for them in the grid, and keep to the ones that belong to this form.
+    var scope = form.closest('.fs-grid') || form;
+    var mine = function (list) { return [].filter.call(list, function (el) { return el.form === form; }); };
     function say(node, text, kind) {
       if (!node) return;
       node.textContent = text; node.className = 'rowstate ' + (kind || '');
@@ -941,7 +944,7 @@
       });
     }
     // How this folder shows the folders under it (and, in Flat, their names and notes): each press saves at once; the names and notes rows only show while they matter.
-    var flatBox = form.querySelector('.flat-choices');
+    var flatBox = scope.querySelector('.flat-choices');
     function flatSync() {
       if (!flatBox) return;
       var val = function (n) { var c = flatBox.querySelector('input[name=' + n + ']:checked'); return c ? c.value : ''; };
@@ -950,13 +953,13 @@
       var rn = flatBox.querySelector('[data-flat-row=names]'), rt = flatBox.querySelector('[data-flat-row=notes]');
       if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
     }
-    [].forEach.call(form.querySelectorAll('.flat-choices .seg-site input[type=radio]'), function (r) {   // (the order choices have their own handler below: they send the whole group)
+    [].forEach.call(scope.querySelectorAll('.flat-choices .seg-site input[type=radio]'), function (r) {   // (the order choices have their own handler below: they send the whole group)
       r.addEventListener('change', function () {
         flatSync(); post([[r.name, r.value]], stateOf(r));
         var src = r.closest('.flat-choice') && r.closest('.flat-choice').querySelector('.seg-src'); if (src) src.setAttribute('data-own', r.value === '' ? '0' : '1');   // (the line under it: Settings' choice, or this folder's own)
       });
     });
-    [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
+    mine(scope.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]')).forEach(function (el) {
       var saved = el.value, timer = 0;
       function go() {
         clearTimeout(timer);
@@ -979,9 +982,9 @@
       el.addEventListener('saved-externally', function () { saved = el.value; });
     });
     // "Use these dates" fills the field, which then saves like a typed one.
-    [].forEach.call(form.querySelectorAll('.date-suggest'), function (b) {
+    [].forEach.call(scope.querySelectorAll('.date-suggest'), function (b) {
       b.addEventListener('click', function () {
-        var inp = form.querySelector('input[name=dates]'); if (!inp) return;
+        var inp = scope.querySelector('input[name=dates]'); if (!inp) return;
         inp.value = b.getAttribute('data-dates'); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.blur();
         var hint = b.closest('.hint'); if (hint) hint.hidden = true;
       });
@@ -1006,7 +1009,7 @@
       }
       sum.textContent = parts.join(' \u00b7 ');
     }
-    [].forEach.call(form.querySelectorAll('details.sort-details'), function (det) {
+    [].forEach.call(scope.querySelectorAll('details.sort-details'), function (det) {
       var timer = 0, node = det.querySelector('summary .rowstate');
       function send() {
         var f = [];
@@ -3057,7 +3060,7 @@
   // page lists public photos only: the server says which) and, for a folder that holds folders, a picker for the folder whose cover this follows. Each choice is one request and
   // shows at once.
   [].forEach.call(document.querySelectorAll('[data-cover]'), function (box) {
-    var form = box.closest('form'), csrf = form ? form.querySelector('input[name=csrf_token]').value : '';
+    var csrf = (document.querySelector('.identity-form input[name=csrf_token]') || {}).value || '';
     var pick = box.querySelector('.cv-pick'), follow = box.querySelector('.cv-follow-pick'), state = box.querySelector('.rowstate');
     var radios = [].slice.call(box.querySelectorAll('input[name=cover_mode]'));
     function checkedMode() { var c = radios.filter(function (r) { return r.checked; })[0]; return c ? c.value : ''; }

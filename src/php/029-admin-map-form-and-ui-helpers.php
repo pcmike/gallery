@@ -339,11 +339,12 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
     $flatRows = !$isRoot && AUTO_GROUP_BY_FOLDER;
 ?>
     <div class="fs-grid<?= $isRoot ? ' root' : '' ?>">
-    <form method="post" class="identity-form">
+    <form method="post" class="identity-form" id="identity-form" hidden>
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
-      <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
+    </form>
+<?php ob_start(); ?>
         <div class="field fs-name">
           <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="display_name" aria-label="Name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
@@ -369,6 +370,9 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
         </div>
         <?php endif; ?>
         <?php if ($isRoot || AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
+<?php echo fs_attach_to_form(ob_get_clean(), 'identity-form');
+      if (!$isRoot) render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts);   // (in the page between the cover and the description, as on screen: the keyboard goes the way the eye does)
+      ob_start(); ?>
         <div class="field wide fs-desc">
           <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
           <textarea name="description" aria-label="Description" maxlength="1000" data-count="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
@@ -400,13 +404,17 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
 <?php render_admin_sort_rows($itemsHere); ?>
           </div>
         </details>
-      </div>
       <?php // Every field saves by itself as it is changed (the page's script); the button is only here for a browser without JavaScript. ?>
-      <div class="nojs-only"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
-    </form>
-<?php if (!$isRoot) render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts); ?>
+      <div class="nojs-only fs-save"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
+<?php echo fs_attach_to_form(ob_get_clean(), 'identity-form'); ?>
     </div>
 <?php
+}
+
+/** The controls in $html belong to the form with this id (the form attribute), though they sit outside it: the folder's settings are one form whose fields are spread through a grid, with the
+ *  visibility block (which has forms of its own, and so can't be inside) in between, in the page in the order it is on screen. */
+function fs_attach_to_form($html, $formId) {
+    return preg_replace('~<(input|textarea|select|button)(?=[\s>])~', '<$1 form="' . $formId . '"', $html);
 }
 
 /**

@@ -13076,11 +13076,12 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
     $flatRows = !$isRoot && AUTO_GROUP_BY_FOLDER;
 ?>
     <div class="fs-grid<?= $isRoot ? ' root' : '' ?>">
-    <form method="post" class="identity-form">
+    <form method="post" class="identity-form" id="identity-form" hidden>
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
-      <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
+    </form>
+<?php ob_start(); ?>
         <div class="field fs-name">
           <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="display_name" aria-label="Name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
@@ -13106,6 +13107,9 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
         </div>
         <?php endif; ?>
         <?php if ($isRoot || AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
+<?php echo fs_attach_to_form(ob_get_clean(), 'identity-form');
+      if (!$isRoot) render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts);   // (in the page between the cover and the description, as on screen: the keyboard goes the way the eye does)
+      ob_start(); ?>
         <div class="field wide fs-desc">
           <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
           <textarea name="description" aria-label="Description" maxlength="1000" data-count="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
@@ -13137,13 +13141,17 @@ function render_admin_folder_settings($itemsHere, $csrfToken, $adminFolderPath, 
 <?php render_admin_sort_rows($itemsHere); ?>
           </div>
         </details>
-      </div>
       <?php // Every field saves by itself as it is changed (the page's script); the button is only here for a browser without JavaScript. ?>
-      <div class="nojs-only"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
-    </form>
-<?php if (!$isRoot) render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts); ?>
+      <div class="nojs-only fs-save"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
+<?php echo fs_attach_to_form(ob_get_clean(), 'identity-form'); ?>
     </div>
 <?php
+}
+
+/** The controls in $html belong to the form with this id (the form attribute), though they sit outside it: the folder's settings are one form whose fields are spread through a grid, with the
+ *  visibility block (which has forms of its own, and so can't be inside) in between, in the page in the order it is on screen. */
+function fs_attach_to_form($html, $formId) {
+    return preg_replace('~<(input|textarea|select|button)(?=[\s>])~', '<$1 form="' . $formId . '"', $html);
 }
 
 /**
@@ -21419,9 +21427,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .rowstate.err { color:var(--err); flex-basis:100%; text-align:right; min-width:0; }
   .rowstate.busy { color:#aab2ff; }
   /* The folder settings save by themselves: each field says so beside its label, and an error sits on its own line under it. */
-  .identity-form .field > label .rowstate, .identity-form summary .rowstate { margin-left:8px; min-width:0; }
-  .identity-form .rowstate.err { display:block; margin:1px 0 3px; text-align:left; }
-  .identity-form input.bad, .identity-form textarea.bad { border-color:var(--err); }
+  .identity-form .field > label .rowstate, .identity-form summary .rowstate, .fs-grid .field > label .rowstate, .fs-grid summary .rowstate { margin-left:8px; min-width:0; }
+  .identity-form .rowstate.err, .fs-grid .field .rowstate.err { display:block; margin:1px 0 3px; text-align:left; }
+  .identity-form input.bad, .identity-form textarea.bad, .fs-grid input.bad, .fs-grid textarea.bad { border-color:var(--err); }
   .folder-switches { display:flex; flex-direction:column; gap:10px; margin:14px 0 8px; }
   .folder-switches > .unlisted-form, .folder-switches > .unlisted-sub .unlisted-form, .folder-switches > .own-gallery-row .unlisted-form { margin:0; }
   .folder-switches > .unlisted-sub { display:flex; flex-direction:column; gap:10px; padding-left:54px; }   /* (indented under the Only me button, the switches' own width and gap, so they line up under its words) */
@@ -21803,7 +21811,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* ---- A folder's (or the gallery's) own settings: the form's fields and the visibility block in one grid ---- */
   .fs-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; align-items:start; }
   .fs-grid.root { grid-template-columns:2fr 1fr; }
-  .fs-grid > .identity-form, .fs-grid > .identity-form > .settings-grid { display:contents; }   /* (the form and its grid take no box of their own: the fields are the grid's items; the form still submits as one) */
+  .fs-grid > .identity-form[hidden] { display:none; }   /* (the folder's settings form holds only its hidden values; its fields sit in the grid and belong to it by their form attribute) */
+  .fs-grid input[type=number] { width:96px; max-width:100%; }
+  .fs-grid .fs-save { grid-column:1 / -1; grid-row:5; }
   .fs-grid .fs-name { grid-column:1; grid-row:1; min-width:0; }
   .fs-grid .fs-dates { grid-column:2; grid-row:1; min-width:0; }
   .fs-grid .fs-pos { grid-column:3; grid-row:1; min-width:0; }
@@ -23051,6 +23061,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   [].forEach.call(document.querySelectorAll('.identity-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, hashInput = form.querySelector('input[name=loaded_hash]');
+    // The form's fields may sit outside it (in the folder's grid, tied to it by their form attribute): look for them in the grid, and keep to the ones that belong to this form.
+    var scope = form.closest('.fs-grid') || form;
+    var mine = function (list) { return [].filter.call(list, function (el) { return el.form === form; }); };
     function say(node, text, kind) {
       if (!node) return;
       node.textContent = text; node.className = 'rowstate ' + (kind || '');
@@ -23078,7 +23091,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
     }
     // How this folder shows the folders under it (and, in Flat, their names and notes): each press saves at once; the names and notes rows only show while they matter.
-    var flatBox = form.querySelector('.flat-choices');
+    var flatBox = scope.querySelector('.flat-choices');
     function flatSync() {
       if (!flatBox) return;
       var val = function (n) { var c = flatBox.querySelector('input[name=' + n + ']:checked'); return c ? c.value : ''; };
@@ -23087,13 +23100,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var rn = flatBox.querySelector('[data-flat-row=names]'), rt = flatBox.querySelector('[data-flat-row=notes]');
       if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
     }
-    [].forEach.call(form.querySelectorAll('.flat-choices .seg-site input[type=radio]'), function (r) {   // (the order choices have their own handler below: they send the whole group)
+    [].forEach.call(scope.querySelectorAll('.flat-choices .seg-site input[type=radio]'), function (r) {   // (the order choices have their own handler below: they send the whole group)
       r.addEventListener('change', function () {
         flatSync(); post([[r.name, r.value]], stateOf(r));
         var src = r.closest('.flat-choice') && r.closest('.flat-choice').querySelector('.seg-src'); if (src) src.setAttribute('data-own', r.value === '' ? '0' : '1');   // (the line under it: Settings' choice, or this folder's own)
       });
     });
-    [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
+    mine(scope.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]')).forEach(function (el) {
       var saved = el.value, timer = 0;
       function go() {
         clearTimeout(timer);
@@ -23116,9 +23129,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       el.addEventListener('saved-externally', function () { saved = el.value; });
     });
     // "Use these dates" fills the field, which then saves like a typed one.
-    [].forEach.call(form.querySelectorAll('.date-suggest'), function (b) {
+    [].forEach.call(scope.querySelectorAll('.date-suggest'), function (b) {
       b.addEventListener('click', function () {
-        var inp = form.querySelector('input[name=dates]'); if (!inp) return;
+        var inp = scope.querySelector('input[name=dates]'); if (!inp) return;
         inp.value = b.getAttribute('data-dates'); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.blur();
         var hint = b.closest('.hint'); if (hint) hint.hidden = true;
       });
@@ -23143,7 +23156,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       }
       sum.textContent = parts.join(' \u00b7 ');
     }
-    [].forEach.call(form.querySelectorAll('details.sort-details'), function (det) {
+    [].forEach.call(scope.querySelectorAll('details.sort-details'), function (det) {
       var timer = 0, node = det.querySelector('summary .rowstate');
       function send() {
         var f = [];
@@ -25194,7 +25207,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   // page lists public photos only: the server says which) and, for a folder that holds folders, a picker for the folder whose cover this follows. Each choice is one request and
   // shows at once.
   [].forEach.call(document.querySelectorAll('[data-cover]'), function (box) {
-    var form = box.closest('form'), csrf = form ? form.querySelector('input[name=csrf_token]').value : '';
+    var csrf = (document.querySelector('.identity-form input[name=csrf_token]') || {}).value || '';
     var pick = box.querySelector('.cv-pick'), follow = box.querySelector('.cv-follow-pick'), state = box.querySelector('.rowstate');
     var radios = [].slice.call(box.querySelectorAll('input[name=cover_mode]'));
     function checkedMode() { var c = radios.filter(function (r) { return r.checked; })[0]; return c ? c.value : ''; }

@@ -885,9 +885,9 @@
   .rowstate.err { color:var(--err); flex-basis:100%; text-align:right; min-width:0; }
   .rowstate.busy { color:#aab2ff; }
   /* The folder settings save by themselves: each field says so beside its label, and an error sits on its own line under it. */
-  .identity-form .field > label .rowstate, .identity-form summary .rowstate { margin-left:8px; min-width:0; }
-  .identity-form .rowstate.err { display:block; margin:1px 0 3px; text-align:left; }
-  .identity-form input.bad, .identity-form textarea.bad { border-color:var(--err); }
+  .identity-form .field > label .rowstate, .identity-form summary .rowstate, .fs-grid .field > label .rowstate, .fs-grid summary .rowstate { margin-left:8px; min-width:0; }
+  .identity-form .rowstate.err, .fs-grid .field .rowstate.err { display:block; margin:1px 0 3px; text-align:left; }
+  .identity-form input.bad, .identity-form textarea.bad, .fs-grid input.bad, .fs-grid textarea.bad { border-color:var(--err); }
   .folder-switches { display:flex; flex-direction:column; gap:10px; margin:14px 0 8px; }
   .folder-switches > .unlisted-form, .folder-switches > .unlisted-sub .unlisted-form, .folder-switches > .own-gallery-row .unlisted-form { margin:0; }
   .folder-switches > .unlisted-sub { display:flex; flex-direction:column; gap:10px; padding-left:54px; }   /* (indented under the Only me button, the switches' own width and gap, so they line up under its words) */
@@ -1269,7 +1269,9 @@
   /* ---- A folder's (or the gallery's) own settings: the form's fields and the visibility block in one grid ---- */
   .fs-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; align-items:start; }
   .fs-grid.root { grid-template-columns:2fr 1fr; }
-  .fs-grid > .identity-form, .fs-grid > .identity-form > .settings-grid { display:contents; }   /* (the form and its grid take no box of their own: the fields are the grid's items; the form still submits as one) */
+  .fs-grid > .identity-form[hidden] { display:none; }   /* (the folder's settings form holds only its hidden values; its fields sit in the grid and belong to it by their form attribute) */
+  .fs-grid input[type=number] { width:96px; max-width:100%; }
+  .fs-grid .fs-save { grid-column:1 / -1; grid-row:5; }
   .fs-grid .fs-name { grid-column:1; grid-row:1; min-width:0; }
   .fs-grid .fs-dates { grid-column:2; grid-row:1; min-width:0; }
   .fs-grid .fs-pos { grid-column:3; grid-row:1; min-width:0; }

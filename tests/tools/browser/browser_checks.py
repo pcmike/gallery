@@ -2724,7 +2724,7 @@ try:
         b.goto(B18 + "/?admin&folder=Churches", 1.2)
         b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "p18-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.goto(B18 + "/?admin&folder=Churches", 1.5)
-        ok(b.js("(() => { const bt = document.querySelector('.identity-form .nojs-only button'); return !!bt && bt.offsetParent === null; })()"), "[settings] the folder settings have no Save button on screen (it is only for a browser without JavaScript)")
+        ok(b.js("(() => { const bt = document.querySelector('.fs-grid .nojs-only button'); return !!bt && bt.offsetParent === null; })()"), "[settings] the folder settings have no Save button on screen (it is only for a browser without JavaScript)")
         type18("input[name=display_name]", "Churches of Europe")
         ok(wait18("document.querySelector('input[name=display_name]').closest('.field').querySelector('.rowstate').textContent === 'Saved'") and items18().get("displayName") == "Churches of Europe", "[settings] typing a display name saves it by itself a second after you stop, and says Saved beside the label", state18("input[name=display_name]"))
         type18("input[name=sort_order]", "2.5"); b.js("document.querySelector('input[name=sort_order]').blur()"); b.drain(0.6)
@@ -2733,7 +2733,7 @@ try:
         ok(wait18("document.querySelector('input[name=sort_order]').closest('.field').querySelector('.rowstate').textContent === 'Saved'") and items18().get("sortOrder") == 3 and not b.js("document.querySelector('input[name=sort_order]').classList.contains('bad')"), "[settings] ...and once it is fixed it saves")
         type18("input[name=dates]", "Oct 1-11th, 2026"); b.js("document.querySelector('input[name=dates]').blur()")
         type18("textarea[name=description]", "Northern route."); b.js("document.querySelector('textarea[name=description]').blur()")
-        ok(wait18("document.querySelectorAll('.identity-form .rowstate.busy').length === 0") and items18().get("dates") == "Oct 1-11th, 2026" and items18().get("description") == "Northern route." and items18().get("displayName") == "Churches of Europe", "[settings] dates and the description save the same way, one after another, and none wipes another")
+        ok(wait18("document.querySelectorAll('.fs-grid .rowstate.busy').length === 0") and items18().get("dates") == "Oct 1-11th, 2026" and items18().get("description") == "Northern route." and items18().get("displayName") == "Churches of Europe", "[settings] dates and the description save the same way, one after another, and none wipes another")
         b.js("document.querySelector('details.sort-details').open = true; document.querySelector('input[name=photo_sort_order][value=name]').click()"); b.drain(0.2)
         b.js("document.querySelector('input[name=photo_sort_dir][value=desc]').click()")
         t0 = time.time()
@@ -3230,6 +3230,16 @@ try:
         ok(lay["desc"]["t"] > max(lay["cover"]["b"], lay["vis"]["b"]) and lay["inside"]["t"] > lay["desc"]["b"] and lay["desc"]["l"] == lay["name"]["l"] and lay["inside"]["l"] == lay["name"]["l"], "[layout, wide] then the description, then the Inside this folder box, both the full width of the form", str(lay))
         ins = b.js("(() => { const d = document.querySelector('.inside-box'); return {open: d.open, sum: d.querySelector('.ib-sum').textContent, rowsShown: [...d.querySelectorAll('.ib-row')].filter(r => r.getBoundingClientRect().height > 0).length}; })()")
         ok(not ins["open"] and ins["sum"].endswith("photo order from Settings"), "[inside box] closed to begin with (nothing in it is this folder's own), and the summary line says what it holds", str(ins))
+        # the keyboard goes the way the eye does: name, dates, position, the cover's buttons, who can see the folder, then the description
+        b.js("document.querySelector('input[name=display_name]').focus()")
+        seq = []
+        for _ in range(30):
+            cur = b.js("(() => { const a = document.activeElement; return a ? (a.name || '') + '|' + (a.className || '') + '|' + (a.value || '') + (a.closest && a.closest('#vis-choice') ? '|VIS' : '') : ''; })()")
+            seq.append(cur)
+            if cur.startswith("description|"): break
+            b.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9}); b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9}); b.drain(0.1)
+        idx = lambda pred: next((i for i, c in enumerate(seq) if pred(c)), 99)
+        ok(idx(lambda c: c.startswith("display_name|")) < idx(lambda c: c.startswith("dates|")) < idx(lambda c: c.startswith("sort_order|")) < idx(lambda c: "cv-choose" in c) < idx(lambda c: c.endswith("|VIS")) < idx(lambda c: c.startswith("description|")) < 99, "[layout, keyboard] Tab goes in the order of the screen: name, dates, position, the cover's buttons, Who can see this folder, then the description", str(seq))
         b.js("document.querySelector('.inside-box > summary').click()"); b.drain(0.3)
         ok(b.js("document.querySelector('.inside-box').open") and b.js("document.querySelectorAll('.inside-box .ib-row').length") >= 4, "[inside box] pressing it opens the box: the folders' style, the order, the direction and Put first, the draggable list among them")
         ok(b.js("!!document.querySelector('.inside-box .sf-list li') && document.querySelector('.inside-box .sf-list').getBoundingClientRect().height > 0"), "[inside box] the real, draggable Put first list is inside it")
