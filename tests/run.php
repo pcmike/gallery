@@ -7344,6 +7344,11 @@ $cnCover = json_decode($cnBody, true)['cover'] ?? [];
 $cnWant = ($cmH % $cmN2 + 1) . '%2Fa.jpg';
 check('[front page cover] folders named with numbers take part in the automatic daily pick (the row shows the photo the preview will use)', str_contains($cnCover['url'] ?? '', $cnWant) && $cmH % $cmN2 !== 0, json_encode($cnCover) . " want $cnWant");
 
+mkdir("$fxCm/Fol", 0775, true); make_jpeg("$fxCm/Fol/follow:x.jpg", 93, 50, 20, 90, 30); make_jpeg("$fxCm/Fol/plain.jpg", 94, 50, 20, 90, 30);
+$cmFolPin = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => 'follow:x.jpg'], '&folder=Fol');
+$cmFolStar = $cmAdmin(['action' => 'set_cover', 'file' => 'follow:x.jpg'], '&folder=Fol');
+$cmFolOk = $cmAdmin(['action' => 'set_folder_cover', 'mode' => 'pin', 'file' => 'plain.jpg'], '&folder=Fol');
+check('[cover modes] a photo whose name starts with "follow:" is refused as a cover (pin and star) with a plain reason and nothing stored, and an ordinary photo in the same folder still pins', ($cmFolPin['ok'] ?? true) === false && str_contains($cmFolPin['text'] ?? '', 'Rename') && ($cmFolStar['ok'] ?? true) === false && ($cmFolOk['ok'] ?? false) === true && (read_data_file("$fxCm/Fol/.gallery-items.php")['cover'] ?? '') === 'plain.jpg', json_encode([$cmFolPin, $cmFolStar]));
 // The settings page's layout: a leaf folder has the cover row (Pick a photo, no Follow), the front page has one and its Photo order box, and the Inside this folder box is closed
 // until something in it is the folder's own.
 $cmCk = ["Cookie: $cmAdminCookie"];

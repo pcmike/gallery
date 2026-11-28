@@ -1148,6 +1148,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!in_array($adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare, $files, true)) {
             return ['type' => 'error', 'text' => 'Unknown file.'];
         }
+        if (strncmp($bare, 'follow:', 7) === 0) return ['type' => 'error', 'text' => 'A file whose name starts with "follow:" can\'t be a cover (the gallery would read it as "follow a folder"). Rename the file first.'];
         if ($adminFolderPath === null && !root_cover_allows($dir, $bare)) {   // (the front page is what everyone sees: nothing narrower than Public, no video)
             return ['type' => 'error', 'text' => 'Only a public photo can be the front page\'s cover.'];
         }
@@ -1181,6 +1182,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         } elseif ($mode === 'pin') {
             $rel = (string) ($_POST['file'] ?? '');
             if ($rel === '' || !in_array($prefix . $rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown photo: nothing was changed.'];
+            if (strncmp($rel, 'follow:', 7) === 0) return ['type' => 'error', 'text' => 'A name starting with "follow:" can\'t be a cover (the gallery would read it as "follow a folder"). Rename it first: nothing was changed.'];
             if ($isRoot && !root_cover_allows($dir, $rel)) return ['type' => 'error', 'text' => 'Only a public photo can be the front page\'s cover: nothing was changed.'];
             if (!$isRoot && is_video_file($rel)) return ['type' => 'error', 'text' => 'A video can\'t be a cover: nothing was changed.'];
             items_update($targetReal, function (&$data) use ($rel) { $data['cover'] = $rel; unset($data['coverFollow']); });
